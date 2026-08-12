@@ -223,3 +223,4 @@ obligation, and does **not** imply that the Rectangle project endorses Tile.
 ## License
 
 Tile is released under the [MIT License](LICENSE), © 2026 Filip Mares.
+
