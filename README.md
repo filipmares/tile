@@ -113,18 +113,62 @@ See [Build from source](#build-from-source).
 ### Build
 
 ```sh
-# 1. Build the frontend
-cd apps/tile/ui
-npm ci
-npm run build
-cd ../../..
+# 1. Frontend dependencies
+cd apps/tile/ui && npm ci && cd ../../..
 
-# 2. Build the whole workspace
+# 2. Build and test the workspace
 cargo build --workspace --release
+cargo test --workspace
 ```
 
-To run the desktop app during development, use the Tauri CLI from `apps/tile`
-(e.g. `npm run tauri dev`) once the app shell is in place.
+### Run the app
+
+```sh
+cd apps/tile
+
+# Development: hot-reloading settings UI
+./ui/node_modules/.bin/tauri dev
+
+# Release installers (.msi + .exe on Windows, .dmg on macOS)
+./ui/node_modules/.bin/tauri build
+```
+
+Installers are written to `target/release/bundle/`. The app has no main
+window — look for the icon in the system tray (Windows) or menu bar (macOS),
+and choose **Settings…** from its menu.
+
+## Testing
+
+Most of Tile is verifiable without a desktop. `cargo test --workspace` covers
+the tiling geometry, the restore history, hotkey parsing, the Windows
+`KeyCode`→virtual-key tables and DWM frame arithmetic, and the macOS
+coordinate flip — the last of these runs on every platform, not just macOS.
+
+The macOS backend can also be type-checked from Windows or Linux, which is
+how it is validated on every pull request:
+
+```sh
+rustup target add aarch64-apple-darwin
+cargo clippy -p tile-platform --target aarch64-apple-darwin --all-targets -- -D warnings
+```
+
+Two things genuinely need a live desktop session, so they ship as examples
+rather than tests:
+
+```sh
+# Moves a real window through every action and asserts it lands pixel-exact.
+# Pass a window handle to target a specific window instead of the focused one.
+cargo run --example live_smoke -p tile-platform
+
+# Installs the real keyboard hook, injects Ctrl+Alt+Shift+M, and checks the
+# bound action is delivered, repeats, and stops firing once unbound.
+cargo run --example live_hotkey -p tile-platform
+```
+
+To test the shortcuts end to end, build and start the app, open a window you
+do not mind moving, and press <kbd>Win</kbd>+<kbd>←</kbd>. Note that the
+keyboard hook cannot see input aimed at windows owned by elevated processes
+unless Tile is itself running as administrator.
 
 ## Architecture
 
