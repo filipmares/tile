@@ -53,6 +53,43 @@ jobs:
         working-directory: apps/tile/ui
         run: npm ci
 
+      # Signing credentials are only exported when they are actually
+      # configured. Passing them through as empty strings is not harmless: the
+      # Tauri bundler treats a *defined* APPLE_CERTIFICATE as "signing is on"
+      # and then fails with "failed to import keychain certificate". Writing
+      # them to $GITHUB_ENV conditionally leaves them undefined until real
+      # secrets exist, so unsigned builds work today and adding the secrets
+      # later turns signing on with no workflow change.
+      - name: Configure code signing (only when secrets are present)
+        shell: bash
+        env:
+          IN_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          IN_APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          IN_APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          IN_APPLE_ID: ${{ secrets.APPLE_ID }}
+          IN_APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          IN_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          IN_TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          IN_TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          export_if_set() {
+            local name="$1" value="$2"
+            if [ -n "$value" ]; then
+              echo "::add-mask::$value"
+              echo "$name=$value" >> "$GITHUB_ENV"
+              echo "$name is configured"
+            fi
+          }
+          export_if_set APPLE_CERTIFICATE "${IN_APPLE_CERTIFICATE:-}"
+          export_if_set APPLE_CERTIFICATE_PASSWORD "${IN_APPLE_CERTIFICATE_PASSWORD:-}"
+          export_if_set APPLE_SIGNING_IDENTITY "${IN_APPLE_SIGNING_IDENTITY:-}"
+          export_if_set APPLE_ID "${IN_APPLE_ID:-}"
+          export_if_set APPLE_PASSWORD "${IN_APPLE_PASSWORD:-}"
+          export_if_set APPLE_TEAM_ID "${IN_APPLE_TEAM_ID:-}"
+          export_if_set TAURI_SIGNING_PRIVATE_KEY "${IN_TAURI_SIGNING_PRIVATE_KEY:-}"
+          export_if_set TAURI_SIGNING_PRIVATE_KEY_PASSWORD "${IN_TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
+
       - name: Build and release
         uses: tauri-apps/tauri-action@v0
         env:
@@ -64,10 +101,9 @@ jobs:
           #     xattr -d com.apple.quarantine /Applications/Tile.app
           # or right-click the app in Finder and choose "Open" the first time.
           #
-          # To enable real signing later, add these repository secrets and the
-          # env vars below will pick them up automatically — no workflow change
-          # required. They are wired in but optional, so the build works today
-          # without any secrets configured:
+          # To enable real signing later, add these repository secrets. The
+          # step above picks them up automatically — no workflow change
+          # required:
           #   macOS notarization / signing:
           #     APPLE_CERTIFICATE          (base64 .p12)
           #     APPLE_CERTIFICATE_PASSWORD (password for the .p12)
@@ -79,14 +115,6 @@ jobs:
           #     TAURI_SIGNING_PRIVATE_KEY  (Tauri updater private key)
           #     TAURI_SIGNING_PRIVATE_KEY_PASSWORD
           # ---------------------------------------------------------------
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: apps/tile
           tagName: ${{ github.ref_name }}
