@@ -32,7 +32,7 @@ jobs:
             rust-targets: ''
             args: ''
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -43,7 +43,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: npm
@@ -91,7 +91,7 @@ jobs:
           export_if_set TAURI_SIGNING_PRIVATE_KEY_PASSWORD "${IN_TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
 
       - name: Build and release
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # ---------------------------------------------------------------
