@@ -32,7 +32,7 @@ mod hotkey;
 mod window;
 
 pub use hotkey::WindowsHotkeyBackend;
-pub use window::WindowsWindowBackend;
+pub use window::{topmost_manageable_window, WindowsWindowBackend};
 
 /// Converts a raw `HWND` into the [`tile_core::WindowId`] we expose to the rest
 /// of the app. The pointer value uniquely identifies the window for its

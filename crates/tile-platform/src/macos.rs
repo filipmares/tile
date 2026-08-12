@@ -73,12 +73,20 @@ mod ffi {
     pub type CFTypeRef = *const c_void;
     pub type CFStringRef = *const c_void;
     pub type CFDictionaryRef = *const c_void;
+    pub type CFArrayRef = *const c_void;
+    pub type CFNumberRef = *const c_void;
     pub type AXUIElementRef = *const c_void;
     pub type AXValueRef = *const c_void;
     pub type AXError = i32;
     /// `DarwinBoolean` / `Boolean`: a single unsigned byte, non-zero == true.
     pub type Boolean = u8;
     pub type CFHashCode = usize;
+    /// `CFIndex`: a signed word used for CoreFoundation counts/indices.
+    pub type CFIndex = isize;
+    /// `CFNumberType`: selects how `CFNumberGetValue` interprets the buffer.
+    pub type CFNumberType = isize;
+    /// `pid_t`: a BSD process identifier (a signed 32-bit int on Darwin).
+    pub type Pid = i32;
 
     pub type OSStatus = i32;
     pub type OSType = u32;
@@ -115,6 +123,15 @@ mod ffi {
     pub const kAXErrorNotImplemented: AXError = -25208;
     pub const kAXErrorAPIDisabled: AXError = -25211;
 
+    // CFNumberType values (CFNumber.h). We only ever request a 64-bit signed
+    // read, which safely widens the 32-bit ints CoreGraphics actually stores.
+    pub const kCFNumberSInt64Type: CFNumberType = 4;
+
+    // CGWindowListOption bits (CGWindow.h) and the "no relative window" id.
+    pub const kCGWindowListOptionOnScreenOnly: u32 = 1 << 0;
+    pub const kCGWindowListExcludeDesktopElements: u32 = 1 << 4;
+    pub const kCGNullWindowID: u32 = 0;
+
     // Carbon event constants.
     pub const kEventClassKeyboard: u32 = 0x6B65_7962; // 'keyb'
     pub const kEventHotKeyPressed: u32 = 5;
@@ -126,6 +143,14 @@ mod ffi {
     #[link(name = "ApplicationServices", kind = "framework")]
     extern "C" {
         pub fn AXUIElementCreateSystemWide() -> AXUIElementRef;
+        /// Builds an application-level AX element from a process id. Used to
+        /// walk a specific app's `AXWindows` when mapping a `CGWindowID` (from
+        /// the CoreGraphics window list) back to a movable AX element.
+        pub fn AXUIElementCreateApplication(pid: Pid) -> AXUIElementRef;
+        /// Reads the owning process id of an AX element. Used to detect that
+        /// the AX "focused application" is Tile itself (its menu-bar item is
+        /// frontmost), so we can fall back to the CoreGraphics Z-order scan.
+        pub fn AXUIElementGetPid(element: AXUIElementRef, pid: *mut Pid) -> AXError;
         pub fn AXUIElementCopyAttributeValue(
             element: AXUIElementRef,
             attribute: CFStringRef,
@@ -158,10 +183,32 @@ mod ffi {
     #[link(name = "CoreFoundation", kind = "framework")]
     extern "C" {
         pub fn CFRelease(cf: CFTypeRef);
+        pub fn CFRetain(cf: CFTypeRef) -> CFTypeRef;
         pub fn CFHash(cf: CFTypeRef) -> CFHashCode;
         pub fn CFBooleanGetValue(boolean: CFTypeRef) -> Boolean;
+        pub fn CFArrayGetCount(array: CFArrayRef) -> CFIndex;
+        pub fn CFArrayGetValueAtIndex(array: CFArrayRef, idx: CFIndex) -> *const c_void;
+        pub fn CFDictionaryGetValue(dict: CFDictionaryRef, key: *const c_void) -> *const c_void;
+        pub fn CFNumberGetValue(
+            number: CFNumberRef,
+            theType: CFNumberType,
+            valuePtr: *mut c_void,
+        ) -> Boolean;
         pub static kCFBooleanTrue: CFTypeRef;
         pub static kCFBooleanFalse: CFTypeRef;
+    }
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        /// Returns the on-screen window list in **front-to-back Z-order** as a
+        /// CFArray of CFDictionaries. Follows the CoreFoundation create rule
+        /// (the caller owns a `+1` reference).
+        pub fn CGWindowListCopyWindowInfo(option: u32, relativeToWindow: u32) -> CFArrayRef;
+        /// CFString keys into each window-info dictionary. These are `const`
+        /// CFStrings exported by CoreGraphics.
+        pub static kCGWindowNumber: CFStringRef;
+        pub static kCGWindowOwnerPID: CFStringRef;
+        pub static kCGWindowLayer: CFStringRef;
     }
 
     #[link(name = "Carbon", kind = "framework")]
@@ -435,11 +482,50 @@ struct FrontWindow {
     frame: Rect,
 }
 
+/// True when `element`'s `AXSubrole` marks it as a standard, movable window.
+///
+/// A window that reports no subrole at all is treated as standard, matching
+/// Rectangle, which only *excludes* known non-standard subroles (sheets,
+/// popovers, dialogs, ...).
+fn is_standard_window(element: ffi::AXUIElementRef) -> bool {
+    match copy_string(element, "AXSubrole") {
+        Some(subrole) => subrole == "AXStandardWindow",
+        None => true,
+    }
+}
+
+/// Reads the owning process id of an AX element, or `None` if the query fails.
+fn ax_element_pid(element: ffi::AXUIElementRef) -> Option<ffi::Pid> {
+    let mut pid: ffi::Pid = 0;
+    // SAFETY: `element` is a valid AX element and `pid` is a valid out-pointer;
+    // the call only reads the element's owning pid.
+    let err = unsafe { ffi::AXUIElementGetPid(element, &mut pid) };
+    (err == ffi::kAXErrorSuccess).then_some(pid)
+}
+
+/// Builds a [`FrontWindow`] snapshot from a movable AX window element, reading
+/// its position and size. Returns `None` if either attribute is unavailable.
+fn snapshot_window(element: CfOwned) -> Option<FrontWindow> {
+    let position = copy_point(element.0, "AXPosition")?;
+    let size = copy_size(element.0, "AXSize")?;
+    let id = window_id(element.0);
+    // AX is already top-left-origin, so no coordinate flip for the window.
+    let frame = Rect::new(position.x, position.y, size.width, size.height);
+    Some(FrontWindow { element, id, frame })
+}
+
 /// Fetches the frontmost focused window through the system-wide AX element.
 ///
 /// Returns `Ok(None)` (never an error) when nothing suitable is focused or the
 /// focused window is not a standard window (a sheet, popover, dialog, ...).
 /// Returns `Err(PermissionDenied)` when Accessibility permission is missing.
+///
+/// When Tile itself is the focused application — which happens when the user
+/// clicks Tile's menu-bar item to pick an action — this falls back to the
+/// front-most *other* window in CoreGraphics Z-order, so menu-driven actions
+/// apply to the user's window rather than to Tile. The global-hotkey path does
+/// not hit this fallback: pressing a hotkey never changes which app is
+/// frontmost, so the AX focused application is still the user's app.
 fn front_window() -> Result<Option<FrontWindow>> {
     // SAFETY: no arguments; returns a bool byte.
     if unsafe { ffi::AXIsProcessTrusted() } == 0 {
@@ -448,44 +534,173 @@ fn front_window() -> Result<Option<FrontWindow>> {
         ));
     }
 
+    let own_pid = std::process::id() as ffi::Pid;
+
+    if let Some(window) = focused_ax_window(own_pid) {
+        return Ok(Some(window));
+    }
+
+    // The AX focused application is Tile itself (or there was no usable focused
+    // window). Fall back to the CoreGraphics window list, which mirrors the
+    // Windows `EnumWindows` Z-order scan.
+    Ok(topmost_foreign_window(own_pid))
+}
+
+/// The window focused according to the system-wide AX element, or `None` when
+/// the focused application is Tile itself or nothing standard is focused.
+fn focused_ax_window(own_pid: ffi::Pid) -> Option<FrontWindow> {
     // SAFETY: creates a `+1` system-wide element; wrapped for release.
     let system_wide = CfOwned(unsafe { ffi::AXUIElementCreateSystemWide() });
     if system_wide.0.is_null() {
-        return Ok(None);
+        return None;
     }
 
-    let Some(app) = copy_attribute(system_wide.0, "AXFocusedApplication") else {
-        return Ok(None);
-    };
-    let Some(window) = copy_attribute(app.0, "AXFocusedWindow") else {
-        return Ok(None);
-    };
+    let app = copy_attribute(system_wide.0, "AXFocusedApplication")?;
 
-    // Filter out sheets/popovers/dialogs: only standard windows are movable.
-    // A window that does not report a subrole at all is treated as standard,
-    // matching Rectangle which only *excludes* known non-standard subroles.
-    if let Some(subrole) = copy_string(window.0, "AXSubrole") {
-        if subrole != "AXStandardWindow" {
-            return Ok(None);
+    // If Tile is the focused application, its own status-bar window is what AX
+    // would hand back. Bail so the caller falls back to the Z-order scan; this
+    // is the whole reason menu-driven actions used to be silent no-ops.
+    if ax_element_pid(app.0) == Some(own_pid) {
+        return None;
+    }
+
+    let window = copy_attribute(app.0, "AXFocusedWindow")?;
+    if !is_standard_window(window.0) {
+        return None;
+    }
+    snapshot_window(window)
+}
+
+/// Walks the CoreGraphics on-screen window list (front-to-back Z-order) and
+/// returns the front-most standard, movable window that is not one of ours.
+///
+/// This is the macOS analogue of the Windows `topmost_manageable_window`: the
+/// CG list is stateless (no run-loop observer, no notification tracking), and
+/// front-to-back order means the first match is the window the user worked with
+/// immediately before the menu opened. Each candidate `CGWindowID` is mapped
+/// back to an `AXUIElement` so it can actually be moved.
+fn topmost_foreign_window(own_pid: ffi::Pid) -> Option<FrontWindow> {
+    for info in foreign_normal_windows(&copy_cg_window_infos(), own_pid as i64) {
+        let Some(element) = ax_window_for_id(info.pid as ffi::Pid, info.window_id) else {
+            continue;
+        };
+        if !is_standard_window(element.0) {
+            continue;
+        }
+        if let Some(window) = snapshot_window(element) {
+            return Some(window);
         }
     }
+    None
+}
 
-    let Some(position) = copy_point(window.0, "AXPosition") else {
-        return Ok(None);
-    };
-    let Some(size) = copy_size(window.0, "AXSize") else {
-        return Ok(None);
-    };
+/// Reads the on-screen window list into a plain, order-preserving vector so the
+/// pure [`foreign_normal_windows`] filter can be unit tested off-device.
+fn copy_cg_window_infos() -> Vec<CgWindowInfo> {
+    // SAFETY: the option bits are valid `CGWindowListOption` flags and
+    // `kCGNullWindowID` requests the whole list; the result follows the create
+    // rule and is wrapped in `CfOwned` for release.
+    let list = CfOwned(unsafe {
+        ffi::CGWindowListCopyWindowInfo(
+            ffi::kCGWindowListOptionOnScreenOnly | ffi::kCGWindowListExcludeDesktopElements,
+            ffi::kCGNullWindowID,
+        )
+    });
+    if list.0.is_null() {
+        return Vec::new();
+    }
+    let array = list.0 as ffi::CFArrayRef;
+    // SAFETY: `array` is a valid CFArray (create rule, checked non-null).
+    let count = unsafe { ffi::CFArrayGetCount(array) };
 
-    let id = window_id(window.0);
-    // AX is already top-left-origin, so no coordinate flip for the window.
-    let frame = Rect::new(position.x, position.y, size.width, size.height);
+    let mut out = Vec::with_capacity(count.max(0) as usize);
+    for index in 0..count {
+        // SAFETY: `index` is in `0..count`; the returned dictionary is owned by
+        // the array (a `+0` borrow), which outlives this loop.
+        let dict = unsafe { ffi::CFArrayGetValueAtIndex(array, index) } as ffi::CFDictionaryRef;
+        if dict.is_null() {
+            continue;
+        }
+        // SAFETY: the `kCGWindow*` keys are immortal CoreGraphics CFString
+        // constants; every value read is a CFNumber (or absent, handled below).
+        let (Some(pid), Some(layer), Some(window_id)) = (unsafe {
+            (
+                dict_i64(dict, ffi::kCGWindowOwnerPID),
+                dict_i64(dict, ffi::kCGWindowLayer),
+                dict_i64(dict, ffi::kCGWindowNumber),
+            )
+        }) else {
+            continue;
+        };
+        out.push(CgWindowInfo {
+            pid,
+            layer,
+            window_id: window_id as u32,
+        });
+    }
+    out
+}
 
-    Ok(Some(FrontWindow {
-        element: window,
-        id,
-        frame,
-    }))
+/// Reads an integer value out of a CoreGraphics window-info dictionary.
+///
+/// # Safety
+/// `dict` must be a live CFDictionary and `key` a valid CFString key.
+unsafe fn dict_i64(dict: ffi::CFDictionaryRef, key: ffi::CFStringRef) -> Option<i64> {
+    let value = ffi::CFDictionaryGetValue(dict, key as *const c_void);
+    if value.is_null() {
+        return None;
+    }
+    let mut out: i64 = 0;
+    // A wider (64-bit) read of the 32-bit ints CG stores is a safe conversion.
+    let ok = ffi::CFNumberGetValue(
+        value as ffi::CFNumberRef,
+        ffi::kCFNumberSInt64Type,
+        &mut out as *mut i64 as *mut c_void,
+    );
+    (ok != 0).then_some(out)
+}
+
+/// Finds the AX window element on application `pid` whose `CGWindowID` matches
+/// `target_id`, returning an owned (`+1`-retained) reference.
+///
+/// The mapping walks the app's `AXWindows` and matches each element's id via
+/// the same private `_AXUIElementGetWindow` used by [`window_id`]. This is how
+/// a CoreGraphics window (which is not an AX element) becomes something Tile
+/// can move.
+fn ax_window_for_id(pid: ffi::Pid, target_id: u32) -> Option<CfOwned> {
+    // SAFETY: `pid` is a real process id; the returned element follows the
+    // create rule and is wrapped in `CfOwned` for release.
+    let app = CfOwned(unsafe { ffi::AXUIElementCreateApplication(pid) });
+    if app.0.is_null() {
+        return None;
+    }
+    let windows = copy_attribute(app.0, "AXWindows")?;
+    let array = windows.0 as ffi::CFArrayRef;
+    // SAFETY: `array` is the AX `AXWindows` CFArray (create rule, non-null).
+    let count = unsafe { ffi::CFArrayGetCount(array) };
+
+    for index in 0..count {
+        // SAFETY: `index` is in `0..count`; the element is a `+0` borrow owned
+        // by `windows`, valid for the duration of this loop.
+        let element = unsafe { ffi::CFArrayGetValueAtIndex(array, index) } as ffi::AXUIElementRef;
+        if element.is_null() {
+            continue;
+        }
+        let mut wid: u32 = 0;
+        // SAFETY: `element` is a valid AX window element; `wid` is a valid
+        // out-pointer. `_AXUIElementGetWindow` is the private SPI declared in
+        // `ffi` and already relied upon by `window_id`.
+        let err = unsafe { ffi::_AXUIElementGetWindow(element, &mut wid) };
+        if err == ffi::kAXErrorSuccess && wid == target_id {
+            // The array only lends us the element (`+0`); retain it so it
+            // outlives `windows` when we hand it back inside `CfOwned`.
+            // SAFETY: `element` is a live CF object; `CFRetain` adds the `+1`
+            // that `CfOwned` will balance on drop.
+            let retained = unsafe { ffi::CFRetain(element) };
+            return Some(CfOwned(retained));
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------

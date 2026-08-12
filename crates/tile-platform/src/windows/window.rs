@@ -12,11 +12,13 @@ use windows::Win32::Graphics::Dwm::{
 use windows::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW,
 };
+use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClassNameW, GetForegroundWindow, GetShellWindow, GetWindowLongW, GetWindowRect, IsIconic,
-    IsWindowVisible, IsZoomed, SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE,
-    MONITORINFOF_PRIMARY, SWP_NOACTIVATE, SWP_NOZORDER, SW_RESTORE, WS_CAPTION, WS_EX_TOOLWINDOW,
+    EnumWindows, GetClassNameW, GetForegroundWindow, GetShellWindow, GetWindowLongW, GetWindowRect,
+    GetWindowThreadProcessId, IsIconic, IsWindowVisible, IsZoomed, SetWindowPos, ShowWindow,
+    GWL_EXSTYLE, GWL_STYLE, MONITORINFOF_PRIMARY, SWP_NOACTIVATE, SWP_NOZORDER, SW_RESTORE,
+    WS_CAPTION, WS_EX_TOOLWINDOW,
 };
 
 use crate::{PermissionStatus, PlatformError, Result, WindowBackend};
@@ -92,14 +94,24 @@ impl WindowBackend for WindowsWindowBackend {
         // SAFETY: `GetForegroundWindow` takes no arguments and returns either a
         // valid window handle or null; we validate everything before use.
         let hwnd = unsafe { GetForegroundWindow() };
-        if hwnd.0.is_null() {
+
+        // When the user opens the tray menu, *Tile* becomes the foreground
+        // application, so the foreground window is our own tray/menu window
+        // rather than the window the user actually wants tiled. In that case
+        // fall back to the top-most manageable window in Z-order, which is the
+        // window that was active immediately before the menu opened.
+        let target = if !hwnd.0.is_null() && is_usable_target(hwnd) {
+            Some(hwnd)
+        } else {
+            topmost_manageable_window()
+        };
+
+        let Some(hwnd) = target else {
+            // Not an error: no movable window anywhere (empty desktop, or only
+            // shell/tool windows) simply means "nothing to do".
             return Ok(None);
-        }
-        if !is_manageable(hwnd) {
-            // Not an error: a non-movable foreground window (desktop, shell,
-            // tool window, a full-screen game) simply means "nothing to do".
-            return Ok(None);
-        }
+        };
+
         let frame = window_frame(hwnd)?;
         Ok(Some(WindowSnapshot {
             id: id_from_hwnd(hwnd),
@@ -224,6 +236,57 @@ unsafe fn extended_frame(hwnd: HWND) -> Option<Rect> {
 }
 
 /// Decides whether the foreground window is something Tile should ever move.
+/// A window Tile is willing to move: manageable, and not one of our own.
+///
+/// Excluding our own process matters because Tile's tray icon owns a real
+/// top-level window. Without this check, opening the tray menu would make Tile
+/// pick up its own window and "tile" an invisible 13x13 helper.
+fn is_usable_target(hwnd: HWND) -> bool {
+    !is_own_process(hwnd) && is_manageable(hwnd)
+}
+
+/// True when `hwnd` belongs to the current process.
+fn is_own_process(hwnd: HWND) -> bool {
+    let mut pid: u32 = 0;
+    // SAFETY: `hwnd` is a caller-validated handle and `pid` is a valid out
+    // pointer. The call only reads window metadata.
+    unsafe {
+        GetWindowThreadProcessId(hwnd, Some(&mut pid as *mut u32));
+        pid == GetCurrentProcessId()
+    }
+}
+
+/// The top-most window in Z-order that Tile could move, skipping our own.
+///
+/// `EnumWindows` walks top-level windows front-to-back, so the first match is
+/// the window the user most recently worked with. This is what makes the tray
+/// menu actions apply to the user's window rather than to Tile itself.
+///
+/// Public so the `which_window` diagnostic example can show what the tray path
+/// would resolve to without having to trigger a real tray click.
+pub fn topmost_manageable_window() -> Option<HWND> {
+    let mut found: Option<HWND> = None;
+    // SAFETY: the callback runs synchronously for the duration of this call, so
+    // the pointer to `found` stays valid throughout.
+    unsafe {
+        let _ = EnumWindows(
+            Some(enum_first_manageable),
+            LPARAM(&mut found as *mut Option<HWND> as isize),
+        );
+    }
+    found
+}
+
+/// `EnumWindows` callback: records the first usable window and stops.
+unsafe extern "system" fn enum_first_manageable(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    let found = &mut *(lparam.0 as *mut Option<HWND>);
+    if is_usable_target(hwnd) {
+        *found = Some(hwnd);
+        return BOOL(0); // stop enumerating
+    }
+    BOOL(1)
+}
+
 fn is_manageable(hwnd: HWND) -> bool {
     // SAFETY: every call is a read-only query on `hwnd`, which the caller has
     // already checked is non-null.

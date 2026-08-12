@@ -131,9 +131,48 @@ pub(crate) fn carbon_modifiers(mods: tile_core::Modifiers) -> u32 {
     mask
 }
 
+/// One entry from the CoreGraphics on-screen window list, reduced to just the
+/// fields Tile needs to decide whether a window is a normal, foreign window.
+///
+/// `CGWindowListCopyWindowInfo` returns entries in **front-to-back Z-order**,
+/// so a `Vec<CgWindowInfo>` built by preserving that order can be scanned from
+/// the front exactly like Windows' `EnumWindows` walk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CgWindowInfo {
+    /// `kCGWindowOwnerPID`: the process that owns the window.
+    pub pid: i64,
+    /// `kCGWindowLayer`: 0 for ordinary application windows; non-zero for the
+    /// menu bar, Dock, panels, overlays, etc.
+    pub layer: i64,
+    /// `kCGWindowNumber`: the `CGWindowID`, used to find the matching
+    /// `AXUIElement` on the owning application.
+    pub window_id: u32,
+}
+
+/// Filters a front-to-back CoreGraphics window list down to the windows Tile
+/// could move: ordinary windows (`layer == 0`) that belong to some *other*
+/// process, preserving Z-order so the caller can take the front-most first.
+///
+/// This is the macOS analogue of the Windows `EnumWindows` scan: when the user
+/// clicks Tile's menu-bar item, Tile becomes frontmost and the AX "focused
+/// application" is Tile itself, so the caller falls back to this list and picks
+/// the window that was active immediately before the menu opened. Excluding our
+/// own `pid` is what stops Tile from picking up its own status-bar window.
+///
+/// Kept pure (no CoreGraphics types) so it is unit-testable on any host.
+pub(crate) fn foreign_normal_windows(windows: &[CgWindowInfo], own_pid: i64) -> Vec<CgWindowInfo> {
+    windows
+        .iter()
+        .copied()
+        .filter(|w| w.pid != own_pid && w.layer == 0)
+        .collect()
+}
+
 #[cfg(test)]
 mod pure_tests {
-    use super::{carbon_key_code, carbon_modifiers, flip_rect};
+    use super::{
+        carbon_key_code, carbon_modifiers, flip_rect, foreign_normal_windows, CgWindowInfo,
+    };
     use tile_core::{KeyCode, Modifiers, Rect};
 
     // ----- coordinate flip -------------------------------------------------
@@ -297,5 +336,58 @@ mod pure_tests {
             assert_eq!(combined & bit, 0, "modifier bits must be disjoint");
             combined |= bit;
         }
+    }
+
+    // ----- CoreGraphics window-list filtering ------------------------------
+
+    fn win(pid: i64, layer: i64, window_id: u32) -> CgWindowInfo {
+        CgWindowInfo {
+            pid,
+            layer,
+            window_id,
+        }
+    }
+
+    #[test]
+    fn skips_our_own_windows() {
+        // Tile (pid 42) is frontmost because its menu-bar item was clicked, so
+        // its own windows head the list. They must be skipped in favour of the
+        // user's window behind them.
+        let own = 42;
+        let list = [win(own, 0, 1), win(own, 0, 2), win(99, 0, 3)];
+        let found = foreign_normal_windows(&list, own);
+        assert_eq!(found, vec![win(99, 0, 3)]);
+    }
+
+    #[test]
+    fn skips_non_zero_layers() {
+        // The menu bar and Dock live on non-zero layers and must never be
+        // treated as movable windows, even when owned by another process.
+        let own = 42;
+        let list = [win(50, 25, 1), win(50, 20, 2), win(50, 0, 3)];
+        let found = foreign_normal_windows(&list, own);
+        assert_eq!(found, vec![win(50, 0, 3)]);
+    }
+
+    #[test]
+    fn preserves_front_to_back_order() {
+        // The list must stay in Z-order so the caller can take the front-most
+        // (most recently active) foreign window first.
+        let own = 42;
+        let list = [win(7, 0, 10), win(8, 0, 11), win(9, 0, 12)];
+        let found = foreign_normal_windows(&list, own);
+        assert_eq!(found, vec![win(7, 0, 10), win(8, 0, 11), win(9, 0, 12)]);
+    }
+
+    #[test]
+    fn empty_when_only_our_windows_exist() {
+        let own = 42;
+        let list = [win(own, 0, 1), win(own, 0, 2)];
+        assert!(foreign_normal_windows(&list, own).is_empty());
+    }
+
+    #[test]
+    fn empty_list_yields_empty() {
+        assert!(foreign_normal_windows(&[], 42).is_empty());
     }
 }
