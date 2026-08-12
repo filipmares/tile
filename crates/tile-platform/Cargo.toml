@@ -13,7 +13,7 @@ thiserror = { workspace = true }
 log = { workspace = true }
 
 [target.'cfg(windows)'.dependencies.windows]
-version = "0.58"
+version = "0.61"
 features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
@@ -43,5 +43,5 @@ features = [
 # on `core-graphics`.
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
-objc2 = "0.5"
-objc2-foundation = { version = "0.2", features = ["NSGeometry"] }
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSGeometry"] }
