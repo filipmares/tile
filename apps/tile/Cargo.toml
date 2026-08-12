@@ -1,0 +1,34 @@
+[package]
+name = "tile"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Tile — keyboard-driven window management for Windows and macOS."
+default-run = "tile"
+
+[lib]
+name = "tile_app"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tile"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tile-core = { workspace = true }
+tile-platform = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
+tauri-plugin-autostart = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+env_logger = "0.11"
+directories = "5"

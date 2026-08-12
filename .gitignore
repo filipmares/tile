@@ -1,0 +1,27 @@
+# Rust / Cargo
+/target
+**/target
+
+# Node / frontend
+node_modules
+dist
+apps/tile/ui/node_modules
+apps/tile/ui/dist
+
+# Tauri build output
+apps/tile/target
+gen/
+**/gen/schemas
+
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# Editors / IDEs
+.idea/
+.vscode/
+*.swp
+*~
+
+# Logs
+*.log

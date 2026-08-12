@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tile Settings</title>
+  </head>
+  <body>
+    <main class="app" id="app">
+      <header class="app__header">
+        <h1>Tile</h1>
+        <p class="app__subtitle">Keyboard-driven window management</p>
+      </header>
+
+      <section
+        id="permission-panel"
+        class="panel panel--warning"
+        hidden
+        aria-live="polite"
+      >
+        <h2>Accessibility permission needed</h2>
+        <p>
+          Tile needs macOS Accessibility permission to move other apps'
+          windows. Until it is granted, hotkeys and menu actions do nothing.
+        </p>
+        <div class="panel__actions">
+          <button id="grant-permission" type="button" class="button button--primary">
+            Grant permission…
+          </button>
+          <button id="open-accessibility" type="button" class="button">
+            Open Accessibility settings
+          </button>
+        </div>
+        <p class="panel__hint">
+          System Settings ▸ Privacy &amp; Security ▸ Accessibility
+        </p>
+      </section>
+
+      <section class="section" aria-labelledby="bindings-heading">
+        <h2 id="bindings-heading">Shortcuts</h2>
+        <p class="section__hint" id="recording-status" aria-live="assertive"></p>
+        <ul class="bindings" id="bindings"></ul>
+      </section>
+
+      <section class="section" aria-labelledby="behaviour-heading">
+        <h2 id="behaviour-heading">Behaviour</h2>
+
+        <div class="field">
+          <label class="field__label" for="gap">Screen-edge gap</label>
+          <div class="field__control">
+            <input
+              type="range"
+              id="gap"
+              name="gap"
+              min="0"
+              max="200"
+              step="1"
+            />
+            <input
+              type="number"
+              id="gap-number"
+              name="gap-number"
+              min="0"
+              max="200"
+              step="1"
+              aria-label="Screen-edge gap in pixels"
+            />
+            <span class="field__unit">px</span>
+          </div>
+        </div>
+
+        <div class="field field--inline">
+          <input type="checkbox" id="launch-on-login" name="launch-on-login" />
+          <label class="field__label" for="launch-on-login">
+            Launch Tile at login
+          </label>
+        </div>
+      </section>
+
+      <footer class="app__footer">
+        <button id="reset" type="button" class="button button--danger">
+          Restore defaults
+        </button>
+      </footer>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

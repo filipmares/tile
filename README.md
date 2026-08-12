@@ -1,0 +1,181 @@
+# Tile
+
+**Keyboard-driven window management for Windows and macOS.**
+
+Tile is a cross-platform reimagining of the excellent
+[Rectangle](https://github.com/rxhanson/Rectangle) — the macOS window-snapping
+app — built from scratch in Rust so the same window-tiling ergonomics work on
+both macOS **and** Windows. Snap the focused window to halves of the screen,
+maximize it, center it, or undo the last move, all from the keyboard.
+
+> **Status: early MVP.** Tile currently implements a focused set of actions:
+> **left half, right half, top half, bottom half, maximize, center, and
+> restore**. That is the whole scope today — it is deliberately small. More
+> actions (quarters, thirds, multi-monitor throws, and a settings UI) are
+> planned, but this README only documents what actually works right now.
+
+## Default keyboard shortcuts
+
+Defaults follow each platform's conventions. On macOS they mirror Rectangle so
+existing muscle memory carries over; on Windows they use the familiar `Win`-key
+snapping combinations. Every shortcut is rebindable.
+
+### macOS
+
+| Action        | Shortcut                  |
+| ------------- | ------------------------- |
+| Left half     | `Ctrl` + `Option` + `←`   |
+| Right half    | `Ctrl` + `Option` + `→`   |
+| Top half      | `Ctrl` + `Option` + `↑`   |
+| Bottom half   | `Ctrl` + `Option` + `↓`   |
+| Maximize      | `Ctrl` + `Option` + `Return` |
+| Center        | `Ctrl` + `Option` + `C`   |
+| Restore       | `Ctrl` + `Option` + `Backspace` |
+
+### Windows
+
+| Action        | Shortcut              |
+| ------------- | --------------------- |
+| Left half     | `Win` + `←`           |
+| Right half    | `Win` + `→`           |
+| Maximize      | `Win` + `↑`           |
+| Restore       | `Win` + `↓`           |
+| Top half      | `Win` + `Alt` + `↑`   |
+| Bottom half   | `Win` + `Alt` + `↓`   |
+| Center        | `Win` + `Alt` + `C`   |
+
+<sub>These tables are generated from `crates/tile-core/src/config.rs`
+(`default_bindings`) — the single source of truth for Tile's defaults.</sub>
+
+## Platform notes
+
+### Windows: Tile takes over `Win`+Arrow from Aero Snap
+
+On Windows, Tile installs a **low-level keyboard hook** (`WH_KEYBOARD_LL`) so it
+can claim `Win`+Arrow combinations that the shell otherwise routes to the
+built-in **Aero Snap**. This means:
+
+- While Tile is running, `Win`+`←`/`→`/`↑`/`↓` drive Tile instead of Aero Snap.
+- The hook **cannot see input directed at windows owned by elevated
+  (administrator) processes** unless Tile itself is running as administrator. If
+  a shortcut seems to do nothing over an elevated app, that's why.
+- Some corporate security / anti-cheat software is suspicious of global
+  keyboard hooks and may flag or block them.
+
+If you'd rather keep Aero Snap, **rebind** Tile's shortcuts to combinations that
+don't collide with the shell.
+
+### macOS: Accessibility permission
+
+macOS requires you to grant Tile the **Accessibility** permission before it can
+move other applications' windows. Grant it under:
+
+**System Settings ▸ Privacy & Security ▸ Accessibility** → enable **Tile**.
+
+You may need to toggle it off and on again after updating the app.
+
+Because the released builds are **unsigned and unnotarized** (see below),
+Gatekeeper will block the first launch. Remove the quarantine attribute:
+
+```sh
+xattr -d com.apple.quarantine /Applications/Tile.app
+```
+
+…or right-click the app in Finder and choose **Open** the first time.
+
+## Installation
+
+### From Releases
+
+Grab the latest build from the [Releases](https://github.com/filipmares/tile/releases)
+page:
+
+- **Windows:** the `.msi` or the NSIS setup `.exe`.
+- **macOS:** the universal `.dmg` (runs on both Apple Silicon and Intel).
+
+> Release binaries are currently **unsigned**. Windows SmartScreen may warn you
+> (**More info ▸ Run anyway**), and macOS needs the Gatekeeper workaround above.
+
+### From source
+
+See [Build from source](#build-from-source).
+
+## Build from source
+
+### Prerequisites
+
+- **Rust** (stable) — install with [rustup](https://rustup.rs/).
+- **Node.js 18+** and npm — for the frontend under `apps/tile/ui`.
+- **Windows:** Visual Studio **C++ Build Tools** + **Windows SDK** (provides
+  `link.exe`) and the **WebView2** runtime (preinstalled on Windows 11).
+- **macOS:** **Xcode Command Line Tools** (`xcode-select --install`).
+
+### Build
+
+```sh
+# 1. Build the frontend
+cd apps/tile/ui
+npm ci
+npm run build
+cd ../../..
+
+# 2. Build the whole workspace
+cargo build --workspace --release
+```
+
+To run the desktop app during development, use the Tauri CLI from `apps/tile`
+(e.g. `npm run tauri dev`) once the app shell is in place.
+
+## Architecture
+
+Tile is split into three crates with a strict dependency direction, so the
+interesting logic stays testable and every OS API lives behind a trait:
+
+```mermaid
+flowchart TD
+    app["apps/tile<br/>(Tauri v2 shell + Vite UI)"]
+    platform["crates/tile-platform<br/>(Windows / macOS backends + unsupported fallback)"]
+    core["crates/tile-core<br/>(pure geometry, actions, config — no platform code)"]
+
+    app --> platform
+    app --> core
+    platform --> core
+```
+
+- **`tile-core`** is pure and platform-independent — geometry math, the window
+  actions, hotkey definitions, config load/save, and the decision `Engine`. It
+  does no I/O beyond JSON and is **heavily unit-tested**, so all of Tile's
+  behaviour can be verified on any host (including Linux CI).
+- **`tile-platform`** isolates every OS API behind two traits (window
+  manipulation and global hotkeys), with a Windows backend, a macOS backend,
+  and an `unsupported` fallback so the crate still compiles on other platforms.
+- **`apps/tile`** is a thin [Tauri v2](https://v2.tauri.app/) desktop shell with
+  a vanilla TypeScript + Vite frontend — it wires `tile-core`'s engine to
+  `tile-platform`'s backends and shows the tray/menu-bar UI.
+
+## Continuous integration
+
+Because the primary development machine is Windows-only, **GitHub Actions is the
+only place the macOS build is ever compiled** — so CI is intentionally thorough
+and fails loudly. Every push and pull request runs `cargo fmt`, `cargo clippy
+--workspace --all-targets -- -D warnings`, and `cargo test` on Windows and
+macOS, plus a Linux job for the platform-independent crates. See
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+
+## Contributing
+
+Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for
+the project layout, prerequisites, and the checks CI expects.
+
+## Acknowledgements
+
+Tile is **inspired by** [Rectangle](https://github.com/rxhanson/Rectangle) by
+Ryan Hanson (MIT-licensed, © Ryan Hanson), and adopts its macOS default
+shortcuts so existing users feel at home. Tile is an **independent Rust
+implementation** — no Rectangle source code is used or copied. This
+acknowledgement is offered as attribution and courtesy, not as a licence
+obligation, and does **not** imply that the Rectangle project endorses Tile.
+
+## License
+
+Tile is released under the [MIT License](LICENSE), © 2026 Filip Mares.

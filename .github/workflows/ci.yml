@@ -1,0 +1,170 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs for the same ref so a fresh push doesn't queue behind
+# an already-obsolete run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Linux job: the platform-independent code only.
+  #
+  # The Tauri app cannot build here without a pile of GTK/WebKit system
+  # dependencies, so Linux is deliberately restricted to `tile-core` (pure
+  # logic) and `tile-platform` (which has an `unsupported` fallback so it still
+  # compiles). This keeps the fast feedback loop honest without pretending the
+  # desktop app builds on Linux.
+  # ---------------------------------------------------------------------------
+  core:
+    name: Core (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      # `fmt` needs no linker or platform SDK, so it is safe to check the whole
+      # workspace here even though we only build part of it on Linux.
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      # `--all-targets` is what surfaces dead code and errors inside
+      # `#[cfg(test)]` modules — exactly where an unbuildable backend hides.
+      - name: Clippy (platform-independent crates)
+        run: cargo clippy -p tile-core -p tile-platform --all-targets -- -D warnings
+
+      - name: Test tile-core and tile-platform
+        # tile-platform is included so its host-independent unit tests (e.g. the
+        # macOS pure helpers, compiled via `#[cfg(not(target_os = "macos"))]`)
+        # actually execute here. The Linux build uses the `unsupported` backend.
+        run: cargo test -p tile-core -p tile-platform
+
+  # ---------------------------------------------------------------------------
+  # Cross-check job: type-check the macOS (and Windows) backends from Linux.
+  #
+  # `cargo check` stops before linking, so it only needs the target's std
+  # (via `rustup target add`) — no macOS/Windows SDK and no cross-linker. This
+  # gives every PR ~1-minute feedback on the macOS backend without waiting for
+  # (or paying for) a macOS runner, and lets Linux-only contributors catch type
+  # errors in code they can't otherwise build. The windows-msvc target is
+  # included because `cargo check` provably never invokes the target linker
+  # (verified: checking succeeds even with a deliberately bogus target linker).
+  # ---------------------------------------------------------------------------
+  cross-check:
+    name: Cross-check backends (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain with cross targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin,x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check macOS backend (Apple Silicon)
+        run: cargo check -p tile-platform --target aarch64-apple-darwin --tests
+
+      - name: Check macOS backend (Intel)
+        run: cargo check -p tile-platform --target x86_64-apple-darwin --tests
+
+      - name: Check Windows backend
+        run: cargo check -p tile-platform --target x86_64-pc-windows-msvc --tests
+
+
+  # ---------------------------------------------------------------------------
+  # Desktop job: the full workspace, including the Tauri app, on the two OSes we
+  # actually ship. macOS is the whole reason this CI exists — it is the only
+  # place the macOS backend is ever compiled, since the developer is on Windows.
+  # ---------------------------------------------------------------------------
+  desktop:
+    name: Desktop (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      # The Tauri app crate may not yet be a workspace member while the app
+      # shell is still being scaffolded. Detect the frontend so the npm steps
+      # (and, later, the app itself) light up automatically once it lands,
+      # without breaking CI in the meantime.
+      - name: Detect frontend
+        id: frontend
+        shell: bash
+        run: |
+          if [ -f apps/tile/ui/package.json ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "dir=apps/tile/ui" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "No apps/tile/ui/package.json yet — skipping frontend build."
+          fi
+
+      - name: Set up Node
+        if: steps.frontend.outputs.present == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/tile/ui/package-lock.json
+
+      - name: Install frontend dependencies
+        if: steps.frontend.outputs.present == 'true'
+        working-directory: ${{ steps.frontend.outputs.dir }}
+        run: npm ci
+
+      - name: Build frontend
+        if: steps.frontend.outputs.present == 'true'
+        working-directory: ${{ steps.frontend.outputs.dir }}
+        run: npm run build
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      # `--all-targets` catches dead code and `#[cfg(test)]` breakage; running
+      # it per-OS is what forces the macOS backend to actually compile.
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+      # Keep PR CI fast: a full release build only runs for tag pushes, where
+      # release.yml does the real bundling anyway. On PRs we just prove it
+      # compiles in debug.
+      - name: Build (debug)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: cargo build --workspace
+
+      - name: Build (release)
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        run: cargo build --workspace --release

@@ -1,0 +1,4 @@
+# Keep clippy configuration minimal and non-controversial.
+# The MSRV is declared in the workspace Cargo.toml; mirror it here so clippy's
+# `incompatible_msrv` lint reasons about the same minimum Rust version.
+msrv = "1.77"

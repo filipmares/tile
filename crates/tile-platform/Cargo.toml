@@ -1,0 +1,47 @@
+[package]
+name = "tile-platform"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Platform backends (Windows / macOS) for Tile: window manipulation and global hotkeys."
+
+[dependencies]
+tile-core = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.58"
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_UI_Accessibility",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+]
+
+# The Accessibility (window manipulation) and Carbon (global hotkeys) C APIs
+# are declared as raw `extern "C"` in `src/macos.rs` and linked directly
+# against the ApplicationServices / Carbon / CoreFoundation frameworks, so no
+# crate is needed for them. `core-foundation` is used only for a few safe,
+# long-stable CoreFoundation wrappers (CFString / CFBoolean / CFDictionary).
+#
+# Objective-C messaging is unavoidable for exactly one thing: `NSScreen`
+# display enumeration (`visibleFrame` has no CoreGraphics equivalent). That is
+# done with `objc2`'s low-level `msg_send!` + runtime `class!(NSScreen)` lookup,
+# and `objc2-foundation` supplies only the `NSRect` geometry type (needed for
+# its `Encode` impl so struct-return dispatch is correct). We intentionally do
+# NOT depend on the fast-moving `objc2-app-kit` typed API (its `NSScreen`
+# methods are `MainThreadMarker`-gated and cannot be compile-checked here), nor
+# on `core-graphics`.
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+objc2 = "0.5"
+objc2-foundation = { version = "0.2", features = ["NSGeometry"] }
