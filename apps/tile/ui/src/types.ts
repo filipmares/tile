@@ -17,6 +17,11 @@ export type WindowAction =
   | "first-two-thirds"
   | "last-two-thirds"
   | "center-two-thirds"
+  | "top-vertical-third"
+  | "middle-vertical-third"
+  | "bottom-vertical-third"
+  | "top-vertical-two-thirds"
+  | "bottom-vertical-two-thirds"
   | "maximize"
   | "center"
   | "restore";
@@ -64,6 +69,31 @@ export const ACTIONS: { id: WindowAction; label: string; family: string }[] = [
     id: "center-two-thirds",
     label: "Center Two Thirds",
     family: "horizontal-thirds",
+  },
+  {
+    id: "top-vertical-third",
+    label: "Top Vertical Third",
+    family: "vertical-thirds",
+  },
+  {
+    id: "middle-vertical-third",
+    label: "Middle Vertical Third",
+    family: "vertical-thirds",
+  },
+  {
+    id: "bottom-vertical-third",
+    label: "Bottom Vertical Third",
+    family: "vertical-thirds",
+  },
+  {
+    id: "top-vertical-two-thirds",
+    label: "Top Vertical Two Thirds",
+    family: "vertical-thirds",
+  },
+  {
+    id: "bottom-vertical-two-thirds",
+    label: "Bottom Vertical Two Thirds",
+    family: "vertical-thirds",
   },
   { id: "maximize", label: "Maximize", family: "sizing" },
   { id: "center", label: "Center", family: "sizing" },
