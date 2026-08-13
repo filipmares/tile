@@ -92,6 +92,13 @@ pub enum WindowAction {
     BottomVerticalThird,
     TopVerticalTwoThirds,
     BottomVerticalTwoThirds,
+    FirstFourth,
+    SecondFourth,
+    ThirdFourth,
+    LastFourth,
+    FirstThreeFourths,
+    LastThreeFourths,
+    CenterThreeFourths,
     Maximize,
     Center,
     Restore,
@@ -100,7 +107,7 @@ pub enum WindowAction {
 impl WindowAction {
     /// All actions, grouped by [`WindowFamily`] in the order they appear in
     /// the UI.
-    pub const ALL: [WindowAction; 22] = [
+    pub const ALL: [WindowAction; 29] = [
         // Halves
         WindowAction::LeftHalf,
         WindowAction::RightHalf,
@@ -124,6 +131,14 @@ impl WindowAction {
         WindowAction::BottomVerticalThird,
         WindowAction::TopVerticalTwoThirds,
         WindowAction::BottomVerticalTwoThirds,
+        // Fourths
+        WindowAction::FirstFourth,
+        WindowAction::SecondFourth,
+        WindowAction::ThirdFourth,
+        WindowAction::LastFourth,
+        WindowAction::FirstThreeFourths,
+        WindowAction::LastThreeFourths,
+        WindowAction::CenterThreeFourths,
         // Sizing
         WindowAction::Maximize,
         WindowAction::Center,
@@ -155,6 +170,13 @@ impl WindowAction {
             WindowAction::BottomVerticalThird => "bottom-vertical-third",
             WindowAction::TopVerticalTwoThirds => "top-vertical-two-thirds",
             WindowAction::BottomVerticalTwoThirds => "bottom-vertical-two-thirds",
+            WindowAction::FirstFourth => "first-fourth",
+            WindowAction::SecondFourth => "second-fourth",
+            WindowAction::ThirdFourth => "third-fourth",
+            WindowAction::LastFourth => "last-fourth",
+            WindowAction::FirstThreeFourths => "first-three-fourths",
+            WindowAction::LastThreeFourths => "last-three-fourths",
+            WindowAction::CenterThreeFourths => "center-three-fourths",
             WindowAction::Maximize => "maximize",
             WindowAction::Center => "center",
             WindowAction::Restore => "restore",
@@ -183,6 +205,13 @@ impl WindowAction {
             WindowAction::BottomVerticalThird => "Bottom Vertical Third",
             WindowAction::TopVerticalTwoThirds => "Top Vertical Two Thirds",
             WindowAction::BottomVerticalTwoThirds => "Bottom Vertical Two Thirds",
+            WindowAction::FirstFourth => "First Fourth",
+            WindowAction::SecondFourth => "Second Fourth",
+            WindowAction::ThirdFourth => "Third Fourth",
+            WindowAction::LastFourth => "Last Fourth",
+            WindowAction::FirstThreeFourths => "First Three Fourths",
+            WindowAction::LastThreeFourths => "Last Three Fourths",
+            WindowAction::CenterThreeFourths => "Center Three Fourths",
             WindowAction::Maximize => "Maximize",
             WindowAction::Center => "Center",
             WindowAction::Restore => "Restore",
@@ -211,6 +240,13 @@ impl WindowAction {
             | WindowAction::BottomVerticalThird
             | WindowAction::TopVerticalTwoThirds
             | WindowAction::BottomVerticalTwoThirds => WindowFamily::VerticalThirds,
+            WindowAction::FirstFourth
+            | WindowAction::SecondFourth
+            | WindowAction::ThirdFourth
+            | WindowAction::LastFourth
+            | WindowAction::FirstThreeFourths
+            | WindowAction::LastThreeFourths
+            | WindowAction::CenterThreeFourths => WindowFamily::Fourths,
             WindowAction::Maximize | WindowAction::Center | WindowAction::Restore => {
                 WindowFamily::Sizing
             }
@@ -274,6 +310,23 @@ impl WindowAction {
             }
             WindowAction::BottomVerticalTwoThirds => {
                 grid(a, gaps, main_screen, (0.0, 1.0), (1.0 / 3.0, 1.0))
+            }
+            WindowAction::FirstFourth => grid(a, gaps, main_screen, (0.0, 1.0 / 4.0), (0.0, 1.0)),
+            WindowAction::SecondFourth => {
+                grid(a, gaps, main_screen, (1.0 / 4.0, 1.0 / 2.0), (0.0, 1.0))
+            }
+            WindowAction::ThirdFourth => {
+                grid(a, gaps, main_screen, (1.0 / 2.0, 3.0 / 4.0), (0.0, 1.0))
+            }
+            WindowAction::LastFourth => grid(a, gaps, main_screen, (3.0 / 4.0, 1.0), (0.0, 1.0)),
+            WindowAction::FirstThreeFourths => {
+                grid(a, gaps, main_screen, (0.0, 3.0 / 4.0), (0.0, 1.0))
+            }
+            WindowAction::LastThreeFourths => {
+                grid(a, gaps, main_screen, (1.0 / 4.0, 1.0), (0.0, 1.0))
+            }
+            WindowAction::CenterThreeFourths => {
+                grid(a, gaps, main_screen, (1.0 / 8.0, 7.0 / 8.0), (0.0, 1.0))
             }
             WindowAction::Maximize => grid(a, gaps, main_screen, (0.0, 1.0), (0.0, 1.0)),
             WindowAction::Center => {
@@ -590,6 +643,57 @@ mod tests {
         assert_eq!(top.max_x(), AREA.width - 20.0);
         assert_eq!(top.y, 20.0);
         assert_eq!(middle.y - top.max_y(), GAPPY.window);
+    }
+
+    #[test]
+    fn fourths_are_exact() {
+        let first = rect(WindowAction::FirstFourth, AREA, &NO_GAPS);
+        let second = rect(WindowAction::SecondFourth, AREA, &NO_GAPS);
+        let third = rect(WindowAction::ThirdFourth, AREA, &NO_GAPS);
+        let last = rect(WindowAction::LastFourth, AREA, &NO_GAPS);
+        assert_eq!(first, Rect::new(0.0, 0.0, 480.0, 1040.0));
+        assert_eq!(second, Rect::new(480.0, 0.0, 480.0, 1040.0));
+        assert_eq!(third, Rect::new(960.0, 0.0, 480.0, 1040.0));
+        assert_eq!(last, Rect::new(1440.0, 0.0, 480.0, 1040.0));
+        assert_eq!(first.max_x(), second.x);
+        assert_eq!(second.max_x(), third.x);
+        assert_eq!(third.max_x(), last.x);
+
+        let first_three = rect(WindowAction::FirstThreeFourths, AREA, &NO_GAPS);
+        let last_three = rect(WindowAction::LastThreeFourths, AREA, &NO_GAPS);
+        let center_three = rect(WindowAction::CenterThreeFourths, AREA, &NO_GAPS);
+        assert_eq!(first_three, Rect::new(0.0, 0.0, 1440.0, 1040.0));
+        assert_eq!(last_three, Rect::new(480.0, 0.0, 1440.0, 1040.0));
+        assert_eq!(center_three, Rect::new(240.0, 0.0, 1440.0, 1040.0));
+        // FirstThreeFourths ends where LastFourth begins.
+        assert_eq!(first_three.max_x(), last.x);
+    }
+
+    #[test]
+    fn fourths_tile_with_no_seam_on_odd_width() {
+        let area = Rect::new(0.0, 0.0, 1367.0, 769.0);
+        let members = [
+            rect(WindowAction::FirstFourth, area, &NO_GAPS),
+            rect(WindowAction::SecondFourth, area, &NO_GAPS),
+            rect(WindowAction::ThirdFourth, area, &NO_GAPS),
+            rect(WindowAction::LastFourth, area, &NO_GAPS),
+        ];
+        assert_tiles_exactly(&members, area);
+    }
+
+    #[test]
+    fn fourths_respect_offset_and_gaps() {
+        let first = rect(WindowAction::FirstFourth, OFFSET_AREA, &NO_GAPS);
+        assert_eq!(first.x, OFFSET_AREA.x);
+        assert_eq!(first.y, OFFSET_AREA.y);
+        let last = rect(WindowAction::LastFourth, OFFSET_AREA, &NO_GAPS);
+        assert_eq!(last.max_x(), OFFSET_AREA.max_x());
+
+        let first = rect(WindowAction::FirstFourth, AREA, &GAPPY);
+        let second = rect(WindowAction::SecondFourth, AREA, &GAPPY);
+        assert_eq!(first.x, 20.0);
+        assert_eq!(first.y, 20.0);
+        assert_eq!(second.x - first.max_x(), GAPPY.window);
     }
 
     #[test]
