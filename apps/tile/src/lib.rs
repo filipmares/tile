@@ -68,12 +68,25 @@ pub fn run() {
         .build(context);
 
     match build {
-        Ok(app) => app.run(|_app, event| {
-            // No main window: keep running in the tray when the settings
-            // window is closed. Quit only happens via the tray's Quit item.
-            if let RunEvent::ExitRequested { api, .. } = event {
-                api.prevent_exit();
+        Ok(app) => app.run(|app, event| match event {
+            // Closing the settings window must not quit the app — Tile lives in
+            // the tray. Tauri reports that case with `code: None`, whereas an
+            // explicit `app.exit(code)` (the tray's Quit item) arrives with
+            // `Some(code)`. Preventing *every* exit request, rather than only
+            // the window-driven one, is what previously made Quit a no-op.
+            RunEvent::ExitRequested { code, api, .. } => {
+                if code.is_none() {
+                    api.prevent_exit();
+                }
             }
+            // Release the keyboard hook however the app is being torn down, not
+            // just via the tray, so the hook never outlives the process.
+            RunEvent::Exit => {
+                if let Some(state) = app.try_state::<Arc<AppState>>() {
+                    state.shutdown_hotkeys();
+                }
+            }
+            _ => {}
         }),
         Err(err) => log::error!("failed to start Tile: {err}"),
     }
