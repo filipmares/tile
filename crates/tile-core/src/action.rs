@@ -103,6 +103,12 @@ pub enum WindowAction {
     TopRightThird,
     BottomLeftThird,
     BottomRightThird,
+    TopLeftSixth,
+    TopCenterSixth,
+    TopRightSixth,
+    BottomLeftSixth,
+    BottomCenterSixth,
+    BottomRightSixth,
     Maximize,
     Center,
     Restore,
@@ -111,7 +117,7 @@ pub enum WindowAction {
 impl WindowAction {
     /// All actions, grouped by [`WindowFamily`] in the order they appear in
     /// the UI.
-    pub const ALL: [WindowAction; 33] = [
+    pub const ALL: [WindowAction; 39] = [
         // Halves
         WindowAction::LeftHalf,
         WindowAction::RightHalf,
@@ -148,6 +154,13 @@ impl WindowAction {
         WindowAction::TopRightThird,
         WindowAction::BottomLeftThird,
         WindowAction::BottomRightThird,
+        // Sixths
+        WindowAction::TopLeftSixth,
+        WindowAction::TopCenterSixth,
+        WindowAction::TopRightSixth,
+        WindowAction::BottomLeftSixth,
+        WindowAction::BottomCenterSixth,
+        WindowAction::BottomRightSixth,
         // Sizing
         WindowAction::Maximize,
         WindowAction::Center,
@@ -190,6 +203,12 @@ impl WindowAction {
             WindowAction::TopRightThird => "top-right-third",
             WindowAction::BottomLeftThird => "bottom-left-third",
             WindowAction::BottomRightThird => "bottom-right-third",
+            WindowAction::TopLeftSixth => "top-left-sixth",
+            WindowAction::TopCenterSixth => "top-center-sixth",
+            WindowAction::TopRightSixth => "top-right-sixth",
+            WindowAction::BottomLeftSixth => "bottom-left-sixth",
+            WindowAction::BottomCenterSixth => "bottom-center-sixth",
+            WindowAction::BottomRightSixth => "bottom-right-sixth",
             WindowAction::Maximize => "maximize",
             WindowAction::Center => "center",
             WindowAction::Restore => "restore",
@@ -229,6 +248,12 @@ impl WindowAction {
             WindowAction::TopRightThird => "Top Right Third",
             WindowAction::BottomLeftThird => "Bottom Left Third",
             WindowAction::BottomRightThird => "Bottom Right Third",
+            WindowAction::TopLeftSixth => "Top Left Sixth",
+            WindowAction::TopCenterSixth => "Top Center Sixth",
+            WindowAction::TopRightSixth => "Top Right Sixth",
+            WindowAction::BottomLeftSixth => "Bottom Left Sixth",
+            WindowAction::BottomCenterSixth => "Bottom Center Sixth",
+            WindowAction::BottomRightSixth => "Bottom Right Sixth",
             WindowAction::Maximize => "Maximize",
             WindowAction::Center => "Center",
             WindowAction::Restore => "Restore",
@@ -268,6 +293,12 @@ impl WindowAction {
             | WindowAction::TopRightThird
             | WindowAction::BottomLeftThird
             | WindowAction::BottomRightThird => WindowFamily::CornerThirds,
+            WindowAction::TopLeftSixth
+            | WindowAction::TopCenterSixth
+            | WindowAction::TopRightSixth
+            | WindowAction::BottomLeftSixth
+            | WindowAction::BottomCenterSixth
+            | WindowAction::BottomRightSixth => WindowFamily::Sixths,
             WindowAction::Maximize | WindowAction::Center | WindowAction::Restore => {
                 WindowFamily::Sizing
             }
@@ -359,6 +390,20 @@ impl WindowAction {
             }
             WindowAction::BottomRightThird => {
                 grid(a, gaps, main_screen, (1.0 / 3.0, 1.0), (0.5, 1.0))
+            }
+            WindowAction::TopLeftSixth => grid(a, gaps, main_screen, (0.0, 1.0 / 3.0), (0.0, 0.5)),
+            WindowAction::TopCenterSixth => {
+                grid(a, gaps, main_screen, (1.0 / 3.0, 2.0 / 3.0), (0.0, 0.5))
+            }
+            WindowAction::TopRightSixth => grid(a, gaps, main_screen, (2.0 / 3.0, 1.0), (0.0, 0.5)),
+            WindowAction::BottomLeftSixth => {
+                grid(a, gaps, main_screen, (0.0, 1.0 / 3.0), (0.5, 1.0))
+            }
+            WindowAction::BottomCenterSixth => {
+                grid(a, gaps, main_screen, (1.0 / 3.0, 2.0 / 3.0), (0.5, 1.0))
+            }
+            WindowAction::BottomRightSixth => {
+                grid(a, gaps, main_screen, (2.0 / 3.0, 1.0), (0.5, 1.0))
             }
             WindowAction::Maximize => grid(a, gaps, main_screen, (0.0, 1.0), (0.0, 1.0)),
             WindowAction::Center => {
@@ -757,6 +802,54 @@ mod tests {
         assert_eq!(tl.y, 20.0);
         assert_eq!(tl.width, 1280.0 - 20.0 - GAPPY.window / 2.0);
         assert_eq!(tl.height, 520.0 - 20.0 - GAPPY.window / 2.0);
+    }
+
+    #[test]
+    fn sixths_are_exact() {
+        let tl = rect(WindowAction::TopLeftSixth, AREA, &NO_GAPS);
+        let tc = rect(WindowAction::TopCenterSixth, AREA, &NO_GAPS);
+        let tr = rect(WindowAction::TopRightSixth, AREA, &NO_GAPS);
+        let bl = rect(WindowAction::BottomLeftSixth, AREA, &NO_GAPS);
+        let bc = rect(WindowAction::BottomCenterSixth, AREA, &NO_GAPS);
+        let br = rect(WindowAction::BottomRightSixth, AREA, &NO_GAPS);
+        assert_eq!(tl, Rect::new(0.0, 0.0, 640.0, 520.0));
+        assert_eq!(tc, Rect::new(640.0, 0.0, 640.0, 520.0));
+        assert_eq!(tr, Rect::new(1280.0, 0.0, 640.0, 520.0));
+        assert_eq!(bl, Rect::new(0.0, 520.0, 640.0, 520.0));
+        assert_eq!(bc, Rect::new(640.0, 520.0, 640.0, 520.0));
+        assert_eq!(br, Rect::new(1280.0, 520.0, 640.0, 520.0));
+        // Adjacent cells share edges exactly.
+        assert_eq!(tl.max_x(), tc.x);
+        assert_eq!(tl.max_y(), bl.y);
+    }
+
+    #[test]
+    fn sixths_tile_with_no_seam_on_odd_dimensions() {
+        let area = Rect::new(0.0, 0.0, 1367.0, 769.0);
+        let members = [
+            rect(WindowAction::TopLeftSixth, area, &NO_GAPS),
+            rect(WindowAction::TopCenterSixth, area, &NO_GAPS),
+            rect(WindowAction::TopRightSixth, area, &NO_GAPS),
+            rect(WindowAction::BottomLeftSixth, area, &NO_GAPS),
+            rect(WindowAction::BottomCenterSixth, area, &NO_GAPS),
+            rect(WindowAction::BottomRightSixth, area, &NO_GAPS),
+        ];
+        assert_tiles_exactly(&members, area);
+    }
+
+    #[test]
+    fn sixths_respect_offset_and_gaps() {
+        let br = rect(WindowAction::BottomRightSixth, OFFSET_AREA, &NO_GAPS);
+        assert_eq!(br.max_x(), OFFSET_AREA.max_x());
+        assert_eq!(br.max_y(), OFFSET_AREA.max_y());
+
+        let tl = rect(WindowAction::TopLeftSixth, AREA, &GAPPY);
+        let tc = rect(WindowAction::TopCenterSixth, AREA, &GAPPY);
+        let bl = rect(WindowAction::BottomLeftSixth, AREA, &GAPPY);
+        assert_eq!(tl.x, 20.0);
+        assert_eq!(tl.y, 20.0);
+        assert_eq!(tc.x - tl.max_x(), GAPPY.window);
+        assert_eq!(bl.y - tl.max_y(), GAPPY.window);
     }
 
     #[test]

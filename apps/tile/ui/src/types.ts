@@ -33,6 +33,12 @@ export type WindowAction =
   | "top-right-third"
   | "bottom-left-third"
   | "bottom-right-third"
+  | "top-left-sixth"
+  | "top-center-sixth"
+  | "top-right-sixth"
+  | "bottom-left-sixth"
+  | "bottom-center-sixth"
+  | "bottom-right-sixth"
   | "maximize"
   | "center"
   | "restore";
@@ -136,6 +142,20 @@ export const ACTIONS: { id: WindowAction; label: string; family: string }[] = [
     id: "bottom-right-third",
     label: "Bottom Right Third",
     family: "corner-thirds",
+  },
+  { id: "top-left-sixth", label: "Top Left Sixth", family: "sixths" },
+  { id: "top-center-sixth", label: "Top Center Sixth", family: "sixths" },
+  { id: "top-right-sixth", label: "Top Right Sixth", family: "sixths" },
+  { id: "bottom-left-sixth", label: "Bottom Left Sixth", family: "sixths" },
+  {
+    id: "bottom-center-sixth",
+    label: "Bottom Center Sixth",
+    family: "sixths",
+  },
+  {
+    id: "bottom-right-sixth",
+    label: "Bottom Right Sixth",
+    family: "sixths",
   },
   { id: "maximize", label: "Maximize", family: "sizing" },
   { id: "center", label: "Center", family: "sizing" },
