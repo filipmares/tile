@@ -39,6 +39,15 @@ export type WindowAction =
   | "bottom-left-sixth"
   | "bottom-center-sixth"
   | "bottom-right-sixth"
+  | "top-left-ninth"
+  | "top-center-ninth"
+  | "top-right-ninth"
+  | "middle-left-ninth"
+  | "middle-center-ninth"
+  | "middle-right-ninth"
+  | "bottom-left-ninth"
+  | "bottom-center-ninth"
+  | "bottom-right-ninth"
   | "maximize"
   | "center"
   | "restore";
@@ -156,6 +165,31 @@ export const ACTIONS: { id: WindowAction; label: string; family: string }[] = [
     id: "bottom-right-sixth",
     label: "Bottom Right Sixth",
     family: "sixths",
+  },
+  { id: "top-left-ninth", label: "Top Left Ninth", family: "ninths" },
+  { id: "top-center-ninth", label: "Top Center Ninth", family: "ninths" },
+  { id: "top-right-ninth", label: "Top Right Ninth", family: "ninths" },
+  { id: "middle-left-ninth", label: "Middle Left Ninth", family: "ninths" },
+  {
+    id: "middle-center-ninth",
+    label: "Middle Center Ninth",
+    family: "ninths",
+  },
+  {
+    id: "middle-right-ninth",
+    label: "Middle Right Ninth",
+    family: "ninths",
+  },
+  { id: "bottom-left-ninth", label: "Bottom Left Ninth", family: "ninths" },
+  {
+    id: "bottom-center-ninth",
+    label: "Bottom Center Ninth",
+    family: "ninths",
+  },
+  {
+    id: "bottom-right-ninth",
+    label: "Bottom Right Ninth",
+    family: "ninths",
   },
   { id: "maximize", label: "Maximize", family: "sizing" },
   { id: "center", label: "Center", family: "sizing" },

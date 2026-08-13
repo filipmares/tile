@@ -109,6 +109,15 @@ pub enum WindowAction {
     BottomLeftSixth,
     BottomCenterSixth,
     BottomRightSixth,
+    TopLeftNinth,
+    TopCenterNinth,
+    TopRightNinth,
+    MiddleLeftNinth,
+    MiddleCenterNinth,
+    MiddleRightNinth,
+    BottomLeftNinth,
+    BottomCenterNinth,
+    BottomRightNinth,
     Maximize,
     Center,
     Restore,
@@ -117,7 +126,7 @@ pub enum WindowAction {
 impl WindowAction {
     /// All actions, grouped by [`WindowFamily`] in the order they appear in
     /// the UI.
-    pub const ALL: [WindowAction; 39] = [
+    pub const ALL: [WindowAction; 48] = [
         // Halves
         WindowAction::LeftHalf,
         WindowAction::RightHalf,
@@ -161,6 +170,16 @@ impl WindowAction {
         WindowAction::BottomLeftSixth,
         WindowAction::BottomCenterSixth,
         WindowAction::BottomRightSixth,
+        // Ninths
+        WindowAction::TopLeftNinth,
+        WindowAction::TopCenterNinth,
+        WindowAction::TopRightNinth,
+        WindowAction::MiddleLeftNinth,
+        WindowAction::MiddleCenterNinth,
+        WindowAction::MiddleRightNinth,
+        WindowAction::BottomLeftNinth,
+        WindowAction::BottomCenterNinth,
+        WindowAction::BottomRightNinth,
         // Sizing
         WindowAction::Maximize,
         WindowAction::Center,
@@ -209,6 +228,15 @@ impl WindowAction {
             WindowAction::BottomLeftSixth => "bottom-left-sixth",
             WindowAction::BottomCenterSixth => "bottom-center-sixth",
             WindowAction::BottomRightSixth => "bottom-right-sixth",
+            WindowAction::TopLeftNinth => "top-left-ninth",
+            WindowAction::TopCenterNinth => "top-center-ninth",
+            WindowAction::TopRightNinth => "top-right-ninth",
+            WindowAction::MiddleLeftNinth => "middle-left-ninth",
+            WindowAction::MiddleCenterNinth => "middle-center-ninth",
+            WindowAction::MiddleRightNinth => "middle-right-ninth",
+            WindowAction::BottomLeftNinth => "bottom-left-ninth",
+            WindowAction::BottomCenterNinth => "bottom-center-ninth",
+            WindowAction::BottomRightNinth => "bottom-right-ninth",
             WindowAction::Maximize => "maximize",
             WindowAction::Center => "center",
             WindowAction::Restore => "restore",
@@ -254,6 +282,15 @@ impl WindowAction {
             WindowAction::BottomLeftSixth => "Bottom Left Sixth",
             WindowAction::BottomCenterSixth => "Bottom Center Sixth",
             WindowAction::BottomRightSixth => "Bottom Right Sixth",
+            WindowAction::TopLeftNinth => "Top Left Ninth",
+            WindowAction::TopCenterNinth => "Top Center Ninth",
+            WindowAction::TopRightNinth => "Top Right Ninth",
+            WindowAction::MiddleLeftNinth => "Middle Left Ninth",
+            WindowAction::MiddleCenterNinth => "Middle Center Ninth",
+            WindowAction::MiddleRightNinth => "Middle Right Ninth",
+            WindowAction::BottomLeftNinth => "Bottom Left Ninth",
+            WindowAction::BottomCenterNinth => "Bottom Center Ninth",
+            WindowAction::BottomRightNinth => "Bottom Right Ninth",
             WindowAction::Maximize => "Maximize",
             WindowAction::Center => "Center",
             WindowAction::Restore => "Restore",
@@ -299,6 +336,15 @@ impl WindowAction {
             | WindowAction::BottomLeftSixth
             | WindowAction::BottomCenterSixth
             | WindowAction::BottomRightSixth => WindowFamily::Sixths,
+            WindowAction::TopLeftNinth
+            | WindowAction::TopCenterNinth
+            | WindowAction::TopRightNinth
+            | WindowAction::MiddleLeftNinth
+            | WindowAction::MiddleCenterNinth
+            | WindowAction::MiddleRightNinth
+            | WindowAction::BottomLeftNinth
+            | WindowAction::BottomCenterNinth
+            | WindowAction::BottomRightNinth => WindowFamily::Ninths,
             WindowAction::Maximize | WindowAction::Center | WindowAction::Restore => {
                 WindowFamily::Sizing
             }
@@ -404,6 +450,53 @@ impl WindowAction {
             }
             WindowAction::BottomRightSixth => {
                 grid(a, gaps, main_screen, (2.0 / 3.0, 1.0), (0.5, 1.0))
+            }
+            WindowAction::TopLeftNinth => {
+                grid(a, gaps, main_screen, (0.0, 1.0 / 3.0), (0.0, 1.0 / 3.0))
+            }
+            WindowAction::TopCenterNinth => grid(
+                a,
+                gaps,
+                main_screen,
+                (1.0 / 3.0, 2.0 / 3.0),
+                (0.0, 1.0 / 3.0),
+            ),
+            WindowAction::TopRightNinth => {
+                grid(a, gaps, main_screen, (2.0 / 3.0, 1.0), (0.0, 1.0 / 3.0))
+            }
+            WindowAction::MiddleLeftNinth => grid(
+                a,
+                gaps,
+                main_screen,
+                (0.0, 1.0 / 3.0),
+                (1.0 / 3.0, 2.0 / 3.0),
+            ),
+            WindowAction::MiddleCenterNinth => grid(
+                a,
+                gaps,
+                main_screen,
+                (1.0 / 3.0, 2.0 / 3.0),
+                (1.0 / 3.0, 2.0 / 3.0),
+            ),
+            WindowAction::MiddleRightNinth => grid(
+                a,
+                gaps,
+                main_screen,
+                (2.0 / 3.0, 1.0),
+                (1.0 / 3.0, 2.0 / 3.0),
+            ),
+            WindowAction::BottomLeftNinth => {
+                grid(a, gaps, main_screen, (0.0, 1.0 / 3.0), (2.0 / 3.0, 1.0))
+            }
+            WindowAction::BottomCenterNinth => grid(
+                a,
+                gaps,
+                main_screen,
+                (1.0 / 3.0, 2.0 / 3.0),
+                (2.0 / 3.0, 1.0),
+            ),
+            WindowAction::BottomRightNinth => {
+                grid(a, gaps, main_screen, (2.0 / 3.0, 1.0), (2.0 / 3.0, 1.0))
             }
             WindowAction::Maximize => grid(a, gaps, main_screen, (0.0, 1.0), (0.0, 1.0)),
             WindowAction::Center => {
@@ -850,6 +943,56 @@ mod tests {
         assert_eq!(tl.y, 20.0);
         assert_eq!(tc.x - tl.max_x(), GAPPY.window);
         assert_eq!(bl.y - tl.max_y(), GAPPY.window);
+    }
+
+    #[test]
+    fn ninths_are_exact() {
+        let tl = rect(WindowAction::TopLeftNinth, AREA, &NO_GAPS);
+        let mc = rect(WindowAction::MiddleCenterNinth, AREA, &NO_GAPS);
+        let br = rect(WindowAction::BottomRightNinth, AREA, &NO_GAPS);
+        assert_eq!(tl, Rect::new(0.0, 0.0, 640.0, 347.0));
+        assert_eq!(mc, Rect::new(640.0, 347.0, 640.0, 346.0));
+        assert_eq!(br, Rect::new(1280.0, 693.0, 640.0, 347.0));
+        // The centre cell is flush with its neighbours.
+        assert_eq!(tl.max_x(), mc.x);
+        assert_eq!(tl.max_y(), mc.y);
+        assert_eq!(mc.max_x(), br.x);
+        assert_eq!(mc.max_y(), br.y);
+    }
+
+    #[test]
+    fn ninths_tile_with_no_seam_on_odd_dimensions() {
+        let area = Rect::new(0.0, 0.0, 1367.0, 769.0);
+        let members: Vec<Rect> = [
+            WindowAction::TopLeftNinth,
+            WindowAction::TopCenterNinth,
+            WindowAction::TopRightNinth,
+            WindowAction::MiddleLeftNinth,
+            WindowAction::MiddleCenterNinth,
+            WindowAction::MiddleRightNinth,
+            WindowAction::BottomLeftNinth,
+            WindowAction::BottomCenterNinth,
+            WindowAction::BottomRightNinth,
+        ]
+        .iter()
+        .map(|a| rect(*a, area, &NO_GAPS))
+        .collect();
+        assert_tiles_exactly(&members, area);
+    }
+
+    #[test]
+    fn ninths_respect_offset_and_gaps() {
+        let br = rect(WindowAction::BottomRightNinth, OFFSET_AREA, &NO_GAPS);
+        assert_eq!(br.max_x(), OFFSET_AREA.max_x());
+        assert_eq!(br.max_y(), OFFSET_AREA.max_y());
+        let tl = rect(WindowAction::TopLeftNinth, OFFSET_AREA, &NO_GAPS);
+        assert_eq!(tl.x, OFFSET_AREA.x);
+        assert_eq!(tl.y, OFFSET_AREA.y);
+
+        // The centre cell is bounded by shared edges on all four sides.
+        let mc = rect(WindowAction::MiddleCenterNinth, AREA, &GAPPY);
+        let ml = rect(WindowAction::MiddleLeftNinth, AREA, &GAPPY);
+        assert_eq!(mc.x - ml.max_x(), GAPPY.window);
     }
 
     #[test]
