@@ -388,14 +388,36 @@ pub fn default_bindings() -> BTreeMap<WindowAction, Option<Hotkey>> {
 mod tests {
     use super::*;
 
+    /// The actions that ship with a default binding. The wider catalogue
+    /// (corners, thirds, fourths, sixths, ninths, size variants) is deliberately
+    /// unbound so the defaults stay conflict-free and users can pick their own.
+    const CORE_BOUND: [WindowAction; 7] = [
+        WindowAction::LeftHalf,
+        WindowAction::RightHalf,
+        WindowAction::TopHalf,
+        WindowAction::BottomHalf,
+        WindowAction::Maximize,
+        WindowAction::Center,
+        WindowAction::Restore,
+    ];
+
     #[test]
-    fn defaults_cover_every_action_without_conflicts() {
+    fn defaults_bind_the_core_actions_without_conflicts() {
         let config = Config::default();
-        for action in WindowAction::ALL {
+        for action in CORE_BOUND {
             assert!(
                 config.binding(action).is_some(),
                 "{action} has no default binding"
             );
+        }
+        // Every other action ships unbound.
+        for action in WindowAction::ALL {
+            if !CORE_BOUND.contains(&action) {
+                assert!(
+                    config.binding(action).is_none(),
+                    "{action} unexpectedly has a default binding"
+                );
+            }
         }
         assert_eq!(
             config.conflicts(),
@@ -519,9 +541,10 @@ mod tests {
     #[test]
     fn active_bindings_skips_unbound_actions() {
         let mut config = Config::default();
+        let before = config.active_bindings().len();
         config.set_binding(WindowAction::Center, None);
         let active = config.active_bindings();
-        assert_eq!(active.len(), WindowAction::ALL.len() - 1);
+        assert_eq!(active.len(), before - 1);
         assert!(!active.iter().any(|(_, a)| *a == WindowAction::Center));
     }
 }

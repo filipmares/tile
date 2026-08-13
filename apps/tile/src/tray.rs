@@ -1,15 +1,17 @@
 //! Tray icon and its menu.
 //!
 //! The menu exposes "Settings…", every window action (so they are usable
-//! without hotkeys), and "Quit". Clicking an action performs it immediately.
+//! without hotkeys), and "Quit". Actions are grouped into one submenu per
+//! [`WindowFamily`] so the ~45-entry catalogue stays navigable. Clicking an
+//! action performs it immediately.
 
 use std::str::FromStr;
 use std::sync::Arc;
 
-use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, Runtime};
-use tile_core::WindowAction;
+use tile_core::{WindowAction, WindowFamily};
 
 use crate::feedback;
 use crate::state::AppState;
@@ -25,15 +27,20 @@ pub fn build_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let settings = MenuItem::with_id(app, ID_SETTINGS, "Settings…", true, None::<&str>)?;
     let sep_top = PredefinedMenuItem::separator(app)?;
 
-    let mut action_items: Vec<MenuItem<R>> = Vec::with_capacity(WindowAction::ALL.len());
-    for action in WindowAction::ALL {
-        action_items.push(MenuItem::with_id(
-            app,
-            action.id(),
-            action.label(),
-            true,
-            None::<&str>,
-        )?);
+    // One submenu per family, each holding its actions. Keeping every action
+    // reachable but grouped stops the menu from becoming an unusable flat list.
+    let mut submenus: Vec<Submenu<R>> = Vec::new();
+    for family in WindowFamily::ALL {
+        let actions: Vec<WindowAction> = family.actions().collect();
+        if actions.is_empty() {
+            continue;
+        }
+        let items: Vec<MenuItem<R>> = actions
+            .iter()
+            .map(|action| MenuItem::with_id(app, action.id(), action.label(), true, None::<&str>))
+            .collect::<tauri::Result<_>>()?;
+        let refs: Vec<&dyn IsMenuItem<R>> = items.iter().map(|i| i as &dyn IsMenuItem<R>).collect();
+        submenus.push(Submenu::with_items(app, family.label(), true, &refs)?);
     }
 
     let sep_bottom = PredefinedMenuItem::separator(app)?;
@@ -42,8 +49,8 @@ pub fn build_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let mut items: Vec<&dyn IsMenuItem<R>> = Vec::new();
     items.push(&settings);
     items.push(&sep_top);
-    for item in &action_items {
-        items.push(item);
+    for submenu in &submenus {
+        items.push(submenu);
     }
     items.push(&sep_bottom);
     items.push(&quit);

@@ -11,7 +11,7 @@ pub mod geometry;
 pub mod history;
 pub mod hotkey;
 
-pub use action::{ParseActionError, WindowAction};
+pub use action::{ParseActionError, WindowAction, WindowFamily};
 pub use config::{Config, ConfigError, Conflict, Gaps, SharedEdges, CONFIG_FILE_NAME, MAX_GAP};
 pub use geometry::{Rect, Screen};
 pub use history::{WindowHistory, WindowId};

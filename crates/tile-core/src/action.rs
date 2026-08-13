@@ -8,10 +8,68 @@ use std::str::FromStr;
 use crate::config::{Gaps, SharedEdges};
 use crate::geometry::Rect;
 
+/// The family a [`WindowAction`] belongs to.
+///
+/// Families exist purely for presentation: the tray menu renders one submenu
+/// per family and the settings window renders one group per family, which
+/// keeps ~45 actions navigable instead of dumping them into one flat list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum WindowFamily {
+    Halves,
+    Corners,
+    HorizontalThirds,
+    VerticalThirds,
+    Fourths,
+    CornerThirds,
+    Sixths,
+    Ninths,
+    Sizing,
+}
+
+impl WindowFamily {
+    /// Families in the order they should appear in the UI.
+    pub const ALL: [WindowFamily; 9] = [
+        WindowFamily::Halves,
+        WindowFamily::Corners,
+        WindowFamily::HorizontalThirds,
+        WindowFamily::VerticalThirds,
+        WindowFamily::Fourths,
+        WindowFamily::CornerThirds,
+        WindowFamily::Sixths,
+        WindowFamily::Ninths,
+        WindowFamily::Sizing,
+    ];
+
+    /// Human-readable heading for menus and the settings window.
+    pub const fn label(self) -> &'static str {
+        match self {
+            WindowFamily::Halves => "Halves",
+            WindowFamily::Corners => "Corners",
+            WindowFamily::HorizontalThirds => "Horizontal Thirds",
+            WindowFamily::VerticalThirds => "Vertical Thirds",
+            WindowFamily::Fourths => "Fourths",
+            WindowFamily::CornerThirds => "Corner Thirds",
+            WindowFamily::Sixths => "Sixths",
+            WindowFamily::Ninths => "Ninths",
+            WindowFamily::Sizing => "Size & Position",
+        }
+    }
+
+    /// The actions belonging to this family, in UI order.
+    pub fn actions(self) -> impl Iterator<Item = WindowAction> {
+        WindowAction::ALL
+            .iter()
+            .copied()
+            .filter(move |a| a.family() == self)
+    }
+}
+
 /// Every window action supported by Tile.
 ///
-/// The MVP deliberately ships halves, maximize and restore only; new variants
-/// are additive and only need a `target_rect` arm plus a default hotkey.
+/// New variants are additive: a variant only needs a `target_rect` arm, an
+/// [`WindowAction::ALL`] entry, an [`WindowAction::id`], an
+/// [`WindowAction::label`] and a [`WindowAction::family`]. Default hotkeys are
+/// optional — most of the catalogue ships unbound.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum WindowAction {
@@ -19,30 +77,49 @@ pub enum WindowAction {
     RightHalf,
     TopHalf,
     BottomHalf,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
     Maximize,
     Center,
     Restore,
 }
 
 impl WindowAction {
-    /// All actions, in the order they should appear in the UI.
-    pub const ALL: [WindowAction; 7] = [
+    /// All actions, grouped by [`WindowFamily`] in the order they appear in
+    /// the UI.
+    pub const ALL: [WindowAction; 11] = [
+        // Halves
         WindowAction::LeftHalf,
         WindowAction::RightHalf,
         WindowAction::TopHalf,
         WindowAction::BottomHalf,
+        // Corners
+        WindowAction::TopLeft,
+        WindowAction::TopRight,
+        WindowAction::BottomLeft,
+        WindowAction::BottomRight,
+        // Sizing
         WindowAction::Maximize,
         WindowAction::Center,
         WindowAction::Restore,
     ];
 
     /// Stable machine-readable identifier, also used as the JSON config key.
+    ///
+    /// These strings are the config format's keys. Once published they are
+    /// effectively permanent: never rename or renumber an existing one.
     pub const fn id(self) -> &'static str {
         match self {
             WindowAction::LeftHalf => "left-half",
             WindowAction::RightHalf => "right-half",
             WindowAction::TopHalf => "top-half",
             WindowAction::BottomHalf => "bottom-half",
+            WindowAction::TopLeft => "top-left",
+            WindowAction::TopRight => "top-right",
+            WindowAction::BottomLeft => "bottom-left",
+            WindowAction::BottomRight => "bottom-right",
             WindowAction::Maximize => "maximize",
             WindowAction::Center => "center",
             WindowAction::Restore => "restore",
@@ -56,9 +133,30 @@ impl WindowAction {
             WindowAction::RightHalf => "Right Half",
             WindowAction::TopHalf => "Top Half",
             WindowAction::BottomHalf => "Bottom Half",
+            WindowAction::TopLeft => "Top Left",
+            WindowAction::TopRight => "Top Right",
+            WindowAction::BottomLeft => "Bottom Left",
+            WindowAction::BottomRight => "Bottom Right",
             WindowAction::Maximize => "Maximize",
             WindowAction::Center => "Center",
             WindowAction::Restore => "Restore",
+        }
+    }
+
+    /// The presentation family this action belongs to.
+    pub const fn family(self) -> WindowFamily {
+        match self {
+            WindowAction::LeftHalf
+            | WindowAction::RightHalf
+            | WindowAction::TopHalf
+            | WindowAction::BottomHalf => WindowFamily::Halves,
+            WindowAction::TopLeft
+            | WindowAction::TopRight
+            | WindowAction::BottomLeft
+            | WindowAction::BottomRight => WindowFamily::Corners,
+            WindowAction::Maximize | WindowAction::Center | WindowAction::Restore => {
+                WindowFamily::Sizing
+            }
         }
     }
 
@@ -89,6 +187,10 @@ impl WindowAction {
             WindowAction::RightHalf => grid(a, gaps, main_screen, (0.5, 1.0), (0.0, 1.0)),
             WindowAction::TopHalf => grid(a, gaps, main_screen, (0.0, 1.0), (0.0, 0.5)),
             WindowAction::BottomHalf => grid(a, gaps, main_screen, (0.0, 1.0), (0.5, 1.0)),
+            WindowAction::TopLeft => grid(a, gaps, main_screen, (0.0, 0.5), (0.0, 0.5)),
+            WindowAction::TopRight => grid(a, gaps, main_screen, (0.5, 1.0), (0.0, 0.5)),
+            WindowAction::BottomLeft => grid(a, gaps, main_screen, (0.0, 0.5), (0.5, 1.0)),
+            WindowAction::BottomRight => grid(a, gaps, main_screen, (0.5, 1.0), (0.5, 1.0)),
             WindowAction::Maximize => grid(a, gaps, main_screen, (0.0, 1.0), (0.0, 1.0)),
             WindowAction::Center => {
                 // Centering preserves the window's current size, clamped to the
@@ -170,8 +272,54 @@ mod tests {
         main_screen_only: false,
     };
 
+    /// A work area with a non-zero origin, simulating a taskbar on the left
+    /// edge of a secondary monitor.
+    const OFFSET_AREA: Rect = Rect::new(1980.0, 30.0, 1860.0, 1010.0);
+
+    /// A 10px window gap with 20px screen-edge gaps on every side, to exercise
+    /// the screen-edge vs shared-edge distinction.
+    const GAPPY: Gaps = Gaps {
+        window: 10.0,
+        edge_top: 20.0,
+        edge_bottom: 20.0,
+        edge_left: 20.0,
+        edge_right: 20.0,
+        skip_top_edge: false,
+        main_screen_only: false,
+    };
+
     fn rect(action: WindowAction, area: Rect, gaps: &Gaps) -> Rect {
         action.target_rect(area, gaps, CURRENT, true).unwrap()
+    }
+
+    /// Asserts that `members` exactly cover `area`: no gaps between them, no
+    /// overflow past the edges, and no overlap. Because [`Rect::rounded`] keeps
+    /// complementary edges flush, this holds even on odd pixel dimensions.
+    fn assert_tiles_exactly(members: &[Rect], area: Rect) {
+        let mut sum = 0.0;
+        for (i, m) in members.iter().enumerate() {
+            assert!(
+                m.x >= area.x && m.y >= area.y,
+                "member {m:?} starts before area {area:?}"
+            );
+            assert!(
+                m.max_x() <= area.max_x() && m.max_y() <= area.max_y(),
+                "member {m:?} overflows area {area:?}"
+            );
+            sum += m.width * m.height;
+            for n in &members[i + 1..] {
+                assert_eq!(
+                    m.intersection_area(n),
+                    0.0,
+                    "members overlap: {m:?} and {n:?}"
+                );
+            }
+        }
+        assert_eq!(
+            sum,
+            area.width * area.height,
+            "members leave a seam or overflow {area:?}"
+        );
     }
 
     #[test]
@@ -207,6 +355,58 @@ mod tests {
     fn maximize_fills_work_area() {
         let m = rect(WindowAction::Maximize, AREA, &NO_GAPS);
         assert_eq!(m, AREA);
+    }
+
+    #[test]
+    fn corners_are_exact_quarters() {
+        let tl = rect(WindowAction::TopLeft, AREA, &NO_GAPS);
+        let tr = rect(WindowAction::TopRight, AREA, &NO_GAPS);
+        let bl = rect(WindowAction::BottomLeft, AREA, &NO_GAPS);
+        let br = rect(WindowAction::BottomRight, AREA, &NO_GAPS);
+        assert_eq!(tl, Rect::new(0.0, 0.0, 960.0, 520.0));
+        assert_eq!(tr, Rect::new(960.0, 0.0, 960.0, 520.0));
+        assert_eq!(bl, Rect::new(0.0, 520.0, 960.0, 520.0));
+        assert_eq!(br, Rect::new(960.0, 520.0, 960.0, 520.0));
+        // Adjacent corners share an edge exactly.
+        assert_eq!(tl.max_x(), tr.x);
+        assert_eq!(tl.max_y(), bl.y);
+        assert_eq!(br.x, bl.max_x());
+        assert_eq!(br.y, tr.max_y());
+    }
+
+    #[test]
+    fn corners_tile_with_no_seam_on_odd_dimensions() {
+        let area = Rect::new(0.0, 0.0, 1367.0, 769.0);
+        let members = [
+            rect(WindowAction::TopLeft, area, &NO_GAPS),
+            rect(WindowAction::TopRight, area, &NO_GAPS),
+            rect(WindowAction::BottomLeft, area, &NO_GAPS),
+            rect(WindowAction::BottomRight, area, &NO_GAPS),
+        ];
+        assert_tiles_exactly(&members, area);
+    }
+
+    #[test]
+    fn corners_respect_work_area_offset() {
+        let tl = rect(WindowAction::TopLeft, OFFSET_AREA, &NO_GAPS);
+        assert_eq!(tl, Rect::new(1980.0, 30.0, 930.0, 505.0));
+        let br = rect(WindowAction::BottomRight, OFFSET_AREA, &NO_GAPS);
+        assert_eq!(br.max_x(), OFFSET_AREA.max_x());
+        assert_eq!(br.max_y(), OFFSET_AREA.max_y());
+    }
+
+    #[test]
+    fn corners_apply_screen_and_shared_edge_gaps() {
+        let tl = rect(WindowAction::TopLeft, AREA, &GAPPY);
+        let tr = rect(WindowAction::TopRight, AREA, &GAPPY);
+        let bl = rect(WindowAction::BottomLeft, AREA, &GAPPY);
+        // Outer edges get the full 20px screen gap.
+        assert_eq!(tl.x, 20.0);
+        assert_eq!(tl.y, 20.0);
+        // Shared inner edges are separated by exactly one window gap.
+        assert_eq!(tr.x - tl.max_x(), GAPPY.window);
+        assert_eq!(bl.y - tl.max_y(), GAPPY.window);
+        assert_eq!(tr.max_x(), AREA.width - 20.0);
     }
 
     #[test]

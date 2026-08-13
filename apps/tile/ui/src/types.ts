@@ -7,19 +7,43 @@ export type WindowAction =
   | "right-half"
   | "top-half"
   | "bottom-half"
+  | "top-left"
+  | "top-right"
+  | "bottom-left"
+  | "bottom-right"
   | "maximize"
   | "center"
   | "restore";
 
-/** Order and labels mirror `WindowAction::ALL` / `WindowAction::label`. */
-export const ACTIONS: { id: WindowAction; label: string }[] = [
-  { id: "left-half", label: "Left Half" },
-  { id: "right-half", label: "Right Half" },
-  { id: "top-half", label: "Top Half" },
-  { id: "bottom-half", label: "Bottom Half" },
-  { id: "maximize", label: "Maximize" },
-  { id: "center", label: "Center" },
-  { id: "restore", label: "Restore" },
+/** Presentation families, mirroring `WindowFamily::ALL` and its labels. */
+export const FAMILIES: { id: string; label: string }[] = [
+  { id: "halves", label: "Halves" },
+  { id: "corners", label: "Corners" },
+  { id: "horizontal-thirds", label: "Horizontal Thirds" },
+  { id: "vertical-thirds", label: "Vertical Thirds" },
+  { id: "fourths", label: "Fourths" },
+  { id: "corner-thirds", label: "Corner Thirds" },
+  { id: "sixths", label: "Sixths" },
+  { id: "ninths", label: "Ninths" },
+  { id: "sizing", label: "Size & Position" },
+];
+
+/**
+ * Order, labels and families mirror `WindowAction::ALL`, `WindowAction::label`
+ * and `WindowAction::family`. `family` keys into {@link FAMILIES}.
+ */
+export const ACTIONS: { id: WindowAction; label: string; family: string }[] = [
+  { id: "left-half", label: "Left Half", family: "halves" },
+  { id: "right-half", label: "Right Half", family: "halves" },
+  { id: "top-half", label: "Top Half", family: "halves" },
+  { id: "bottom-half", label: "Bottom Half", family: "halves" },
+  { id: "top-left", label: "Top Left", family: "corners" },
+  { id: "top-right", label: "Top Right", family: "corners" },
+  { id: "bottom-left", label: "Bottom Left", family: "corners" },
+  { id: "bottom-right", label: "Bottom Right", family: "corners" },
+  { id: "maximize", label: "Maximize", family: "sizing" },
+  { id: "center", label: "Center", family: "sizing" },
+  { id: "restore", label: "Restore", family: "sizing" },
 ];
 
 /** `KeyCode` — serde `rename_all = "kebab-case"`. Mirrors `KeyCode::ALL`. */
