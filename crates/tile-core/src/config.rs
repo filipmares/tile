@@ -218,6 +218,43 @@ fn default_true() -> bool {
     true
 }
 
+/// The default fraction for the [`WindowAction::AlmostMaximize`] size, matching
+/// Rectangle's 90% behaviour.
+fn default_almost_maximize_fraction() -> f64 {
+    0.9
+}
+
+/// Clamps a size fraction into `(0, 1]`, falling back to the default when the
+/// value is not a usable fraction (e.g. zero, negative, NaN, or above 1).
+fn normalize_fraction(value: f64) -> f64 {
+    if value.is_finite() && value > 0.0 && value <= 1.0 {
+        value
+    } else {
+        default_almost_maximize_fraction()
+    }
+}
+
+/// Fractions controlling the size-variant actions that resize a window rather
+/// than tile it into the grid.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SizeOptions {
+    /// [`WindowAction::AlmostMaximize`] width as a fraction of the work area,
+    /// in `(0, 1]`.
+    pub almost_maximize_width: f64,
+    /// [`WindowAction::AlmostMaximize`] height as a fraction of the work area,
+    /// in `(0, 1]`.
+    pub almost_maximize_height: f64,
+}
+
+impl Default for SizeOptions {
+    fn default() -> Self {
+        Self {
+            almost_maximize_width: default_almost_maximize_fraction(),
+            almost_maximize_height: default_almost_maximize_fraction(),
+        }
+    }
+}
+
 /// Persisted user settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -233,6 +270,12 @@ pub struct Config {
     pub launch_on_login: bool,
     /// Show the tray / menu-bar icon.
     pub show_tray_icon: bool,
+    /// [`WindowAction::AlmostMaximize`] width as a fraction of the work area.
+    #[serde(default = "default_almost_maximize_fraction")]
+    pub almost_maximize_width: f64,
+    /// [`WindowAction::AlmostMaximize`] height as a fraction of the work area.
+    #[serde(default = "default_almost_maximize_fraction")]
+    pub almost_maximize_height: f64,
 }
 
 impl Default for Config {
@@ -242,6 +285,8 @@ impl Default for Config {
             gaps: Gaps::default(),
             launch_on_login: false,
             show_tray_icon: default_true(),
+            almost_maximize_width: default_almost_maximize_fraction(),
+            almost_maximize_height: default_almost_maximize_fraction(),
         }
     }
 }
@@ -266,6 +311,16 @@ impl Config {
             None => true,
         });
         self.gaps.normalize();
+        self.almost_maximize_width = normalize_fraction(self.almost_maximize_width);
+        self.almost_maximize_height = normalize_fraction(self.almost_maximize_height);
+    }
+
+    /// The size-variant fractions, derived from the persisted configuration.
+    pub fn size_options(&self) -> SizeOptions {
+        SizeOptions {
+            almost_maximize_width: self.almost_maximize_width,
+            almost_maximize_height: self.almost_maximize_height,
+        }
     }
 
     pub fn binding(&self, action: WindowAction) -> Option<Hotkey> {

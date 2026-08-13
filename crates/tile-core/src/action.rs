@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
-use crate::config::{Gaps, SharedEdges};
+use crate::config::{Gaps, SharedEdges, SizeOptions};
 use crate::geometry::Rect;
 
 /// The family a [`WindowAction`] belongs to.
@@ -119,6 +119,9 @@ pub enum WindowAction {
     BottomCenterNinth,
     BottomRightNinth,
     Maximize,
+    AlmostMaximize,
+    MaximizeHeight,
+    CenterHalf,
     Center,
     Restore,
 }
@@ -126,7 +129,7 @@ pub enum WindowAction {
 impl WindowAction {
     /// All actions, grouped by [`WindowFamily`] in the order they appear in
     /// the UI.
-    pub const ALL: [WindowAction; 48] = [
+    pub const ALL: [WindowAction; 51] = [
         // Halves
         WindowAction::LeftHalf,
         WindowAction::RightHalf,
@@ -182,6 +185,9 @@ impl WindowAction {
         WindowAction::BottomRightNinth,
         // Sizing
         WindowAction::Maximize,
+        WindowAction::AlmostMaximize,
+        WindowAction::MaximizeHeight,
+        WindowAction::CenterHalf,
         WindowAction::Center,
         WindowAction::Restore,
     ];
@@ -238,6 +244,9 @@ impl WindowAction {
             WindowAction::BottomCenterNinth => "bottom-center-ninth",
             WindowAction::BottomRightNinth => "bottom-right-ninth",
             WindowAction::Maximize => "maximize",
+            WindowAction::AlmostMaximize => "almost-maximize",
+            WindowAction::MaximizeHeight => "maximize-height",
+            WindowAction::CenterHalf => "center-half",
             WindowAction::Center => "center",
             WindowAction::Restore => "restore",
         }
@@ -292,6 +301,9 @@ impl WindowAction {
             WindowAction::BottomCenterNinth => "Bottom Center Ninth",
             WindowAction::BottomRightNinth => "Bottom Right Ninth",
             WindowAction::Maximize => "Maximize",
+            WindowAction::AlmostMaximize => "Almost Maximize",
+            WindowAction::MaximizeHeight => "Maximize Height",
+            WindowAction::CenterHalf => "Center Half",
             WindowAction::Center => "Center",
             WindowAction::Restore => "Restore",
         }
@@ -345,9 +357,12 @@ impl WindowAction {
             | WindowAction::BottomLeftNinth
             | WindowAction::BottomCenterNinth
             | WindowAction::BottomRightNinth => WindowFamily::Ninths,
-            WindowAction::Maximize | WindowAction::Center | WindowAction::Restore => {
-                WindowFamily::Sizing
-            }
+            WindowAction::Maximize
+            | WindowAction::AlmostMaximize
+            | WindowAction::MaximizeHeight
+            | WindowAction::CenterHalf
+            | WindowAction::Center
+            | WindowAction::Restore => WindowFamily::Sizing,
         }
     }
 
@@ -370,6 +385,7 @@ impl WindowAction {
         gaps: &Gaps,
         current: Rect,
         main_screen: bool,
+        sizes: SizeOptions,
     ) -> Option<Rect> {
         let a = work_area;
 
@@ -499,6 +515,27 @@ impl WindowAction {
                 grid(a, gaps, main_screen, (2.0 / 3.0, 1.0), (2.0 / 3.0, 1.0))
             }
             WindowAction::Maximize => grid(a, gaps, main_screen, (0.0, 1.0), (0.0, 1.0)),
+            WindowAction::CenterHalf => grid(a, gaps, main_screen, (0.25, 0.75), (0.0, 1.0)),
+            WindowAction::MaximizeHeight => {
+                // Keep the window's current horizontal position and width, but
+                // stretch it to the full work-area height. The vertical extent
+                // is taken from a full-height grid cell so the top and bottom
+                // screen-edge gaps are applied by the gap helper rather than
+                // open-coded here.
+                let full = grid(a, gaps, main_screen, (0.0, 1.0), (0.0, 1.0));
+                Rect::new(current.x, full.y, current.width, full.height)
+            }
+            WindowAction::AlmostMaximize => {
+                // A centred box occupying a configurable fraction of the work
+                // area (defaulting to Rectangle's 0.9 x 0.9). Like Center and
+                // Maximize's sibling size variants it ignores gaps.
+                let w = a.width * sizes.almost_maximize_width;
+                let h = a.height * sizes.almost_maximize_height;
+                return Some(
+                    Rect::new(a.x + (a.width - w) / 2.0, a.y + (a.height - h) / 2.0, w, h)
+                        .rounded(),
+                );
+            }
             WindowAction::Center => {
                 // Centering preserves the window's current size, clamped to the
                 // work area so it can never end up larger than the screen. It
@@ -596,7 +633,9 @@ mod tests {
     };
 
     fn rect(action: WindowAction, area: Rect, gaps: &Gaps) -> Rect {
-        action.target_rect(area, gaps, CURRENT, true).unwrap()
+        action
+            .target_rect(area, gaps, CURRENT, true, SizeOptions::default())
+            .unwrap()
     }
 
     /// Asserts that `members` exactly cover `area`: no gaps between them, no
@@ -1056,10 +1095,10 @@ mod tests {
         // On a secondary display, screen-edge gaps vanish but the window gap
         // between two halves is preserved.
         let l = WindowAction::LeftHalf
-            .target_rect(AREA, &gaps, CURRENT, false)
+            .target_rect(AREA, &gaps, CURRENT, false, SizeOptions::default())
             .unwrap();
         let r = WindowAction::RightHalf
-            .target_rect(AREA, &gaps, CURRENT, false)
+            .target_rect(AREA, &gaps, CURRENT, false, SizeOptions::default())
             .unwrap();
         assert_eq!(l.x, 0.0);
         assert_eq!(l.y, 0.0);
@@ -1071,7 +1110,13 @@ mod tests {
     fn gaps_never_shrink_a_window_below_zero() {
         let tiny = Rect::new(0.0, 0.0, 10.0, 10.0);
         let m = WindowAction::Maximize
-            .target_rect(tiny, &Gaps::uniform(50.0), CURRENT, true)
+            .target_rect(
+                tiny,
+                &Gaps::uniform(50.0),
+                CURRENT,
+                true,
+                SizeOptions::default(),
+            )
             .unwrap();
         assert!(m.width >= 0.0);
         assert!(m.height >= 0.0);
@@ -1089,15 +1134,69 @@ mod tests {
     fn center_clamps_oversized_windows() {
         let huge = Rect::new(0.0, 0.0, 5000.0, 5000.0);
         let c = WindowAction::Center
-            .target_rect(AREA, &NO_GAPS, huge, true)
+            .target_rect(AREA, &NO_GAPS, huge, true, SizeOptions::default())
             .unwrap();
         assert_eq!(c, AREA);
     }
 
     #[test]
+    fn almost_maximize_defaults_to_ninety_percent_centered() {
+        let am = rect(WindowAction::AlmostMaximize, AREA, &NO_GAPS);
+        assert_eq!(am, Rect::new(96.0, 52.0, 1728.0, 936.0));
+        assert_eq!(am.center(), AREA.center());
+        // It ignores gaps, exactly like Center.
+        assert_eq!(rect(WindowAction::AlmostMaximize, AREA, &GAPPY), am);
+    }
+
+    #[test]
+    fn almost_maximize_respects_offset_and_configured_fractions() {
+        let am = rect(WindowAction::AlmostMaximize, OFFSET_AREA, &NO_GAPS);
+        // Centred within the offset work area, to within a pixel of rounding.
+        assert!((am.center().0 - OFFSET_AREA.center().0).abs() <= 1.0);
+        assert!((am.center().1 - OFFSET_AREA.center().1).abs() <= 1.0);
+        assert!(am.x >= OFFSET_AREA.x && am.max_x() <= OFFSET_AREA.max_x());
+        assert!(am.y >= OFFSET_AREA.y && am.max_y() <= OFFSET_AREA.max_y());
+
+        let sizes = SizeOptions {
+            almost_maximize_width: 0.5,
+            almost_maximize_height: 0.5,
+        };
+        let half = WindowAction::AlmostMaximize
+            .target_rect(AREA, &NO_GAPS, CURRENT, true, sizes)
+            .unwrap();
+        assert_eq!(half, Rect::new(480.0, 260.0, 960.0, 520.0));
+    }
+
+    #[test]
+    fn maximize_height_keeps_width_and_fills_height() {
+        let mh = rect(WindowAction::MaximizeHeight, AREA, &NO_GAPS);
+        assert_eq!(mh.x, CURRENT.x);
+        assert_eq!(mh.width, CURRENT.width);
+        assert_eq!(mh.y, 0.0);
+        assert_eq!(mh.height, AREA.height);
+
+        // The vertical extent uses the screen-edge gaps from the gap helper.
+        let gappy = rect(WindowAction::MaximizeHeight, AREA, &GAPPY);
+        let full = rect(WindowAction::Maximize, AREA, &GAPPY);
+        assert_eq!(gappy.x, CURRENT.x);
+        assert_eq!(gappy.width, CURRENT.width);
+        assert_eq!(gappy.y, full.y);
+        assert_eq!(gappy.height, full.height);
+    }
+
+    #[test]
+    fn center_half_is_a_centered_vertical_half() {
+        let ch = rect(WindowAction::CenterHalf, AREA, &NO_GAPS);
+        assert_eq!(ch, Rect::new(480.0, 0.0, 960.0, 1040.0));
+        assert_eq!(ch.center().0, AREA.center().0);
+        assert_eq!(ch.y, 0.0);
+        assert_eq!(ch.height, AREA.height);
+    }
+
+    #[test]
     fn restore_has_no_geometry() {
         assert!(WindowAction::Restore
-            .target_rect(AREA, &NO_GAPS, CURRENT, true)
+            .target_rect(AREA, &NO_GAPS, CURRENT, true, SizeOptions::default())
             .is_none());
         assert!(WindowAction::Restore.uses_history());
     }

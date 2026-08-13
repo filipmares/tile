@@ -49,6 +49,9 @@ export type WindowAction =
   | "bottom-center-ninth"
   | "bottom-right-ninth"
   | "maximize"
+  | "almost-maximize"
+  | "maximize-height"
+  | "center-half"
   | "center"
   | "restore";
 
@@ -192,6 +195,9 @@ export const ACTIONS: { id: WindowAction; label: string; family: string }[] = [
     family: "ninths",
   },
   { id: "maximize", label: "Maximize", family: "sizing" },
+  { id: "almost-maximize", label: "Almost Maximize", family: "sizing" },
+  { id: "maximize-height", label: "Maximize Height", family: "sizing" },
+  { id: "center-half", label: "Center Half", family: "sizing" },
   { id: "center", label: "Center", family: "sizing" },
   { id: "restore", label: "Restore", family: "sizing" },
 ];
@@ -338,6 +344,8 @@ export interface Config {
   gap: Gaps;
   launchOnLogin: boolean;
   showTrayIcon: boolean;
+  almostMaximizeWidth: number;
+  almostMaximizeHeight: number;
 }
 
 export type PermissionStatus = "granted" | "denied" | "not-required";
