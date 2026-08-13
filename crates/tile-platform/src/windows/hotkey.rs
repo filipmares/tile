@@ -193,7 +193,12 @@ fn hook_thread_main(ready: Sender<Result<u32>>) {
             }
         };
 
-        let hook = match SetWindowsHookExW(WH_KEYBOARD_LL, Some(low_level_keyboard_proc), hmod, 0) {
+        let hook = match SetWindowsHookExW(
+            WH_KEYBOARD_LL,
+            Some(low_level_keyboard_proc),
+            Some(hmod.into()),
+            0,
+        ) {
             Ok(h) => h,
             Err(e) => {
                 let _ = ready.send(Err(PlatformError::HotkeyRegistration {
@@ -211,7 +216,7 @@ fn hook_thread_main(ready: Sender<Result<u32>>) {
         // return 0 and ends the loop.
         let mut msg: MSG = std::mem::zeroed();
         loop {
-            let result = GetMessageW(&mut msg, HWND(std::ptr::null_mut()), 0, 0).0;
+            let result = GetMessageW(&mut msg, Some(HWND(std::ptr::null_mut())), 0, 0).0;
             if result == 0 || result == -1 {
                 // 0 = WM_QUIT, -1 = error; either way we stop.
                 break;
@@ -271,7 +276,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
 
     // SAFETY: forwarding to the next hook with the OS-provided parameters is
     // always sound; the ignored `HHOOK` argument is documented as unused.
-    CallNextHookEx(HHOOK(std::ptr::null_mut()), code, wparam, lparam)
+    CallNextHookEx(Some(HHOOK(std::ptr::null_mut())), code, wparam, lparam)
 }
 
 /// Looks up `(vk, mods)` in the shared table and, on an exact match, sends the
