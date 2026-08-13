@@ -99,6 +99,10 @@ pub enum WindowAction {
     FirstThreeFourths,
     LastThreeFourths,
     CenterThreeFourths,
+    TopLeftThird,
+    TopRightThird,
+    BottomLeftThird,
+    BottomRightThird,
     Maximize,
     Center,
     Restore,
@@ -107,7 +111,7 @@ pub enum WindowAction {
 impl WindowAction {
     /// All actions, grouped by [`WindowFamily`] in the order they appear in
     /// the UI.
-    pub const ALL: [WindowAction; 29] = [
+    pub const ALL: [WindowAction; 33] = [
         // Halves
         WindowAction::LeftHalf,
         WindowAction::RightHalf,
@@ -139,6 +143,11 @@ impl WindowAction {
         WindowAction::FirstThreeFourths,
         WindowAction::LastThreeFourths,
         WindowAction::CenterThreeFourths,
+        // Corner thirds
+        WindowAction::TopLeftThird,
+        WindowAction::TopRightThird,
+        WindowAction::BottomLeftThird,
+        WindowAction::BottomRightThird,
         // Sizing
         WindowAction::Maximize,
         WindowAction::Center,
@@ -177,6 +186,10 @@ impl WindowAction {
             WindowAction::FirstThreeFourths => "first-three-fourths",
             WindowAction::LastThreeFourths => "last-three-fourths",
             WindowAction::CenterThreeFourths => "center-three-fourths",
+            WindowAction::TopLeftThird => "top-left-third",
+            WindowAction::TopRightThird => "top-right-third",
+            WindowAction::BottomLeftThird => "bottom-left-third",
+            WindowAction::BottomRightThird => "bottom-right-third",
             WindowAction::Maximize => "maximize",
             WindowAction::Center => "center",
             WindowAction::Restore => "restore",
@@ -212,6 +225,10 @@ impl WindowAction {
             WindowAction::FirstThreeFourths => "First Three Fourths",
             WindowAction::LastThreeFourths => "Last Three Fourths",
             WindowAction::CenterThreeFourths => "Center Three Fourths",
+            WindowAction::TopLeftThird => "Top Left Third",
+            WindowAction::TopRightThird => "Top Right Third",
+            WindowAction::BottomLeftThird => "Bottom Left Third",
+            WindowAction::BottomRightThird => "Bottom Right Third",
             WindowAction::Maximize => "Maximize",
             WindowAction::Center => "Center",
             WindowAction::Restore => "Restore",
@@ -247,6 +264,10 @@ impl WindowAction {
             | WindowAction::FirstThreeFourths
             | WindowAction::LastThreeFourths
             | WindowAction::CenterThreeFourths => WindowFamily::Fourths,
+            WindowAction::TopLeftThird
+            | WindowAction::TopRightThird
+            | WindowAction::BottomLeftThird
+            | WindowAction::BottomRightThird => WindowFamily::CornerThirds,
             WindowAction::Maximize | WindowAction::Center | WindowAction::Restore => {
                 WindowFamily::Sizing
             }
@@ -327,6 +348,17 @@ impl WindowAction {
             }
             WindowAction::CenterThreeFourths => {
                 grid(a, gaps, main_screen, (1.0 / 8.0, 7.0 / 8.0), (0.0, 1.0))
+            }
+            // "Corner thirds" are Rectangle's two-thirds-width, half-height
+            // corner blocks. Unlike the quarter corners they deliberately
+            // overlap in the centre third, so this family does not tile.
+            WindowAction::TopLeftThird => grid(a, gaps, main_screen, (0.0, 2.0 / 3.0), (0.0, 0.5)),
+            WindowAction::TopRightThird => grid(a, gaps, main_screen, (1.0 / 3.0, 1.0), (0.0, 0.5)),
+            WindowAction::BottomLeftThird => {
+                grid(a, gaps, main_screen, (0.0, 2.0 / 3.0), (0.5, 1.0))
+            }
+            WindowAction::BottomRightThird => {
+                grid(a, gaps, main_screen, (1.0 / 3.0, 1.0), (0.5, 1.0))
             }
             WindowAction::Maximize => grid(a, gaps, main_screen, (0.0, 1.0), (0.0, 1.0)),
             WindowAction::Center => {
@@ -694,6 +726,37 @@ mod tests {
         assert_eq!(first.x, 20.0);
         assert_eq!(first.y, 20.0);
         assert_eq!(second.x - first.max_x(), GAPPY.window);
+    }
+
+    #[test]
+    fn corner_thirds_are_two_thirds_by_half_blocks() {
+        let tl = rect(WindowAction::TopLeftThird, AREA, &NO_GAPS);
+        let tr = rect(WindowAction::TopRightThird, AREA, &NO_GAPS);
+        let bl = rect(WindowAction::BottomLeftThird, AREA, &NO_GAPS);
+        let br = rect(WindowAction::BottomRightThird, AREA, &NO_GAPS);
+        assert_eq!(tl, Rect::new(0.0, 0.0, 1280.0, 520.0));
+        assert_eq!(tr, Rect::new(640.0, 0.0, 1280.0, 520.0));
+        assert_eq!(bl, Rect::new(0.0, 520.0, 1280.0, 520.0));
+        assert_eq!(br, Rect::new(640.0, 520.0, 1280.0, 520.0));
+        // Left-anchored pair shares the horizontal mid-line.
+        assert_eq!(tl.max_y(), bl.y);
+        assert_eq!(tr.max_y(), br.y);
+        // The family intentionally overlaps in the centre third.
+        assert!(tl.intersection_area(&tr) > 0.0);
+    }
+
+    #[test]
+    fn corner_thirds_respect_offset_and_gaps() {
+        let tr = rect(WindowAction::TopRightThird, OFFSET_AREA, &NO_GAPS);
+        assert_eq!(tr.max_x(), OFFSET_AREA.max_x());
+        assert_eq!(tr.y, OFFSET_AREA.y);
+
+        let tl = rect(WindowAction::TopLeftThird, AREA, &GAPPY);
+        // Left and top are screen edges; right and bottom are shared.
+        assert_eq!(tl.x, 20.0);
+        assert_eq!(tl.y, 20.0);
+        assert_eq!(tl.width, 1280.0 - 20.0 - GAPPY.window / 2.0);
+        assert_eq!(tl.height, 520.0 - 20.0 - GAPPY.window / 2.0);
     }
 
     #[test]
