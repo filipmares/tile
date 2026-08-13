@@ -81,6 +81,12 @@ pub enum WindowAction {
     TopRight,
     BottomLeft,
     BottomRight,
+    FirstThird,
+    CenterThird,
+    LastThird,
+    FirstTwoThirds,
+    LastTwoThirds,
+    CenterTwoThirds,
     Maximize,
     Center,
     Restore,
@@ -89,7 +95,7 @@ pub enum WindowAction {
 impl WindowAction {
     /// All actions, grouped by [`WindowFamily`] in the order they appear in
     /// the UI.
-    pub const ALL: [WindowAction; 11] = [
+    pub const ALL: [WindowAction; 17] = [
         // Halves
         WindowAction::LeftHalf,
         WindowAction::RightHalf,
@@ -100,6 +106,13 @@ impl WindowAction {
         WindowAction::TopRight,
         WindowAction::BottomLeft,
         WindowAction::BottomRight,
+        // Horizontal thirds
+        WindowAction::FirstThird,
+        WindowAction::CenterThird,
+        WindowAction::LastThird,
+        WindowAction::FirstTwoThirds,
+        WindowAction::LastTwoThirds,
+        WindowAction::CenterTwoThirds,
         // Sizing
         WindowAction::Maximize,
         WindowAction::Center,
@@ -120,6 +133,12 @@ impl WindowAction {
             WindowAction::TopRight => "top-right",
             WindowAction::BottomLeft => "bottom-left",
             WindowAction::BottomRight => "bottom-right",
+            WindowAction::FirstThird => "first-third",
+            WindowAction::CenterThird => "center-third",
+            WindowAction::LastThird => "last-third",
+            WindowAction::FirstTwoThirds => "first-two-thirds",
+            WindowAction::LastTwoThirds => "last-two-thirds",
+            WindowAction::CenterTwoThirds => "center-two-thirds",
             WindowAction::Maximize => "maximize",
             WindowAction::Center => "center",
             WindowAction::Restore => "restore",
@@ -137,6 +156,12 @@ impl WindowAction {
             WindowAction::TopRight => "Top Right",
             WindowAction::BottomLeft => "Bottom Left",
             WindowAction::BottomRight => "Bottom Right",
+            WindowAction::FirstThird => "First Third",
+            WindowAction::CenterThird => "Center Third",
+            WindowAction::LastThird => "Last Third",
+            WindowAction::FirstTwoThirds => "First Two Thirds",
+            WindowAction::LastTwoThirds => "Last Two Thirds",
+            WindowAction::CenterTwoThirds => "Center Two Thirds",
             WindowAction::Maximize => "Maximize",
             WindowAction::Center => "Center",
             WindowAction::Restore => "Restore",
@@ -154,6 +179,12 @@ impl WindowAction {
             | WindowAction::TopRight
             | WindowAction::BottomLeft
             | WindowAction::BottomRight => WindowFamily::Corners,
+            WindowAction::FirstThird
+            | WindowAction::CenterThird
+            | WindowAction::LastThird
+            | WindowAction::FirstTwoThirds
+            | WindowAction::LastTwoThirds
+            | WindowAction::CenterTwoThirds => WindowFamily::HorizontalThirds,
             WindowAction::Maximize | WindowAction::Center | WindowAction::Restore => {
                 WindowFamily::Sizing
             }
@@ -191,6 +222,18 @@ impl WindowAction {
             WindowAction::TopRight => grid(a, gaps, main_screen, (0.5, 1.0), (0.0, 0.5)),
             WindowAction::BottomLeft => grid(a, gaps, main_screen, (0.0, 0.5), (0.5, 1.0)),
             WindowAction::BottomRight => grid(a, gaps, main_screen, (0.5, 1.0), (0.5, 1.0)),
+            WindowAction::FirstThird => grid(a, gaps, main_screen, (0.0, 1.0 / 3.0), (0.0, 1.0)),
+            WindowAction::CenterThird => {
+                grid(a, gaps, main_screen, (1.0 / 3.0, 2.0 / 3.0), (0.0, 1.0))
+            }
+            WindowAction::LastThird => grid(a, gaps, main_screen, (2.0 / 3.0, 1.0), (0.0, 1.0)),
+            WindowAction::FirstTwoThirds => {
+                grid(a, gaps, main_screen, (0.0, 2.0 / 3.0), (0.0, 1.0))
+            }
+            WindowAction::LastTwoThirds => grid(a, gaps, main_screen, (1.0 / 3.0, 1.0), (0.0, 1.0)),
+            WindowAction::CenterTwoThirds => {
+                grid(a, gaps, main_screen, (1.0 / 6.0, 5.0 / 6.0), (0.0, 1.0))
+            }
             WindowAction::Maximize => grid(a, gaps, main_screen, (0.0, 1.0), (0.0, 1.0)),
             WindowAction::Center => {
                 // Centering preserves the window's current size, clamped to the
@@ -407,6 +450,57 @@ mod tests {
         assert_eq!(tr.x - tl.max_x(), GAPPY.window);
         assert_eq!(bl.y - tl.max_y(), GAPPY.window);
         assert_eq!(tr.max_x(), AREA.width - 20.0);
+    }
+
+    #[test]
+    fn horizontal_thirds_are_exact() {
+        let first = rect(WindowAction::FirstThird, AREA, &NO_GAPS);
+        let center = rect(WindowAction::CenterThird, AREA, &NO_GAPS);
+        let last = rect(WindowAction::LastThird, AREA, &NO_GAPS);
+        assert_eq!(first, Rect::new(0.0, 0.0, 640.0, 1040.0));
+        assert_eq!(center, Rect::new(640.0, 0.0, 640.0, 1040.0));
+        assert_eq!(last, Rect::new(1280.0, 0.0, 640.0, 1040.0));
+        // Adjacent thirds share an edge exactly.
+        assert_eq!(first.max_x(), center.x);
+        assert_eq!(center.max_x(), last.x);
+
+        // Two-thirds spans and their complementary third.
+        let first_two = rect(WindowAction::FirstTwoThirds, AREA, &NO_GAPS);
+        let last_two = rect(WindowAction::LastTwoThirds, AREA, &NO_GAPS);
+        let center_two = rect(WindowAction::CenterTwoThirds, AREA, &NO_GAPS);
+        assert_eq!(first_two, Rect::new(0.0, 0.0, 1280.0, 1040.0));
+        assert_eq!(last_two, Rect::new(640.0, 0.0, 1280.0, 1040.0));
+        assert_eq!(center_two, Rect::new(320.0, 0.0, 1280.0, 1040.0));
+        // FirstTwoThirds is exactly FirstThird + CenterThird.
+        assert_eq!(first_two.max_x(), last.x);
+    }
+
+    #[test]
+    fn horizontal_thirds_tile_with_no_seam_on_odd_width() {
+        let area = Rect::new(0.0, 0.0, 1367.0, 769.0);
+        let members = [
+            rect(WindowAction::FirstThird, area, &NO_GAPS),
+            rect(WindowAction::CenterThird, area, &NO_GAPS),
+            rect(WindowAction::LastThird, area, &NO_GAPS),
+        ];
+        assert_tiles_exactly(&members, area);
+    }
+
+    #[test]
+    fn horizontal_thirds_respect_offset_and_gaps() {
+        let first = rect(WindowAction::FirstThird, OFFSET_AREA, &NO_GAPS);
+        assert_eq!(first.x, OFFSET_AREA.x);
+        assert_eq!(first.y, OFFSET_AREA.y);
+        let last = rect(WindowAction::LastThird, OFFSET_AREA, &NO_GAPS);
+        assert_eq!(last.max_x(), OFFSET_AREA.max_x());
+
+        // Gaps: outer edges get the screen gap; the seam is one window gap.
+        let first = rect(WindowAction::FirstThird, AREA, &GAPPY);
+        let center = rect(WindowAction::CenterThird, AREA, &GAPPY);
+        assert_eq!(first.x, 20.0);
+        assert_eq!(first.y, 20.0);
+        assert_eq!(first.max_y(), AREA.height - 20.0);
+        assert_eq!(center.x - first.max_x(), GAPPY.window);
     }
 
     #[test]
