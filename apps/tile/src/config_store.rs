@@ -118,7 +118,7 @@ mod tests {
     fn save_then_load_round_trips() {
         let dir = TempDir::new();
         let config = Config {
-            gap: 42.0,
+            gaps: tile_core::Gaps::uniform(42.0),
             launch_on_login: true,
             ..Default::default()
         };
@@ -147,10 +147,10 @@ mod tests {
         let dir = TempDir::new();
         save_to_dir(&dir.0, &Config::default()).unwrap();
         let config = Config {
-            gap: 99.0,
+            gaps: tile_core::Gaps::uniform(99.0),
             ..Default::default()
         };
         save_to_dir(&dir.0, &config).unwrap();
-        assert_eq!(load_from_dir(&dir.0).gap, 99.0);
+        assert_eq!(load_from_dir(&dir.0).gaps, tile_core::Gaps::uniform(99.0));
     }
 }

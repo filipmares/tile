@@ -8,13 +8,14 @@ import {
   getPermissionStatus,
   resetToDefaults,
   setBinding,
-  setGap,
+  setGaps,
   setLaunchOnLogin,
 } from "./api";
 import { formatHotkey, interpret } from "./hotkey";
 import {
   ACTIONS,
   Config,
+  Gaps,
   Hotkey,
   HotkeyFailure,
   WindowAction,
@@ -33,8 +34,14 @@ function el<T extends HTMLElement>(selector: string): T {
 const dom = {
   bindings: el<HTMLUListElement>("#bindings"),
   recordingStatus: el<HTMLParagraphElement>("#recording-status"),
-  gap: el<HTMLInputElement>("#gap"),
-  gapNumber: el<HTMLInputElement>("#gap-number"),
+  gapWindow: el<HTMLInputElement>("#gap-window"),
+  gapWindowNumber: el<HTMLInputElement>("#gap-window-number"),
+  gapEdgeTop: el<HTMLInputElement>("#gap-edge-top"),
+  gapEdgeBottom: el<HTMLInputElement>("#gap-edge-bottom"),
+  gapEdgeLeft: el<HTMLInputElement>("#gap-edge-left"),
+  gapEdgeRight: el<HTMLInputElement>("#gap-edge-right"),
+  gapSkipTop: el<HTMLInputElement>("#gap-skip-top"),
+  gapMainOnly: el<HTMLInputElement>("#gap-main-only"),
   launch: el<HTMLInputElement>("#launch-on-login"),
   reset: el<HTMLButtonElement>("#reset"),
   permissionPanel: el<HTMLElement>("#permission-panel"),
@@ -202,8 +209,15 @@ async function applyBinding(
 
 function renderBehaviour(): void {
   if (!config) return;
-  dom.gap.value = String(config.gap);
-  dom.gapNumber.value = String(config.gap);
+  const g = config.gap;
+  dom.gapWindow.value = String(g.window);
+  dom.gapWindowNumber.value = String(g.window);
+  dom.gapEdgeTop.value = String(g.edgeTop);
+  dom.gapEdgeBottom.value = String(g.edgeBottom);
+  dom.gapEdgeLeft.value = String(g.edgeLeft);
+  dom.gapEdgeRight.value = String(g.edgeRight);
+  dom.gapSkipTop.checked = g.skipTopEdge;
+  dom.gapMainOnly.checked = g.mainScreenOnly;
   dom.launch.checked = config.launchOnLogin;
 }
 
@@ -212,21 +226,34 @@ function clampGap(value: number): number {
   return Math.min(200, Math.max(0, Math.round(value)));
 }
 
-async function commitGap(raw: string): Promise<void> {
-  const gap = clampGap(Number(raw));
-  dom.gap.value = String(gap);
-  dom.gapNumber.value = String(gap);
+/** Reads the current gap controls into a `Gaps` payload. */
+function readGaps(): Gaps {
+  return {
+    window: clampGap(Number(dom.gapWindow.value)),
+    edgeTop: clampGap(Number(dom.gapEdgeTop.value)),
+    edgeBottom: clampGap(Number(dom.gapEdgeBottom.value)),
+    edgeLeft: clampGap(Number(dom.gapEdgeLeft.value)),
+    edgeRight: clampGap(Number(dom.gapEdgeRight.value)),
+    skipTopEdge: dom.gapSkipTop.checked,
+    mainScreenOnly: dom.gapMainOnly.checked,
+  };
+}
+
+async function commitGaps(): Promise<void> {
+  const gaps = readGaps();
   try {
-    config = await setGap(gap);
+    config = await setGaps(gaps);
+    renderBehaviour();
   } catch (err) {
-    setRecordingStatus(`Could not save gap: ${String(err)}`);
+    setRecordingStatus(`Could not save gaps: ${String(err)}`);
   }
 }
 
-function mirrorGap(raw: string): void {
+/** Keeps the window-gap slider and its number field in sync while dragging. */
+function mirrorWindowGap(raw: string): void {
   const gap = clampGap(Number(raw));
-  dom.gap.value = String(gap);
-  dom.gapNumber.value = String(gap);
+  dom.gapWindow.value = String(gap);
+  dom.gapWindowNumber.value = String(gap);
 }
 
 async function refreshPermission(prompt: boolean): Promise<void> {
@@ -253,10 +280,24 @@ async function refreshPermission(prompt: boolean): Promise<void> {
 }
 
 function wireEvents(): void {
-  dom.gap.addEventListener("input", () => mirrorGap(dom.gap.value));
-  dom.gap.addEventListener("change", () => void commitGap(dom.gap.value));
-  dom.gapNumber.addEventListener("input", () => mirrorGap(dom.gapNumber.value));
-  dom.gapNumber.addEventListener("change", () => void commitGap(dom.gapNumber.value));
+  dom.gapWindow.addEventListener("input", () =>
+    mirrorWindowGap(dom.gapWindow.value),
+  );
+  dom.gapWindow.addEventListener("change", () => void commitGaps());
+  dom.gapWindowNumber.addEventListener("input", () =>
+    mirrorWindowGap(dom.gapWindowNumber.value),
+  );
+  dom.gapWindowNumber.addEventListener("change", () => void commitGaps());
+  for (const input of [
+    dom.gapEdgeTop,
+    dom.gapEdgeBottom,
+    dom.gapEdgeLeft,
+    dom.gapEdgeRight,
+  ]) {
+    input.addEventListener("change", () => void commitGaps());
+  }
+  dom.gapSkipTop.addEventListener("change", () => void commitGaps());
+  dom.gapMainOnly.addEventListener("change", () => void commitGaps());
 
   dom.launch.addEventListener("change", async () => {
     try {

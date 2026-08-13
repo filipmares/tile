@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, Runtime, State};
 use tauri_plugin_autostart::ManagerExt;
-use tile_core::{Config, Hotkey, WindowAction};
+use tile_core::{Config, Gaps, Hotkey, WindowAction};
 
 use crate::dto::{HotkeyFailureDto, PermissionStatusDto};
 use crate::state::AppState;
@@ -45,8 +45,8 @@ pub fn set_binding(
 }
 
 #[tauri::command]
-pub fn set_gap(state: State<'_, Shared>, gap: f64) -> Config {
-    state.update_config(|config| config.gap = gap)
+pub fn set_gaps(state: State<'_, Shared>, gaps: Gaps) -> Config {
+    state.update_config(|config| config.gaps = gaps)
 }
 
 #[tauri::command]

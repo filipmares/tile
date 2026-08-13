@@ -3,6 +3,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import {
   Config,
+  Gaps,
   Hotkey,
   HotkeyFailure,
   PermissionStatus,
@@ -16,8 +17,8 @@ export const setBinding = (
   hotkey: Hotkey | null,
 ): Promise<Config> => invoke("set_binding", { action, hotkey });
 
-export const setGap = (gap: number): Promise<Config> =>
-  invoke("set_gap", { gap });
+export const setGaps = (gaps: Gaps): Promise<Config> =>
+  invoke("set_gaps", { gaps });
 
 export const setLaunchOnLogin = (enabled: boolean): Promise<Config> =>
   invoke("set_launch_on_login", { enabled });

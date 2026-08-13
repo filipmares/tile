@@ -147,10 +147,21 @@ export interface Hotkey {
   key: KeyCode;
 }
 
+/** `Gaps` — serde `rename_all = "camelCase"`, persisted under the `gap` key. */
+export interface Gaps {
+  window: number;
+  edgeTop: number;
+  edgeBottom: number;
+  edgeLeft: number;
+  edgeRight: number;
+  skipTopEdge: boolean;
+  mainScreenOnly: boolean;
+}
+
 /** `Config` — serde `rename_all = "camelCase"`. */
 export interface Config {
   bindings: Partial<Record<WindowAction, Hotkey | null>>;
-  gap: number;
+  gap: Gaps;
   launchOnLogin: boolean;
   showTrayIcon: boolean;
 }
