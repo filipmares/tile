@@ -4,8 +4,8 @@ use std::ffi::c_void;
 
 use tile_core::{Rect, Screen, WindowId, WindowSnapshot};
 
-use windows::core::{Error as WinError, HRESULT};
-use windows::Win32::Foundation::{BOOL, ERROR_ACCESS_DENIED, HWND, LPARAM, RECT};
+use windows::core::{Error as WinError, BOOL, HRESULT};
+use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, HWND, LPARAM, RECT};
 use windows::Win32::Graphics::Dwm::{
     DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS,
 };
@@ -126,7 +126,7 @@ impl WindowBackend for WindowsWindowBackend {
         // for the duration of this call, so the borrow is live throughout.
         unsafe {
             let _ = EnumDisplayMonitors(
-                HDC(std::ptr::null_mut()),
+                Some(HDC(std::ptr::null_mut())),
                 None,
                 Some(monitor_enum_proc),
                 LPARAM(&mut screens as *mut Vec<Screen> as isize),
@@ -171,7 +171,7 @@ impl WindowBackend for WindowsWindowBackend {
             // stacking order; `SWP_NOACTIVATE` avoids stealing focus.
             SetWindowPos(
                 hwnd,
-                HWND(std::ptr::null_mut()),
+                Some(HWND(std::ptr::null_mut())),
                 outer_target.x as i32,
                 outer_target.y as i32,
                 outer_target.width as i32,
