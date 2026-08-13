@@ -49,7 +49,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_config,
             commands::set_binding,
-            commands::set_gap,
+            commands::set_gaps,
             commands::set_launch_on_login,
             commands::reset_to_defaults,
             commands::perform_action,

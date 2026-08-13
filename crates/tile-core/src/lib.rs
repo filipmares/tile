@@ -12,7 +12,7 @@ pub mod history;
 pub mod hotkey;
 
 pub use action::{ParseActionError, WindowAction};
-pub use config::{Config, ConfigError, Conflict, CONFIG_FILE_NAME, MAX_GAP};
+pub use config::{Config, ConfigError, Conflict, Gaps, SharedEdges, CONFIG_FILE_NAME, MAX_GAP};
 pub use geometry::{Rect, Screen};
 pub use history::{WindowHistory, WindowId};
 pub use hotkey::{Hotkey, KeyCode, Modifiers, ParseHotkeyError};
@@ -81,8 +81,12 @@ impl Engine {
             return Plan::NoOp(NoOpReason::NoScreen);
         };
 
-        let Some(target) = action.target_rect(screen.work_area, self.config.gap, window.frame)
-        else {
+        let Some(target) = action.target_rect(
+            screen.work_area,
+            &self.config.gaps,
+            window.frame,
+            screen.is_primary,
+        ) else {
             return Plan::NoOp(NoOpReason::NoHistory);
         };
 

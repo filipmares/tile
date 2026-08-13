@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
+use crate::config::{Gaps, SharedEdges};
 use crate::geometry::Rect;
 
 /// Every window action supported by Tile.
@@ -69,23 +70,30 @@ impl WindowAction {
 
     /// Computes the destination rectangle for this action within `work_area`.
     ///
-    /// `gap` is the padding applied between the window and the screen edges.
-    /// Returns `None` for actions that are not expressible as pure geometry
-    /// (currently only [`WindowAction::Restore`]).
-    pub fn target_rect(self, work_area: Rect, gap: f64, current: Rect) -> Option<Rect> {
+    /// `gaps` describes the window gap and the per-side screen-edge gaps;
+    /// `main_screen` is whether `work_area` belongs to the primary display,
+    /// which matters when [`Gaps::main_screen_only`] is set. Returns `None` for
+    /// actions that are not expressible as pure geometry (currently only
+    /// [`WindowAction::Restore`]).
+    pub fn target_rect(
+        self,
+        work_area: Rect,
+        gaps: &Gaps,
+        current: Rect,
+        main_screen: bool,
+    ) -> Option<Rect> {
         let a = work_area;
-        let half_w = a.width / 2.0;
-        let half_h = a.height / 2.0;
 
         let rect = match self {
-            WindowAction::LeftHalf => Rect::new(a.x, a.y, half_w, a.height),
-            WindowAction::RightHalf => Rect::new(a.x + half_w, a.y, half_w, a.height),
-            WindowAction::TopHalf => Rect::new(a.x, a.y, a.width, half_h),
-            WindowAction::BottomHalf => Rect::new(a.x, a.y + half_h, a.width, half_h),
-            WindowAction::Maximize => a,
+            WindowAction::LeftHalf => grid(a, gaps, main_screen, (0.0, 0.5), (0.0, 1.0)),
+            WindowAction::RightHalf => grid(a, gaps, main_screen, (0.5, 1.0), (0.0, 1.0)),
+            WindowAction::TopHalf => grid(a, gaps, main_screen, (0.0, 1.0), (0.0, 0.5)),
+            WindowAction::BottomHalf => grid(a, gaps, main_screen, (0.0, 1.0), (0.5, 1.0)),
+            WindowAction::Maximize => grid(a, gaps, main_screen, (0.0, 1.0), (0.0, 1.0)),
             WindowAction::Center => {
                 // Centering preserves the window's current size, clamped to the
-                // work area so it can never end up larger than the screen.
+                // work area so it can never end up larger than the screen. It
+                // deliberately ignores gaps, matching Rectangle.
                 let w = current.width.min(a.width);
                 let h = current.height.min(a.height);
                 return Some(
@@ -96,10 +104,31 @@ impl WindowAction {
             WindowAction::Restore => return None,
         };
 
-        // Maximize intentionally honours the gap too, matching Rectangle's
-        // behaviour where a non-zero gap insets every action uniformly.
-        Some(rect.inset(gap).rounded())
+        Some(rect.rounded())
     }
+}
+
+/// Builds a grid cell spanning the given column and row fractions of
+/// `work_area`, applying the gap model. An edge whose fraction is exactly 0 or
+/// 1 lies against the screen and receives a screen-edge gap; any other edge is
+/// shared with a neighbour and receives half the window gap, so two adjacent
+/// cells are separated by exactly one window gap.
+fn grid(area: Rect, gaps: &Gaps, main_screen: bool, cols: (f64, f64), rows: (f64, f64)) -> Rect {
+    let (c0, c1) = cols;
+    let (r0, r1) = rows;
+    let raw = Rect::new(
+        area.x + area.width * c0,
+        area.y + area.height * r0,
+        area.width * (c1 - c0),
+        area.height * (r1 - r0),
+    );
+    let shared = SharedEdges {
+        left: c0 != 0.0,
+        right: c1 != 1.0,
+        top: r0 != 0.0,
+        bottom: r1 != 1.0,
+    };
+    gaps.apply(raw, shared, main_screen)
 }
 
 impl fmt::Display for WindowAction {
@@ -131,15 +160,24 @@ mod tests {
 
     const AREA: Rect = Rect::new(0.0, 0.0, 1920.0, 1040.0);
     const CURRENT: Rect = Rect::new(300.0, 300.0, 800.0, 600.0);
+    const NO_GAPS: Gaps = Gaps {
+        window: 0.0,
+        edge_top: 0.0,
+        edge_bottom: 0.0,
+        edge_left: 0.0,
+        edge_right: 0.0,
+        skip_top_edge: false,
+        main_screen_only: false,
+    };
+
+    fn rect(action: WindowAction, area: Rect, gaps: &Gaps) -> Rect {
+        action.target_rect(area, gaps, CURRENT, true).unwrap()
+    }
 
     #[test]
     fn halves_tile_the_work_area_exactly() {
-        let l = WindowAction::LeftHalf
-            .target_rect(AREA, 0.0, CURRENT)
-            .unwrap();
-        let r = WindowAction::RightHalf
-            .target_rect(AREA, 0.0, CURRENT)
-            .unwrap();
+        let l = rect(WindowAction::LeftHalf, AREA, &NO_GAPS);
+        let r = rect(WindowAction::RightHalf, AREA, &NO_GAPS);
         assert_eq!(l, Rect::new(0.0, 0.0, 960.0, 1040.0));
         assert_eq!(r, Rect::new(960.0, 0.0, 960.0, 1040.0));
         assert_eq!(l.max_x(), r.x);
@@ -149,12 +187,8 @@ mod tests {
     #[test]
     fn odd_width_halves_leave_no_seam_and_no_overflow() {
         let area = Rect::new(0.0, 0.0, 1367.0, 768.0);
-        let l = WindowAction::LeftHalf
-            .target_rect(area, 0.0, CURRENT)
-            .unwrap();
-        let r = WindowAction::RightHalf
-            .target_rect(area, 0.0, CURRENT)
-            .unwrap();
+        let l = rect(WindowAction::LeftHalf, area, &NO_GAPS);
+        let r = rect(WindowAction::RightHalf, area, &NO_GAPS);
         assert_eq!(l.max_x(), r.x);
         assert_eq!(r.max_x(), area.max_x());
     }
@@ -163,9 +197,7 @@ mod tests {
     fn work_area_offset_is_respected() {
         // Simulates a taskbar on the left and a second monitor origin.
         let area = Rect::new(1920.0 + 60.0, 30.0, 1860.0, 1010.0);
-        let l = WindowAction::LeftHalf
-            .target_rect(area, 0.0, CURRENT)
-            .unwrap();
+        let l = rect(WindowAction::LeftHalf, area, &NO_GAPS);
         assert_eq!(l.x, 1980.0);
         assert_eq!(l.y, 30.0);
         assert_eq!(l.width, 930.0);
@@ -173,25 +205,95 @@ mod tests {
 
     #[test]
     fn maximize_fills_work_area() {
-        let m = WindowAction::Maximize
-            .target_rect(AREA, 0.0, CURRENT)
-            .unwrap();
+        let m = rect(WindowAction::Maximize, AREA, &NO_GAPS);
         assert_eq!(m, AREA);
     }
 
     #[test]
-    fn gap_insets_every_edge() {
-        let m = WindowAction::Maximize
-            .target_rect(AREA, 10.0, CURRENT)
-            .unwrap();
+    fn uniform_gap_insets_every_screen_edge() {
+        // A uniform gap (window == edges) behaves like the old scalar for
+        // Maximize: every screen edge is inset by the same amount.
+        let m = rect(WindowAction::Maximize, AREA, &Gaps::uniform(10.0));
         assert_eq!(m, Rect::new(10.0, 10.0, 1900.0, 1020.0));
     }
 
     #[test]
-    fn center_preserves_size_and_centers() {
-        let c = WindowAction::Center
-            .target_rect(AREA, 0.0, CURRENT)
+    fn adjacent_halves_are_separated_by_exactly_one_window_gap() {
+        // Window gap 10, screen-edge gaps 20 on every side.
+        let gaps = Gaps {
+            window: 10.0,
+            edge_top: 20.0,
+            edge_bottom: 20.0,
+            edge_left: 20.0,
+            edge_right: 20.0,
+            ..NO_GAPS
+        };
+        let l = rect(WindowAction::LeftHalf, AREA, &gaps);
+        let r = rect(WindowAction::RightHalf, AREA, &gaps);
+
+        // Full edge gap on the outer edges.
+        assert_eq!(l.x, 20.0);
+        assert_eq!(l.y, 20.0);
+        assert_eq!(r.max_x(), AREA.width - 20.0);
+        // Exactly one window gap between the two halves, not two.
+        assert_eq!(r.x - l.max_x(), gaps.window);
+    }
+
+    #[test]
+    fn skip_top_edge_drops_only_the_top_screen_gap() {
+        let gaps = Gaps {
+            window: 0.0,
+            edge_top: 20.0,
+            edge_bottom: 20.0,
+            edge_left: 20.0,
+            edge_right: 20.0,
+            skip_top_edge: true,
+            main_screen_only: false,
+        };
+        let m = rect(WindowAction::Maximize, AREA, &gaps);
+        assert_eq!(m.y, 0.0, "top gap is skipped");
+        assert_eq!(m.max_y(), AREA.height - 20.0, "bottom gap still applies");
+        assert_eq!(m.x, 20.0);
+    }
+
+    #[test]
+    fn main_screen_only_suppresses_edge_gaps_off_primary() {
+        let gaps = Gaps {
+            window: 10.0,
+            edge_top: 20.0,
+            edge_bottom: 20.0,
+            edge_left: 20.0,
+            edge_right: 20.0,
+            skip_top_edge: false,
+            main_screen_only: true,
+        };
+        // On a secondary display, screen-edge gaps vanish but the window gap
+        // between two halves is preserved.
+        let l = WindowAction::LeftHalf
+            .target_rect(AREA, &gaps, CURRENT, false)
             .unwrap();
+        let r = WindowAction::RightHalf
+            .target_rect(AREA, &gaps, CURRENT, false)
+            .unwrap();
+        assert_eq!(l.x, 0.0);
+        assert_eq!(l.y, 0.0);
+        assert_eq!(r.max_x(), AREA.width);
+        assert_eq!(r.x - l.max_x(), gaps.window);
+    }
+
+    #[test]
+    fn gaps_never_shrink_a_window_below_zero() {
+        let tiny = Rect::new(0.0, 0.0, 10.0, 10.0);
+        let m = WindowAction::Maximize
+            .target_rect(tiny, &Gaps::uniform(50.0), CURRENT, true)
+            .unwrap();
+        assert!(m.width >= 0.0);
+        assert!(m.height >= 0.0);
+    }
+
+    #[test]
+    fn center_preserves_size_and_centers() {
+        let c = rect(WindowAction::Center, AREA, &NO_GAPS);
         assert_eq!(c.width, 800.0);
         assert_eq!(c.height, 600.0);
         assert_eq!(c.center(), AREA.center());
@@ -200,14 +302,16 @@ mod tests {
     #[test]
     fn center_clamps_oversized_windows() {
         let huge = Rect::new(0.0, 0.0, 5000.0, 5000.0);
-        let c = WindowAction::Center.target_rect(AREA, 0.0, huge).unwrap();
+        let c = WindowAction::Center
+            .target_rect(AREA, &NO_GAPS, huge, true)
+            .unwrap();
         assert_eq!(c, AREA);
     }
 
     #[test]
     fn restore_has_no_geometry() {
         assert!(WindowAction::Restore
-            .target_rect(AREA, 0.0, CURRENT)
+            .target_rect(AREA, &NO_GAPS, CURRENT, true)
             .is_none());
         assert!(WindowAction::Restore.uses_history());
     }
@@ -224,5 +328,15 @@ mod tests {
             assert_eq!(a.id().parse::<WindowAction>().unwrap(), a);
         }
         assert!("nope".parse::<WindowAction>().is_err());
+    }
+
+    #[test]
+    fn serde_repr_matches_id() {
+        // The config format keys and the TS mirror rely on serde's kebab-case
+        // matching id() exactly.
+        for a in WindowAction::ALL {
+            let json = serde_json::to_string(&a).unwrap();
+            assert_eq!(json, format!("\"{}\"", a.id()));
+        }
     }
 }

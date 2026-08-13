@@ -207,6 +207,40 @@ body {
   color: var(--text-dim);
 }
 
+.field--group {
+  display: block;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  margin: 6px 0;
+}
+
+.field--group .field__label {
+  padding: 0 4px;
+}
+
+.field__grid {
+  display: grid;
+  grid-template-columns: auto 64px auto 64px;
+  align-items: center;
+  gap: 8px 10px;
+  margin-top: 8px;
+}
+
+.field__sub {
+  color: var(--text-dim);
+}
+
+.field__num {
+  width: 64px;
+  padding: 5px 8px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
 .panel {
   padding: 14px 16px;
   border-radius: var(--radius);

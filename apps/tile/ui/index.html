@@ -46,27 +46,79 @@
         <h2 id="behaviour-heading">Behaviour</h2>
 
         <div class="field">
-          <label class="field__label" for="gap">Screen-edge gap</label>
+          <label class="field__label" for="gap-window">Gap between windows</label>
           <div class="field__control">
-            <input
-              type="range"
-              id="gap"
-              name="gap"
-              min="0"
-              max="200"
-              step="1"
-            />
+            <input type="range" id="gap-window" min="0" max="200" step="1" />
             <input
               type="number"
-              id="gap-number"
-              name="gap-number"
+              id="gap-window-number"
               min="0"
               max="200"
               step="1"
-              aria-label="Screen-edge gap in pixels"
+              aria-label="Gap between windows in pixels"
             />
             <span class="field__unit">px</span>
           </div>
+        </div>
+
+        <fieldset class="field field--group">
+          <legend class="field__label">Screen-edge gaps</legend>
+          <div class="field__grid">
+            <label class="field__sub" for="gap-edge-top">Top</label>
+            <input
+              type="number"
+              id="gap-edge-top"
+              class="field__num"
+              min="0"
+              max="200"
+              step="1"
+              aria-label="Top screen-edge gap in pixels"
+            />
+            <label class="field__sub" for="gap-edge-bottom">Bottom</label>
+            <input
+              type="number"
+              id="gap-edge-bottom"
+              class="field__num"
+              min="0"
+              max="200"
+              step="1"
+              aria-label="Bottom screen-edge gap in pixels"
+            />
+            <label class="field__sub" for="gap-edge-left">Left</label>
+            <input
+              type="number"
+              id="gap-edge-left"
+              class="field__num"
+              min="0"
+              max="200"
+              step="1"
+              aria-label="Left screen-edge gap in pixels"
+            />
+            <label class="field__sub" for="gap-edge-right">Right</label>
+            <input
+              type="number"
+              id="gap-edge-right"
+              class="field__num"
+              min="0"
+              max="200"
+              step="1"
+              aria-label="Right screen-edge gap in pixels"
+            />
+          </div>
+        </fieldset>
+
+        <div class="field field--inline">
+          <input type="checkbox" id="gap-skip-top" name="gap-skip-top" />
+          <label class="field__label" for="gap-skip-top">
+            Remove gap on the top screen edge
+          </label>
+        </div>
+
+        <div class="field field--inline">
+          <input type="checkbox" id="gap-main-only" name="gap-main-only" />
+          <label class="field__label" for="gap-main-only">
+            Apply screen-edge gaps on the main display only
+          </label>
         </div>
 
         <div class="field field--inline">

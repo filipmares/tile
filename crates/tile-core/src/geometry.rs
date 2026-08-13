@@ -76,6 +76,25 @@ impl Rect {
         }
     }
 
+    /// Shrinks each edge independently by the given amount, never below zero
+    /// size. Negative insets are treated as zero so a gap can only ever shrink
+    /// a window, never grow it past its allotted cell.
+    ///
+    /// This is the primitive behind the [`crate::config::Gaps`] model, where a
+    /// screen-edge inset and a (halved) window-gap inset differ per edge.
+    pub fn inset_edges(&self, left: f64, top: f64, right: f64, bottom: f64) -> Rect {
+        let left = left.max(0.0);
+        let top = top.max(0.0);
+        let right = right.max(0.0);
+        let bottom = bottom.max(0.0);
+        Rect {
+            x: self.x + left,
+            y: self.y + top,
+            width: (self.width - left - right).max(0.0),
+            height: (self.height - top - bottom).max(0.0),
+        }
+    }
+
     /// Area of intersection with `other`. Used to pick the screen a window
     /// belongs to.
     pub fn intersection_area(&self, other: &Rect) -> f64 {
@@ -133,6 +152,22 @@ mod tests {
         let r = Rect::new(0.0, 0.0, 10.0, 10.0).inset(50.0);
         assert_eq!(r.width, 0.0);
         assert_eq!(r.height, 0.0);
+    }
+
+    #[test]
+    fn inset_edges_shrinks_each_side_independently() {
+        let r = Rect::new(0.0, 0.0, 100.0, 100.0).inset_edges(10.0, 20.0, 5.0, 15.0);
+        assert_eq!(r, Rect::new(10.0, 20.0, 85.0, 65.0));
+    }
+
+    #[test]
+    fn inset_edges_never_goes_negative() {
+        let r = Rect::new(0.0, 0.0, 10.0, 10.0).inset_edges(30.0, 30.0, 30.0, 30.0);
+        assert_eq!(r.width, 0.0);
+        assert_eq!(r.height, 0.0);
+        // Negative insets are clamped to zero rather than growing the window.
+        let r = Rect::new(0.0, 0.0, 10.0, 10.0).inset_edges(-5.0, -5.0, 0.0, 0.0);
+        assert_eq!(r, Rect::new(0.0, 0.0, 10.0, 10.0));
     }
 
     #[test]
