@@ -60,19 +60,30 @@ pub(crate) fn flip_rect(
 
 /// Maps a [`tile_core::KeyCode`] to its Carbon virtual key code (`kVK_*`).
 ///
+/// Returns `None` for the handful of keys macOS has no virtual key code for
+/// (`F21`–`F24`: Carbon's table stops at `kVK_F20`). The caller reports those
+/// as a per-binding failure rather than registering a wrong physical key.
+///
 /// The match is exhaustive with no wildcard arm on purpose: adding a `KeyCode`
 /// to `tile-core` must fail to compile here until it is mapped, rather than
 /// silently registering the wrong physical key.
 ///
 /// Values are the classic Carbon `kVK_*` constants from
-/// `HIToolbox/Events.h`. Note two easy-to-get-wrong cases:
+/// `HIToolbox/Events.h`. Several are easy to get wrong:
 ///   * [`KeyCode::Backspace`](tile_core::KeyCode::Backspace) is `kVK_Delete`
 ///     (`0x33`) — the key labelled "delete" on a Mac keyboard.
 ///   * [`KeyCode::Delete`](tile_core::KeyCode::Delete) is `kVK_ForwardDelete`
 ///     (`0x75`) — forward delete.
-pub(crate) fn carbon_key_code(key: tile_core::KeyCode) -> u32 {
+///   * [`KeyCode::Insert`](tile_core::KeyCode::Insert) is `kVK_Help` (`0x72`):
+///     Apple keyboards put Help where PC keyboards put Insert, and a USB PC
+///     keyboard's Insert reports that code.
+///   * The letter and function-key blocks are **not** in alphabetical or
+///     numerical order — they follow the original Apple Extended Keyboard
+///     wiring (`A` is `0x00`, `S` is `0x01`, `F5` is `0x60`, `F1` is `0x7A`).
+pub(crate) fn carbon_key_code(key: tile_core::KeyCode) -> Option<u32> {
     use tile_core::KeyCode;
-    match key {
+    let code = match key {
+        // --- navigation and editing ---
         KeyCode::Left => 0x7B,      // kVK_LeftArrow
         KeyCode::Right => 0x7C,     // kVK_RightArrow
         KeyCode::Down => 0x7D,      // kVK_DownArrow
@@ -82,20 +93,109 @@ pub(crate) fn carbon_key_code(key: tile_core::KeyCode) -> u32 {
         KeyCode::Backspace => 0x33, // kVK_Delete (Backspace)
         KeyCode::Delete => 0x75,    // kVK_ForwardDelete
         KeyCode::Escape => 0x35,    // kVK_Escape
-        KeyCode::Numpad0 => 0x52,   // kVK_ANSI_Keypad0
-        KeyCode::Numpad1 => 0x53,   // kVK_ANSI_Keypad1
-        KeyCode::Numpad2 => 0x54,   // kVK_ANSI_Keypad2
-        KeyCode::Numpad3 => 0x55,   // kVK_ANSI_Keypad3
-        KeyCode::Numpad4 => 0x56,   // kVK_ANSI_Keypad4
-        KeyCode::Numpad5 => 0x57,   // kVK_ANSI_Keypad5
-        KeyCode::Numpad6 => 0x58,   // kVK_ANSI_Keypad6
-        KeyCode::Numpad7 => 0x59,   // kVK_ANSI_Keypad7
-        KeyCode::Numpad8 => 0x5B,   // kVK_ANSI_Keypad8
-        KeyCode::Numpad9 => 0x5C,   // kVK_ANSI_Keypad9
-        KeyCode::C => 0x08,         // kVK_ANSI_C
-        KeyCode::F => 0x03,         // kVK_ANSI_F
-        KeyCode::M => 0x2E,         // kVK_ANSI_M
-    }
+        KeyCode::Tab => 0x30,       // kVK_Tab
+        KeyCode::Insert => 0x72,    // kVK_Help (Insert on a PC keyboard)
+        KeyCode::Home => 0x73,      // kVK_Home
+        KeyCode::End => 0x77,       // kVK_End
+        KeyCode::PageUp => 0x74,    // kVK_PageUp
+        KeyCode::PageDown => 0x79,  // kVK_PageDown
+
+        // --- letters (Apple Extended Keyboard order, not alphabetical) ---
+        KeyCode::A => 0x00, // kVK_ANSI_A
+        KeyCode::B => 0x0B, // kVK_ANSI_B
+        KeyCode::C => 0x08, // kVK_ANSI_C
+        KeyCode::D => 0x02, // kVK_ANSI_D
+        KeyCode::E => 0x0E, // kVK_ANSI_E
+        KeyCode::F => 0x03, // kVK_ANSI_F
+        KeyCode::G => 0x05, // kVK_ANSI_G
+        KeyCode::H => 0x04, // kVK_ANSI_H
+        KeyCode::I => 0x22, // kVK_ANSI_I
+        KeyCode::J => 0x26, // kVK_ANSI_J
+        KeyCode::K => 0x28, // kVK_ANSI_K
+        KeyCode::L => 0x25, // kVK_ANSI_L
+        KeyCode::M => 0x2E, // kVK_ANSI_M
+        KeyCode::N => 0x2D, // kVK_ANSI_N
+        KeyCode::O => 0x1F, // kVK_ANSI_O
+        KeyCode::P => 0x23, // kVK_ANSI_P
+        KeyCode::Q => 0x0C, // kVK_ANSI_Q
+        KeyCode::R => 0x0F, // kVK_ANSI_R
+        KeyCode::S => 0x01, // kVK_ANSI_S
+        KeyCode::T => 0x11, // kVK_ANSI_T
+        KeyCode::U => 0x20, // kVK_ANSI_U
+        KeyCode::V => 0x09, // kVK_ANSI_V
+        KeyCode::W => 0x0D, // kVK_ANSI_W
+        KeyCode::X => 0x07, // kVK_ANSI_X
+        KeyCode::Y => 0x10, // kVK_ANSI_Y
+        KeyCode::Z => 0x06, // kVK_ANSI_Z
+
+        // --- top-row digits (5/6 and 7/8/9 are famously out of order) ---
+        KeyCode::Digit0 => 0x1D, // kVK_ANSI_0
+        KeyCode::Digit1 => 0x12, // kVK_ANSI_1
+        KeyCode::Digit2 => 0x13, // kVK_ANSI_2
+        KeyCode::Digit3 => 0x14, // kVK_ANSI_3
+        KeyCode::Digit4 => 0x15, // kVK_ANSI_4
+        KeyCode::Digit5 => 0x17, // kVK_ANSI_5
+        KeyCode::Digit6 => 0x16, // kVK_ANSI_6
+        KeyCode::Digit7 => 0x1A, // kVK_ANSI_7
+        KeyCode::Digit8 => 0x1C, // kVK_ANSI_8
+        KeyCode::Digit9 => 0x19, // kVK_ANSI_9
+
+        // --- punctuation ---
+        KeyCode::Backtick => 0x32,     // kVK_ANSI_Grave
+        KeyCode::Minus => 0x1B,        // kVK_ANSI_Minus
+        KeyCode::Equals => 0x18,       // kVK_ANSI_Equal
+        KeyCode::LeftBracket => 0x21,  // kVK_ANSI_LeftBracket
+        KeyCode::RightBracket => 0x1E, // kVK_ANSI_RightBracket
+        KeyCode::Backslash => 0x2A,    // kVK_ANSI_Backslash
+        KeyCode::Semicolon => 0x29,    // kVK_ANSI_Semicolon
+        KeyCode::Quote => 0x27,        // kVK_ANSI_Quote
+        KeyCode::Comma => 0x2B,        // kVK_ANSI_Comma
+        KeyCode::Period => 0x2F,       // kVK_ANSI_Period
+        KeyCode::Slash => 0x2C,        // kVK_ANSI_Slash
+
+        // --- function keys (scattered; F1 is 0x7A, F5 is 0x60) ---
+        KeyCode::F1 => 0x7A,  // kVK_F1
+        KeyCode::F2 => 0x78,  // kVK_F2
+        KeyCode::F3 => 0x63,  // kVK_F3
+        KeyCode::F4 => 0x76,  // kVK_F4
+        KeyCode::F5 => 0x60,  // kVK_F5
+        KeyCode::F6 => 0x61,  // kVK_F6
+        KeyCode::F7 => 0x62,  // kVK_F7
+        KeyCode::F8 => 0x64,  // kVK_F8
+        KeyCode::F9 => 0x65,  // kVK_F9
+        KeyCode::F10 => 0x6D, // kVK_F10
+        KeyCode::F11 => 0x67, // kVK_F11
+        KeyCode::F12 => 0x6F, // kVK_F12
+        KeyCode::F13 => 0x69, // kVK_F13
+        KeyCode::F14 => 0x6B, // kVK_F14
+        KeyCode::F15 => 0x71, // kVK_F15
+        KeyCode::F16 => 0x6A, // kVK_F16
+        KeyCode::F17 => 0x40, // kVK_F17
+        KeyCode::F18 => 0x4F, // kVK_F18
+        KeyCode::F19 => 0x50, // kVK_F19
+        KeyCode::F20 => 0x5A, // kVK_F20
+        // Carbon has no constants beyond kVK_F20.
+        KeyCode::F21 | KeyCode::F22 | KeyCode::F23 | KeyCode::F24 => return None,
+
+        // --- numeric keypad ---
+        KeyCode::Numpad0 => 0x52,        // kVK_ANSI_Keypad0
+        KeyCode::Numpad1 => 0x53,        // kVK_ANSI_Keypad1
+        KeyCode::Numpad2 => 0x54,        // kVK_ANSI_Keypad2
+        KeyCode::Numpad3 => 0x55,        // kVK_ANSI_Keypad3
+        KeyCode::Numpad4 => 0x56,        // kVK_ANSI_Keypad4
+        KeyCode::Numpad5 => 0x57,        // kVK_ANSI_Keypad5
+        KeyCode::Numpad6 => 0x58,        // kVK_ANSI_Keypad6
+        KeyCode::Numpad7 => 0x59,        // kVK_ANSI_Keypad7
+        KeyCode::Numpad8 => 0x5B,        // kVK_ANSI_Keypad8
+        KeyCode::Numpad9 => 0x5C,        // kVK_ANSI_Keypad9
+        KeyCode::NumpadAdd => 0x45,      // kVK_ANSI_KeypadPlus
+        KeyCode::NumpadSubtract => 0x4E, // kVK_ANSI_KeypadMinus
+        KeyCode::NumpadMultiply => 0x43, // kVK_ANSI_KeypadMultiply
+        KeyCode::NumpadDivide => 0x4B,   // kVK_ANSI_KeypadDivide
+        KeyCode::NumpadDecimal => 0x41,  // kVK_ANSI_KeypadDecimal
+        KeyCode::NumpadEnter => 0x4C,    // kVK_ANSI_KeypadEnter
+    };
+    Some(code)
 }
 
 /// Carbon "hot key" modifier mask bits, from `HIToolbox/Events.h`.
@@ -264,30 +364,99 @@ mod pure_tests {
 
     #[test]
     fn key_codes_have_the_expected_carbon_values() {
-        assert_eq!(carbon_key_code(KeyCode::Left), 0x7B);
-        assert_eq!(carbon_key_code(KeyCode::Right), 0x7C);
-        assert_eq!(carbon_key_code(KeyCode::Down), 0x7D);
-        assert_eq!(carbon_key_code(KeyCode::Up), 0x7E);
-        assert_eq!(carbon_key_code(KeyCode::Enter), 0x24);
-        assert_eq!(carbon_key_code(KeyCode::Space), 0x31);
+        assert_eq!(carbon_key_code(KeyCode::Left), Some(0x7B));
+        assert_eq!(carbon_key_code(KeyCode::Right), Some(0x7C));
+        assert_eq!(carbon_key_code(KeyCode::Down), Some(0x7D));
+        assert_eq!(carbon_key_code(KeyCode::Up), Some(0x7E));
+        assert_eq!(carbon_key_code(KeyCode::Enter), Some(0x24));
+        assert_eq!(carbon_key_code(KeyCode::Space), Some(0x31));
         // Backspace is kVK_Delete; Delete is kVK_ForwardDelete. Do not swap.
-        assert_eq!(carbon_key_code(KeyCode::Backspace), 0x33);
-        assert_eq!(carbon_key_code(KeyCode::Delete), 0x75);
-        assert_eq!(carbon_key_code(KeyCode::Escape), 0x35);
-        assert_eq!(carbon_key_code(KeyCode::C), 0x08);
-        assert_eq!(carbon_key_code(KeyCode::F), 0x03);
-        assert_eq!(carbon_key_code(KeyCode::M), 0x2E);
+        assert_eq!(carbon_key_code(KeyCode::Backspace), Some(0x33));
+        assert_eq!(carbon_key_code(KeyCode::Delete), Some(0x75));
+        assert_eq!(carbon_key_code(KeyCode::Escape), Some(0x35));
+        assert_eq!(carbon_key_code(KeyCode::C), Some(0x08));
+        assert_eq!(carbon_key_code(KeyCode::F), Some(0x03));
+        assert_eq!(carbon_key_code(KeyCode::M), Some(0x2E));
+    }
+
+    #[test]
+    fn letter_codes_follow_the_apple_extended_keyboard_layout() {
+        // The letter block is wired in physical order, so it is *not*
+        // alphabetical. These are the values that catch a lazy `0x00 + index`.
+        assert_eq!(carbon_key_code(KeyCode::A), Some(0x00));
+        assert_eq!(carbon_key_code(KeyCode::S), Some(0x01));
+        assert_eq!(carbon_key_code(KeyCode::D), Some(0x02));
+        assert_eq!(carbon_key_code(KeyCode::H), Some(0x04));
+        assert_eq!(carbon_key_code(KeyCode::G), Some(0x05));
+        assert_eq!(carbon_key_code(KeyCode::Z), Some(0x06));
+        assert_eq!(carbon_key_code(KeyCode::Q), Some(0x0C));
+        assert_eq!(carbon_key_code(KeyCode::Y), Some(0x10));
+        assert_eq!(carbon_key_code(KeyCode::T), Some(0x11));
+    }
+
+    #[test]
+    fn digit_codes_include_the_transposed_pairs() {
+        // 5 and 6 are swapped relative to intuition, as are 7/8/9.
+        assert_eq!(carbon_key_code(KeyCode::Digit1), Some(0x12));
+        assert_eq!(carbon_key_code(KeyCode::Digit5), Some(0x17));
+        assert_eq!(carbon_key_code(KeyCode::Digit6), Some(0x16));
+        assert_eq!(carbon_key_code(KeyCode::Digit7), Some(0x1A));
+        assert_eq!(carbon_key_code(KeyCode::Digit8), Some(0x1C));
+        assert_eq!(carbon_key_code(KeyCode::Digit9), Some(0x19));
+        assert_eq!(carbon_key_code(KeyCode::Digit0), Some(0x1D));
+    }
+
+    #[test]
+    fn function_key_codes_are_scattered_and_stop_at_f20() {
+        assert_eq!(carbon_key_code(KeyCode::F1), Some(0x7A));
+        assert_eq!(carbon_key_code(KeyCode::F5), Some(0x60));
+        assert_eq!(carbon_key_code(KeyCode::F10), Some(0x6D));
+        assert_eq!(carbon_key_code(KeyCode::F12), Some(0x6F));
+        assert_eq!(carbon_key_code(KeyCode::F17), Some(0x40));
+        assert_eq!(carbon_key_code(KeyCode::F20), Some(0x5A));
+        // Carbon has no kVK_F21..kVK_F24, so these are honestly unmappable.
+        for key in [KeyCode::F21, KeyCode::F22, KeyCode::F23, KeyCode::F24] {
+            assert_eq!(carbon_key_code(key), None, "{key:?} must be unmappable");
+        }
+    }
+
+    #[test]
+    fn punctuation_and_extra_navigation_codes_are_correct() {
+        assert_eq!(carbon_key_code(KeyCode::Backtick), Some(0x32));
+        assert_eq!(carbon_key_code(KeyCode::Minus), Some(0x1B));
+        assert_eq!(carbon_key_code(KeyCode::Equals), Some(0x18));
+        assert_eq!(carbon_key_code(KeyCode::LeftBracket), Some(0x21));
+        assert_eq!(carbon_key_code(KeyCode::RightBracket), Some(0x1E));
+        assert_eq!(carbon_key_code(KeyCode::Backslash), Some(0x2A));
+        assert_eq!(carbon_key_code(KeyCode::Semicolon), Some(0x29));
+        assert_eq!(carbon_key_code(KeyCode::Quote), Some(0x27));
+        assert_eq!(carbon_key_code(KeyCode::Comma), Some(0x2B));
+        assert_eq!(carbon_key_code(KeyCode::Period), Some(0x2F));
+        assert_eq!(carbon_key_code(KeyCode::Slash), Some(0x2C));
+        assert_eq!(carbon_key_code(KeyCode::Tab), Some(0x30));
+        assert_eq!(carbon_key_code(KeyCode::Home), Some(0x73));
+        assert_eq!(carbon_key_code(KeyCode::End), Some(0x77));
+        assert_eq!(carbon_key_code(KeyCode::PageUp), Some(0x74));
+        assert_eq!(carbon_key_code(KeyCode::PageDown), Some(0x79));
+        // Insert is kVK_Help on Apple hardware.
+        assert_eq!(carbon_key_code(KeyCode::Insert), Some(0x72));
     }
 
     #[test]
     fn keypad_codes_are_contiguous_except_for_the_documented_gap() {
         // kVK_ANSI_Keypad0..7 are 0x52..0x59, then 8 and 9 jump to 0x5B, 0x5C
-        // (0x5A is unused). This is a genuine quirk of the Carbon table.
-        assert_eq!(carbon_key_code(KeyCode::Numpad0), 0x52);
-        assert_eq!(carbon_key_code(KeyCode::Numpad1), 0x53);
-        assert_eq!(carbon_key_code(KeyCode::Numpad7), 0x59);
-        assert_eq!(carbon_key_code(KeyCode::Numpad8), 0x5B);
-        assert_eq!(carbon_key_code(KeyCode::Numpad9), 0x5C);
+        // (0x5A is kVK_F20). This is a genuine quirk of the Carbon table.
+        assert_eq!(carbon_key_code(KeyCode::Numpad0), Some(0x52));
+        assert_eq!(carbon_key_code(KeyCode::Numpad1), Some(0x53));
+        assert_eq!(carbon_key_code(KeyCode::Numpad7), Some(0x59));
+        assert_eq!(carbon_key_code(KeyCode::Numpad8), Some(0x5B));
+        assert_eq!(carbon_key_code(KeyCode::Numpad9), Some(0x5C));
+        assert_eq!(carbon_key_code(KeyCode::NumpadDecimal), Some(0x41));
+        assert_eq!(carbon_key_code(KeyCode::NumpadMultiply), Some(0x43));
+        assert_eq!(carbon_key_code(KeyCode::NumpadAdd), Some(0x45));
+        assert_eq!(carbon_key_code(KeyCode::NumpadDivide), Some(0x4B));
+        assert_eq!(carbon_key_code(KeyCode::NumpadEnter), Some(0x4C));
+        assert_eq!(carbon_key_code(KeyCode::NumpadSubtract), Some(0x4E));
     }
 
     #[test]
@@ -295,14 +464,33 @@ mod pure_tests {
         // A duplicated virtual key code is a silent, nasty bug: two different
         // Tile keys would fire the same physical shortcut.
         let mut seen = std::collections::HashSet::new();
+        let mut mapped = 0usize;
         for key in KeyCode::ALL {
-            let code = carbon_key_code(key);
+            let Some(code) = carbon_key_code(key) else {
+                continue;
+            };
+            mapped += 1;
             assert!(
                 seen.insert(code),
                 "duplicate virtual key code {code:#x} for {key:?}"
             );
         }
-        assert_eq!(seen.len(), KeyCode::ALL.len());
+        assert_eq!(seen.len(), mapped);
+        // Only F21..F24 are allowed to be unmapped.
+        assert_eq!(mapped, KeyCode::COUNT - 4);
+    }
+
+    #[test]
+    fn unmapped_keys_are_the_only_ones_without_a_code() {
+        let unmapped: Vec<KeyCode> = KeyCode::ALL
+            .iter()
+            .copied()
+            .filter(|&k| carbon_key_code(k).is_none())
+            .collect();
+        assert_eq!(
+            unmapped,
+            vec![KeyCode::F21, KeyCode::F22, KeyCode::F23, KeyCode::F24]
+        );
     }
 
     // ----- Carbon modifiers ------------------------------------------------

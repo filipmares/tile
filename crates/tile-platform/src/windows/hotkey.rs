@@ -29,15 +29,19 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
-    KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN, VK_ESCAPE, VK_LEFT,
-    VK_LWIN, VK_MENU, VK_NONAME, VK_NUMPAD0, VK_NUMPAD1, VK_NUMPAD2, VK_NUMPAD3, VK_NUMPAD4,
-    VK_NUMPAD5, VK_NUMPAD6, VK_NUMPAD7, VK_NUMPAD8, VK_NUMPAD9, VK_RETURN, VK_RIGHT, VK_RWIN,
-    VK_SHIFT, VK_SPACE, VK_UP,
+    KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_ADD, VK_BACK, VK_CONTROL, VK_DECIMAL, VK_DELETE, VK_DIVIDE,
+    VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_F10, VK_F11, VK_F12, VK_F13, VK_F14, VK_F15, VK_F16,
+    VK_F17, VK_F18, VK_F19, VK_F2, VK_F20, VK_F21, VK_F22, VK_F23, VK_F24, VK_F3, VK_F4, VK_F5,
+    VK_F6, VK_F7, VK_F8, VK_F9, VK_HOME, VK_INSERT, VK_LEFT, VK_LWIN, VK_MENU, VK_MULTIPLY,
+    VK_NEXT, VK_NONAME, VK_NUMPAD0, VK_NUMPAD1, VK_NUMPAD2, VK_NUMPAD3, VK_NUMPAD4, VK_NUMPAD5,
+    VK_NUMPAD6, VK_NUMPAD7, VK_NUMPAD8, VK_NUMPAD9, VK_OEM_1, VK_OEM_2, VK_OEM_3, VK_OEM_4,
+    VK_OEM_5, VK_OEM_6, VK_OEM_7, VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_PRIOR,
+    VK_RETURN, VK_RIGHT, VK_RWIN, VK_SHIFT, VK_SPACE, VK_SUBTRACT, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, PostThreadMessageW, SetWindowsHookExW,
-    TranslateMessage, UnhookWindowsHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL,
-    WM_KEYDOWN, WM_QUIT, WM_SYSKEYDOWN,
+    TranslateMessage, UnhookWindowsHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, MSG,
+    WH_KEYBOARD_LL, WM_KEYDOWN, WM_QUIT, WM_SYSKEYDOWN,
 };
 
 use crate::{HotkeyBackend, HotkeyFailure, PlatformError, Result};
@@ -46,6 +50,14 @@ use crate::{HotkeyBackend, HotkeyFailure, PlatformError, Result};
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Binding {
     vk: u16,
+    /// Required state of the keystroke's *extended* flag, or `None` when the
+    /// flag does not matter.
+    ///
+    /// Windows has no virtual key of its own for the numeric keypad's Enter:
+    /// it reports `VK_RETURN` just like the main Enter, and the only thing
+    /// telling them apart is `LLKHF_EXTENDED`. Without this field the two keys
+    /// would be indistinguishable and one binding would fire for both.
+    extended: Option<bool>,
     mods: Modifiers,
     action: WindowAction,
 }
@@ -124,6 +136,7 @@ impl HotkeyBackend for WindowsHotkeyBackend {
             .iter()
             .map(|(hk, action)| Binding {
                 vk: keycode_to_vk(hk.key).0,
+                extended: keycode_extended(hk.key),
                 mods: hk.modifiers,
                 action: *action,
             })
@@ -257,7 +270,8 @@ unsafe extern "system" fn low_level_keyboard_proc(
                 // cannot cause runaway behaviour and no de-bounce is needed.
                 if !is_modifier_vk(vk) {
                     let mods = current_modifiers();
-                    if dispatch(vk, mods) {
+                    let extended = (kb.flags.0 & LLKHF_EXTENDED.0) != 0;
+                    if dispatch(vk, extended, mods) {
                         // A Win-based combo was consumed. Without this, releasing
                         // the Win key would open the Start menu, because the shell
                         // opens Start on Win-*up* when no other key was seen as
@@ -279,9 +293,10 @@ unsafe extern "system" fn low_level_keyboard_proc(
     CallNextHookEx(Some(HHOOK(std::ptr::null_mut())), code, wparam, lparam)
 }
 
-/// Looks up `(vk, mods)` in the shared table and, on an exact match, sends the
-/// bound action. Returns whether a binding matched (and should be swallowed).
-fn dispatch(vk: u16, mods: Modifiers) -> bool {
+/// Looks up `(vk, extended, mods)` in the shared table and, on an exact match,
+/// sends the bound action. Returns whether a binding matched (and should be
+/// swallowed).
+fn dispatch(vk: u16, extended: bool, mods: Modifiers) -> bool {
     let Some(state) = HOOK_STATE.get() else {
         return false;
     };
@@ -291,7 +306,7 @@ fn dispatch(vk: u16, mods: Modifiers) -> bool {
     let Some(hs) = guard.as_ref() else {
         return false;
     };
-    match match_binding(&hs.bindings, vk, mods) {
+    match match_binding(&hs.bindings, vk, extended, mods) {
         Some(action) => {
             // Unbounded std channel: `send` never blocks, so this is safe inside
             // the hook's tight time budget.
@@ -307,10 +322,15 @@ fn dispatch(vk: u16, mods: Modifiers) -> bool {
 /// Exactness matters: a `Win+Left` binding must NOT fire while `Ctrl+Win+Left`
 /// is held. Using a subset/`contains` check here is a classic bug that makes
 /// unrelated chords steal each other's keys.
-fn match_binding(bindings: &[Binding], vk: u16, mods: Modifiers) -> Option<WindowAction> {
+fn match_binding(
+    bindings: &[Binding],
+    vk: u16,
+    extended: bool,
+    mods: Modifiers,
+) -> Option<WindowAction> {
     bindings
         .iter()
-        .find(|b| b.vk == vk && b.mods == mods)
+        .find(|b| b.vk == vk && b.mods == mods && b.extended.map_or(true, |want| want == extended))
         .map(|b| b.action)
 }
 
@@ -388,17 +408,117 @@ fn make_key_input(vk: VIRTUAL_KEY, key_up: bool) -> INPUT {
 
 /// Exhaustive `KeyCode` -> virtual-key mapping. Deliberately has no wildcard arm
 /// so adding a `KeyCode` is a compile error until it is mapped here.
+///
+/// Virtual keys are **physical**: `VK_C` is the key in the C position on any
+/// keyboard layout, which is what we want — the same reason the recorder reads
+/// `KeyboardEvent.code` rather than `.key`.
+///
+/// Two families are worth calling out:
+///   * Letters and digits have no `VK_*` constants; their virtual-key values
+///     are documented to equal their ASCII uppercase character.
+///   * The `VK_OEM_*` values are named after their US-layout legend but are
+///     positional, so `VK_OEM_1` is the key that carries `;` on a US layout
+///     wherever it sits on the user's.
 fn keycode_to_vk(key: KeyCode) -> VIRTUAL_KEY {
     match key {
+        // --- navigation and editing ---
         KeyCode::Left => VK_LEFT,
         KeyCode::Right => VK_RIGHT,
         KeyCode::Up => VK_UP,
         KeyCode::Down => VK_DOWN,
+        // Numpad Enter shares VK_RETURN; see `keycode_extended`.
         KeyCode::Enter => VK_RETURN,
         KeyCode::Space => VK_SPACE,
         KeyCode::Backspace => VK_BACK,
         KeyCode::Delete => VK_DELETE,
         KeyCode::Escape => VK_ESCAPE,
+        KeyCode::Tab => VK_TAB,
+        KeyCode::Insert => VK_INSERT,
+        KeyCode::Home => VK_HOME,
+        KeyCode::End => VK_END,
+        KeyCode::PageUp => VK_PRIOR,
+        KeyCode::PageDown => VK_NEXT,
+
+        // --- letters: virtual key == ASCII uppercase ---
+        KeyCode::A => VIRTUAL_KEY(b'A' as u16),
+        KeyCode::B => VIRTUAL_KEY(b'B' as u16),
+        KeyCode::C => VIRTUAL_KEY(b'C' as u16),
+        KeyCode::D => VIRTUAL_KEY(b'D' as u16),
+        KeyCode::E => VIRTUAL_KEY(b'E' as u16),
+        KeyCode::F => VIRTUAL_KEY(b'F' as u16),
+        KeyCode::G => VIRTUAL_KEY(b'G' as u16),
+        KeyCode::H => VIRTUAL_KEY(b'H' as u16),
+        KeyCode::I => VIRTUAL_KEY(b'I' as u16),
+        KeyCode::J => VIRTUAL_KEY(b'J' as u16),
+        KeyCode::K => VIRTUAL_KEY(b'K' as u16),
+        KeyCode::L => VIRTUAL_KEY(b'L' as u16),
+        KeyCode::M => VIRTUAL_KEY(b'M' as u16),
+        KeyCode::N => VIRTUAL_KEY(b'N' as u16),
+        KeyCode::O => VIRTUAL_KEY(b'O' as u16),
+        KeyCode::P => VIRTUAL_KEY(b'P' as u16),
+        KeyCode::Q => VIRTUAL_KEY(b'Q' as u16),
+        KeyCode::R => VIRTUAL_KEY(b'R' as u16),
+        KeyCode::S => VIRTUAL_KEY(b'S' as u16),
+        KeyCode::T => VIRTUAL_KEY(b'T' as u16),
+        KeyCode::U => VIRTUAL_KEY(b'U' as u16),
+        KeyCode::V => VIRTUAL_KEY(b'V' as u16),
+        KeyCode::W => VIRTUAL_KEY(b'W' as u16),
+        KeyCode::X => VIRTUAL_KEY(b'X' as u16),
+        KeyCode::Y => VIRTUAL_KEY(b'Y' as u16),
+        KeyCode::Z => VIRTUAL_KEY(b'Z' as u16),
+
+        // --- top-row digits: virtual key == ASCII digit ---
+        KeyCode::Digit0 => VIRTUAL_KEY(b'0' as u16),
+        KeyCode::Digit1 => VIRTUAL_KEY(b'1' as u16),
+        KeyCode::Digit2 => VIRTUAL_KEY(b'2' as u16),
+        KeyCode::Digit3 => VIRTUAL_KEY(b'3' as u16),
+        KeyCode::Digit4 => VIRTUAL_KEY(b'4' as u16),
+        KeyCode::Digit5 => VIRTUAL_KEY(b'5' as u16),
+        KeyCode::Digit6 => VIRTUAL_KEY(b'6' as u16),
+        KeyCode::Digit7 => VIRTUAL_KEY(b'7' as u16),
+        KeyCode::Digit8 => VIRTUAL_KEY(b'8' as u16),
+        KeyCode::Digit9 => VIRTUAL_KEY(b'9' as u16),
+
+        // --- punctuation ---
+        KeyCode::Backtick => VK_OEM_3,     // `~
+        KeyCode::Minus => VK_OEM_MINUS,    // -_
+        KeyCode::Equals => VK_OEM_PLUS,    // =+
+        KeyCode::LeftBracket => VK_OEM_4,  // [{
+        KeyCode::RightBracket => VK_OEM_6, // ]}
+        KeyCode::Backslash => VK_OEM_5,    // \|
+        KeyCode::Semicolon => VK_OEM_1,    // ;:
+        KeyCode::Quote => VK_OEM_7,        // '"
+        KeyCode::Comma => VK_OEM_COMMA,    // ,<
+        KeyCode::Period => VK_OEM_PERIOD,  // .>
+        KeyCode::Slash => VK_OEM_2,        // /?
+
+        // --- function keys ---
+        KeyCode::F1 => VK_F1,
+        KeyCode::F2 => VK_F2,
+        KeyCode::F3 => VK_F3,
+        KeyCode::F4 => VK_F4,
+        KeyCode::F5 => VK_F5,
+        KeyCode::F6 => VK_F6,
+        KeyCode::F7 => VK_F7,
+        KeyCode::F8 => VK_F8,
+        KeyCode::F9 => VK_F9,
+        KeyCode::F10 => VK_F10,
+        KeyCode::F11 => VK_F11,
+        KeyCode::F12 => VK_F12,
+        KeyCode::F13 => VK_F13,
+        KeyCode::F14 => VK_F14,
+        KeyCode::F15 => VK_F15,
+        KeyCode::F16 => VK_F16,
+        KeyCode::F17 => VK_F17,
+        KeyCode::F18 => VK_F18,
+        KeyCode::F19 => VK_F19,
+        KeyCode::F20 => VK_F20,
+        KeyCode::F21 => VK_F21,
+        KeyCode::F22 => VK_F22,
+        KeyCode::F23 => VK_F23,
+        KeyCode::F24 => VK_F24,
+
+        // --- numeric keypad ---
         KeyCode::Numpad0 => VK_NUMPAD0,
         KeyCode::Numpad1 => VK_NUMPAD1,
         KeyCode::Numpad2 => VK_NUMPAD2,
@@ -409,10 +529,30 @@ fn keycode_to_vk(key: KeyCode) -> VIRTUAL_KEY {
         KeyCode::Numpad7 => VK_NUMPAD7,
         KeyCode::Numpad8 => VK_NUMPAD8,
         KeyCode::Numpad9 => VK_NUMPAD9,
-        // Letters use their ASCII-uppercase code as the virtual-key value.
-        KeyCode::C => VIRTUAL_KEY(0x43),
-        KeyCode::F => VIRTUAL_KEY(0x46),
-        KeyCode::M => VIRTUAL_KEY(0x4D),
+        KeyCode::NumpadAdd => VK_ADD,
+        KeyCode::NumpadSubtract => VK_SUBTRACT,
+        KeyCode::NumpadMultiply => VK_MULTIPLY,
+        KeyCode::NumpadDivide => VK_DIVIDE,
+        KeyCode::NumpadDecimal => VK_DECIMAL,
+        // Windows reports the keypad's Enter as VK_RETURN with the extended
+        // flag set; `keycode_extended` is what actually separates the two.
+        KeyCode::NumpadEnter => VK_RETURN,
+    }
+}
+
+/// The `LLKHF_EXTENDED` state a keystroke must have to satisfy this key, or
+/// `None` when the flag is irrelevant.
+///
+/// Only the two Enter keys need this: they share `VK_RETURN`, and the keypad's
+/// Enter is the extended one. Every other `KeyCode` maps to a unique virtual
+/// key, so constraining the flag there would only risk rejecting genuine
+/// keystrokes (the flag is also set for the navigation cluster, `VK_DIVIDE`,
+/// and right-hand modifiers).
+fn keycode_extended(key: KeyCode) -> Option<bool> {
+    match key {
+        KeyCode::Enter => Some(false),
+        KeyCode::NumpadEnter => Some(true),
+        _ => None,
     }
 }
 
@@ -421,29 +561,50 @@ mod tests {
     use super::*;
 
     /// Reverse mapping, defined only for the round-trip test.
-    fn vk_to_keycode(vk: u16) -> Option<KeyCode> {
-        KeyCode::ALL
-            .iter()
-            .copied()
-            .find(|&k| keycode_to_vk(k).0 == vk)
+    fn vk_to_keycode(vk: u16, extended: bool) -> Option<KeyCode> {
+        KeyCode::ALL.iter().copied().find(|&k| {
+            keycode_to_vk(k).0 == vk && keycode_extended(k).map_or(true, |want| want == extended)
+        })
     }
 
     #[test]
     fn keycode_to_vk_is_total_and_unique() {
+        // A duplicated (virtual key, extended) pair is a silent bug: two Tile
+        // keys would fire on the same physical keystroke.
         let mut seen = std::collections::HashSet::new();
         for key in KeyCode::ALL {
             let vk = keycode_to_vk(key).0;
             assert_ne!(vk, 0, "{key:?} mapped to VK 0");
-            assert!(seen.insert(vk), "duplicate VK {vk:#x} for {key:?}");
+            let entry = (vk, keycode_extended(key));
+            assert!(seen.insert(entry), "duplicate VK {vk:#x} for {key:?}");
         }
         assert_eq!(seen.len(), KeyCode::ALL.len());
+    }
+
+    #[test]
+    fn only_the_two_enter_keys_share_a_virtual_key() {
+        // Everything else must be distinguishable by virtual key alone, so the
+        // extended flag never has to be consulted for it.
+        let mut counts = std::collections::HashMap::new();
+        for key in KeyCode::ALL {
+            *counts.entry(keycode_to_vk(key).0).or_insert(0usize) += 1;
+        }
+        let shared: Vec<u16> = counts
+            .iter()
+            .filter(|(_, &n)| n > 1)
+            .map(|(&vk, _)| vk)
+            .collect();
+        assert_eq!(shared, vec![VK_RETURN.0]);
+        assert_eq!(keycode_extended(KeyCode::Enter), Some(false));
+        assert_eq!(keycode_extended(KeyCode::NumpadEnter), Some(true));
     }
 
     #[test]
     fn keycode_vk_round_trips() {
         for key in KeyCode::ALL {
             let vk = keycode_to_vk(key).0;
-            assert_eq!(vk_to_keycode(vk), Some(key));
+            let extended = keycode_extended(key).unwrap_or(false);
+            assert_eq!(vk_to_keycode(vk, extended), Some(key));
         }
     }
 
@@ -453,17 +614,39 @@ mod tests {
         assert_eq!(keycode_to_vk(KeyCode::C).0, 0x43);
         assert_eq!(keycode_to_vk(KeyCode::M).0, 0x4D);
         assert_eq!(keycode_to_vk(KeyCode::Numpad5), VK_NUMPAD5);
+        // Letters and digits are their ASCII values; A..Z is 0x41..0x5A and
+        // 0..9 is 0x30..0x39.
+        assert_eq!(keycode_to_vk(KeyCode::A).0, 0x41);
+        assert_eq!(keycode_to_vk(KeyCode::Z).0, 0x5A);
+        assert_eq!(keycode_to_vk(KeyCode::Digit0).0, 0x30);
+        assert_eq!(keycode_to_vk(KeyCode::Digit9).0, 0x39);
+        // F1..F24 is a contiguous 0x70..0x87 block.
+        assert_eq!(keycode_to_vk(KeyCode::F1).0, 0x70);
+        assert_eq!(keycode_to_vk(KeyCode::F12).0, 0x7B);
+        assert_eq!(keycode_to_vk(KeyCode::F24).0, 0x87);
+        // The OEM keys are easy to transpose, so pin the awkward ones.
+        assert_eq!(keycode_to_vk(KeyCode::Semicolon).0, 0xBA); // VK_OEM_1
+        assert_eq!(keycode_to_vk(KeyCode::Equals).0, 0xBB); // VK_OEM_PLUS
+        assert_eq!(keycode_to_vk(KeyCode::Minus).0, 0xBD); // VK_OEM_MINUS
+        assert_eq!(keycode_to_vk(KeyCode::Slash).0, 0xBF); // VK_OEM_2
+        assert_eq!(keycode_to_vk(KeyCode::Backtick).0, 0xC0); // VK_OEM_3
+        assert_eq!(keycode_to_vk(KeyCode::LeftBracket).0, 0xDB); // VK_OEM_4
+        assert_eq!(keycode_to_vk(KeyCode::Backslash).0, 0xDC); // VK_OEM_5
+        assert_eq!(keycode_to_vk(KeyCode::RightBracket).0, 0xDD); // VK_OEM_6
+        assert_eq!(keycode_to_vk(KeyCode::Quote).0, 0xDE); // VK_OEM_7
     }
 
     fn table() -> Vec<Binding> {
         vec![
             Binding {
                 vk: VK_LEFT.0,
+                extended: None,
                 mods: Modifiers::META,
                 action: WindowAction::LeftHalf,
             },
             Binding {
                 vk: VK_LEFT.0,
+                extended: None,
                 mods: Modifiers::META | Modifiers::CONTROL,
                 action: WindowAction::TopHalf,
             },
@@ -474,11 +657,11 @@ mod tests {
     fn exact_modifier_match_fires_the_right_action() {
         let t = table();
         assert_eq!(
-            match_binding(&t, VK_LEFT.0, Modifiers::META),
+            match_binding(&t, VK_LEFT.0, true, Modifiers::META),
             Some(WindowAction::LeftHalf)
         );
         assert_eq!(
-            match_binding(&t, VK_LEFT.0, Modifiers::META | Modifiers::CONTROL),
+            match_binding(&t, VK_LEFT.0, true, Modifiers::META | Modifiers::CONTROL),
             Some(WindowAction::TopHalf)
         );
     }
@@ -489,11 +672,17 @@ mod tests {
         // as Win+Left. A `contains`-style bug would wrongly return LeftHalf.
         let only_win = vec![Binding {
             vk: VK_LEFT.0,
+            extended: None,
             mods: Modifiers::META,
             action: WindowAction::LeftHalf,
         }];
         assert_eq!(
-            match_binding(&only_win, VK_LEFT.0, Modifiers::META | Modifiers::CONTROL),
+            match_binding(
+                &only_win,
+                VK_LEFT.0,
+                true,
+                Modifiers::META | Modifiers::CONTROL
+            ),
             None
         );
     }
@@ -501,8 +690,48 @@ mod tests {
     #[test]
     fn no_match_for_unbound_key_or_bare_modifier() {
         let t = table();
-        assert_eq!(match_binding(&t, VK_RIGHT.0, Modifiers::META), None);
-        assert_eq!(match_binding(&t, VK_LEFT.0, Modifiers::NONE), None);
+        assert_eq!(match_binding(&t, VK_RIGHT.0, true, Modifiers::META), None);
+        assert_eq!(match_binding(&t, VK_LEFT.0, true, Modifiers::NONE), None);
+    }
+
+    #[test]
+    fn the_two_enter_keys_do_not_trigger_each_other() {
+        // Both report VK_RETURN; only LLKHF_EXTENDED tells them apart.
+        let bindings = vec![
+            Binding {
+                vk: VK_RETURN.0,
+                extended: keycode_extended(KeyCode::Enter),
+                mods: Modifiers::META,
+                action: WindowAction::Maximize,
+            },
+            Binding {
+                vk: VK_RETURN.0,
+                extended: keycode_extended(KeyCode::NumpadEnter),
+                mods: Modifiers::META,
+                action: WindowAction::Center,
+            },
+        ];
+        assert_eq!(
+            match_binding(&bindings, VK_RETURN.0, false, Modifiers::META),
+            Some(WindowAction::Maximize)
+        );
+        assert_eq!(
+            match_binding(&bindings, VK_RETURN.0, true, Modifiers::META),
+            Some(WindowAction::Center)
+        );
+    }
+
+    #[test]
+    fn keys_that_ignore_the_extended_flag_match_either_way() {
+        // Nav-cluster keys arrive extended, their numpad twins do not; a key
+        // with no extended requirement must accept both.
+        let t = table();
+        for extended in [false, true] {
+            assert_eq!(
+                match_binding(&t, VK_LEFT.0, extended, Modifiers::META),
+                Some(WindowAction::LeftHalf)
+            );
+        }
     }
 
     #[test]

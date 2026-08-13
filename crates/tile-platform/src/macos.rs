@@ -1041,7 +1041,17 @@ impl HotkeyBackend for MacHotkeyBackend {
 
         let mut failures = Vec::new();
         for (hotkey, action) in bindings {
-            let code = carbon_key_code(hotkey.key);
+            // A few keys (F21-F24) have no Carbon virtual key code at all.
+            // Report them as a per-binding failure instead of registering some
+            // other physical key.
+            let Some(code) = carbon_key_code(hotkey.key) else {
+                failures.push(HotkeyFailure {
+                    hotkey: *hotkey,
+                    action: *action,
+                    reason: format!("macOS has no key code for {}", hotkey.key.label()),
+                });
+                continue;
+            };
             let modifiers = carbon_modifiers(hotkey.modifiers);
             let id = self.next_id;
             self.next_id = self.next_id.wrapping_add(1);

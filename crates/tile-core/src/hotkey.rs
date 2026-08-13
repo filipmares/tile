@@ -42,89 +42,185 @@ impl std::ops::BitOr for Modifiers {
     }
 }
 
-/// The non-modifier key of a hotkey. Deliberately a small, explicit set: these
-/// are the only keys the MVP needs, and each backend maps them exhaustively so
-/// an unmapped key is a compile error rather than a silent no-op.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum KeyCode {
-    Left,
-    Right,
-    Up,
-    Down,
-    Enter,
-    Space,
-    Backspace,
-    Delete,
-    Escape,
-    Numpad0,
-    Numpad1,
-    Numpad2,
-    Numpad3,
-    Numpad4,
-    Numpad5,
-    Numpad6,
-    Numpad7,
-    Numpad8,
-    Numpad9,
-    C,
-    F,
-    M,
-}
-
-impl KeyCode {
-    pub const fn label(self) -> &'static str {
-        match self {
-            KeyCode::Left => "Left",
-            KeyCode::Right => "Right",
-            KeyCode::Up => "Up",
-            KeyCode::Down => "Down",
-            KeyCode::Enter => "Enter",
-            KeyCode::Space => "Space",
-            KeyCode::Backspace => "Backspace",
-            KeyCode::Delete => "Delete",
-            KeyCode::Escape => "Esc",
-            KeyCode::Numpad0 => "Num0",
-            KeyCode::Numpad1 => "Num1",
-            KeyCode::Numpad2 => "Num2",
-            KeyCode::Numpad3 => "Num3",
-            KeyCode::Numpad4 => "Num4",
-            KeyCode::Numpad5 => "Num5",
-            KeyCode::Numpad6 => "Num6",
-            KeyCode::Numpad7 => "Num7",
-            KeyCode::Numpad8 => "Num8",
-            KeyCode::Numpad9 => "Num9",
-            KeyCode::C => "C",
-            KeyCode::F => "F",
-            KeyCode::M => "M",
+/// Declares [`KeyCode`] once and derives `label()`, `ALL` and `COUNT` from that
+/// single list.
+///
+/// A hand-written `ALL` array would be the obvious alternative, but nothing
+/// would force it to stay in sync with the enum: a variant missing from `ALL`
+/// is invisible to `FromStr` (the key becomes unparseable) *and* to every test
+/// that iterates `ALL` looking for duplicate platform key codes. Generating
+/// both from one list makes that class of bug unrepresentable.
+///
+/// The backends are unaffected: they still `match` on `KeyCode` exhaustively
+/// with no wildcard arm, so adding a line here is a compile error until both
+/// platform tables map it.
+macro_rules! key_codes {
+    (@unit $variant:ident) => { () };
+    (@count $($variant:ident)*) => { <[()]>::len(&[$(key_codes!(@unit $variant)),*]) };
+    ($($variant:ident => $label:literal,)+) => {
+        /// The non-modifier key of a hotkey.
+        ///
+        /// A closed enum rather than a raw platform scan code, so a config file
+        /// stays portable between Windows and macOS and so every backend is
+        /// forced to map every key.
+        ///
+        /// Serialised kebab-case into the user's config, therefore **variants
+        /// must never be renamed** — that would silently invalidate saved
+        /// bindings. Adding variants is backward compatible.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[serde(rename_all = "kebab-case")]
+        pub enum KeyCode {
+            $($variant,)+
         }
-    }
 
-    pub const ALL: [KeyCode; 22] = [
-        KeyCode::Left,
-        KeyCode::Right,
-        KeyCode::Up,
-        KeyCode::Down,
-        KeyCode::Enter,
-        KeyCode::Space,
-        KeyCode::Backspace,
-        KeyCode::Delete,
-        KeyCode::Escape,
-        KeyCode::Numpad0,
-        KeyCode::Numpad1,
-        KeyCode::Numpad2,
-        KeyCode::Numpad3,
-        KeyCode::Numpad4,
-        KeyCode::Numpad5,
-        KeyCode::Numpad6,
-        KeyCode::Numpad7,
-        KeyCode::Numpad8,
-        KeyCode::Numpad9,
-        KeyCode::C,
-        KeyCode::F,
-        KeyCode::M,
-    ];
+        impl KeyCode {
+            /// Human-readable name, and the token [`Hotkey`]'s `FromStr`
+            /// accepts (case-insensitively).
+            ///
+            /// Labels must be unique and must never contain `+`, because
+            /// `Hotkey` renders as `Ctrl+Alt+Left` and parses by splitting on
+            /// `+`. Both invariants are covered by tests.
+            pub const fn label(self) -> &'static str {
+                match self {
+                    $(KeyCode::$variant => $label,)+
+                }
+            }
+
+            /// Number of keys in [`KeyCode::ALL`].
+            pub const COUNT: usize = key_codes!(@count $($variant)+);
+
+            /// Every key, in a stable, roughly keyboard-ordered sequence.
+            pub const ALL: [KeyCode; Self::COUNT] = [$(KeyCode::$variant,)+];
+        }
+    };
 }
+
+key_codes! {
+    // --- navigation and editing ---
+    Left => "Left",
+    Right => "Right",
+    Up => "Up",
+    Down => "Down",
+    Enter => "Enter",
+    Space => "Space",
+    Backspace => "Backspace",
+    Delete => "Delete",
+    Escape => "Esc",
+    Tab => "Tab",
+    Insert => "Insert",
+    Home => "Home",
+    End => "End",
+    PageUp => "PageUp",
+    PageDown => "PageDown",
+
+    // --- letters ---
+    A => "A",
+    B => "B",
+    C => "C",
+    D => "D",
+    E => "E",
+    F => "F",
+    G => "G",
+    H => "H",
+    I => "I",
+    J => "J",
+    K => "K",
+    L => "L",
+    M => "M",
+    N => "N",
+    O => "O",
+    P => "P",
+    Q => "Q",
+    R => "R",
+    S => "S",
+    T => "T",
+    U => "U",
+    V => "V",
+    W => "W",
+    X => "X",
+    Y => "Y",
+    Z => "Z",
+
+    // --- top-row digits (distinct from the numpad digits below) ---
+    Digit0 => "0",
+    Digit1 => "1",
+    Digit2 => "2",
+    Digit3 => "3",
+    Digit4 => "4",
+    Digit5 => "5",
+    Digit6 => "6",
+    Digit7 => "7",
+    Digit8 => "8",
+    Digit9 => "9",
+
+    // --- punctuation, named after the physical US-layout key ---
+    // Word labels, not the symbols themselves: `Equals` cannot be confused
+    // with the `+` separator, and every label stays a single safe token.
+    Backtick => "Backtick",
+    Minus => "Minus",
+    Equals => "Equals",
+    LeftBracket => "LeftBracket",
+    RightBracket => "RightBracket",
+    Backslash => "Backslash",
+    Semicolon => "Semicolon",
+    Quote => "Quote",
+    Comma => "Comma",
+    Period => "Period",
+    Slash => "Slash",
+
+    // --- function keys ---
+    F1 => "F1",
+    F2 => "F2",
+    F3 => "F3",
+    F4 => "F4",
+    F5 => "F5",
+    F6 => "F6",
+    F7 => "F7",
+    F8 => "F8",
+    F9 => "F9",
+    F10 => "F10",
+    F11 => "F11",
+    F12 => "F12",
+    F13 => "F13",
+    F14 => "F14",
+    F15 => "F15",
+    F16 => "F16",
+    F17 => "F17",
+    F18 => "F18",
+    F19 => "F19",
+    F20 => "F20",
+    F21 => "F21",
+    F22 => "F22",
+    F23 => "F23",
+    F24 => "F24",
+
+    // --- numeric keypad ---
+    Numpad0 => "Num0",
+    Numpad1 => "Num1",
+    Numpad2 => "Num2",
+    Numpad3 => "Num3",
+    Numpad4 => "Num4",
+    Numpad5 => "Num5",
+    Numpad6 => "Num6",
+    Numpad7 => "Num7",
+    Numpad8 => "Num8",
+    Numpad9 => "Num9",
+    NumpadAdd => "NumAdd",
+    NumpadSubtract => "NumSubtract",
+    NumpadMultiply => "NumMultiply",
+    NumpadDivide => "NumDivide",
+    NumpadDecimal => "NumDecimal",
+    NumpadEnter => "NumEnter",
+}
+
+/// Modifier tokens [`Hotkey`]'s `FromStr` recognises, in lowercase.
+///
+/// Only used by the test that proves no key label collides with one: modifiers
+/// are matched first, so a colliding key would be permanently unbindable.
+#[cfg(test)]
+const MODIFIER_TOKENS: [&str; 11] = [
+    "ctrl", "control", "alt", "option", "opt", "shift", "win", "cmd", "command", "meta", "super",
+];
 
 /// A modifier combination plus a key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -280,5 +376,131 @@ mod tests {
         let before = labels.len();
         labels.dedup();
         assert_eq!(before, labels.len());
+    }
+
+    #[test]
+    fn key_labels_are_unique_case_insensitively() {
+        // `FromStr` compares with `eq_ignore_ascii_case`, so labels that differ
+        // only in case would still be ambiguous.
+        let mut labels: Vec<String> = KeyCode::ALL
+            .iter()
+            .map(|k| k.label().to_ascii_lowercase())
+            .collect();
+        labels.sort();
+        let before = labels.len();
+        labels.dedup();
+        assert_eq!(before, labels.len(), "labels must differ by more than case");
+    }
+
+    #[test]
+    fn no_key_label_contains_the_hotkey_separator() {
+        // `Display` joins with `+` and `FromStr` splits on it, so a label
+        // containing `+` (e.g. naming the numpad plus key "+") would make its
+        // own hotkeys unparseable.
+        for key in KeyCode::ALL {
+            assert!(
+                !key.label().contains('+'),
+                "{key:?} has a label containing '+': {}",
+                key.label()
+            );
+        }
+    }
+
+    #[test]
+    fn key_labels_are_non_empty_and_free_of_whitespace() {
+        // `FromStr` trims tokens and drops empty ones, so a label made of (or
+        // containing) whitespace could never be parsed back.
+        for key in KeyCode::ALL {
+            let label = key.label();
+            assert!(!label.is_empty(), "{key:?} has an empty label");
+            assert!(
+                !label.chars().any(char::is_whitespace),
+                "{key:?} has whitespace in its label: {label:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_key_label_collides_with_a_modifier_token() {
+        // Modifiers are matched before keys, so a key labelled e.g. "Alt"
+        // would be impossible to bind.
+        for key in KeyCode::ALL {
+            let lower = key.label().to_ascii_lowercase();
+            assert!(
+                !MODIFIER_TOKENS.contains(&lower.as_str()),
+                "{key:?}'s label shadows the modifier token {lower:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_key_round_trips_through_display_and_parse() {
+        for key in KeyCode::ALL {
+            let hotkey = Hotkey::new(Modifiers::CONTROL | Modifiers::ALT, key);
+            let rendered = hotkey.to_string();
+            let parsed: Hotkey = rendered
+                .parse()
+                .unwrap_or_else(|e| panic!("{rendered:?} ({key:?}) failed to parse: {e}"));
+            assert_eq!(parsed, hotkey, "{rendered:?} did not round-trip");
+        }
+    }
+
+    #[test]
+    fn every_key_round_trips_through_serde() {
+        // The kebab-case names are written into the user's config file, so a
+        // variant that does not survive a JSON round-trip would drop bindings.
+        for key in KeyCode::ALL {
+            let json = serde_json::to_string(&key).unwrap();
+            let back: KeyCode = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, key, "{key:?} did not survive serde as {json}");
+        }
+    }
+
+    #[test]
+    fn existing_key_names_keep_their_serialised_form() {
+        // Renaming a variant silently invalidates saved bindings, so the names
+        // that shipped are pinned here.
+        for (key, name) in [
+            (KeyCode::Left, "\"left\""),
+            (KeyCode::Escape, "\"escape\""),
+            (KeyCode::Backspace, "\"backspace\""),
+            (KeyCode::Numpad0, "\"numpad0\""),
+            (KeyCode::C, "\"c\""),
+            (KeyCode::F, "\"f\""),
+            (KeyCode::M, "\"m\""),
+        ] {
+            assert_eq!(serde_json::to_string(&key).unwrap(), name);
+        }
+    }
+
+    #[test]
+    fn all_contains_every_key_exactly_once() {
+        let mut seen = std::collections::HashSet::new();
+        for key in KeyCode::ALL {
+            assert!(seen.insert(key), "{key:?} appears twice in ALL");
+        }
+        assert_eq!(seen.len(), KeyCode::COUNT);
+    }
+
+    // A full keyboard, not the 22-key MVP set.
+    const _: () = assert!(KeyCode::COUNT >= 100, "unexpectedly small key set");
+
+    #[test]
+    fn newly_added_keys_are_parseable() {
+        assert_eq!("Ctrl+Alt+1".parse::<Hotkey>().unwrap().key, KeyCode::Digit1);
+        assert_eq!("ctrl+alt+f13".parse::<Hotkey>().unwrap().key, KeyCode::F13);
+        assert_eq!(
+            "Ctrl+Alt+NumAdd".parse::<Hotkey>().unwrap().key,
+            KeyCode::NumpadAdd
+        );
+        assert_eq!(
+            "Ctrl+Alt+Equals".parse::<Hotkey>().unwrap().key,
+            KeyCode::Equals
+        );
+        // Top-row 1 and numpad 1 are different physical keys.
+        assert_ne!(
+            "Ctrl+Alt+1".parse::<Hotkey>().unwrap().key,
+            "Ctrl+Alt+Num1".parse::<Hotkey>().unwrap().key
+        );
     }
 }
