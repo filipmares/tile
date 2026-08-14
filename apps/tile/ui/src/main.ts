@@ -15,6 +15,7 @@ import { formatHotkey, interpret } from "./hotkey";
 import {
   ACTIONS,
   Config,
+  FAMILIES,
   Gaps,
   Hotkey,
   HotkeyFailure,
@@ -82,56 +83,84 @@ function renderBindings(): void {
   const conflicts = conflictingActions(cfg);
   dom.bindings.replaceChildren();
 
-  for (const { id, label } of ACTIONS) {
-    const hk = cfg.bindings[id] ?? null;
+  for (const family of FAMILIES) {
+    const actions = ACTIONS.filter((a) => a.family === family.id);
+    if (actions.length === 0) continue;
 
-    const li = document.createElement("li");
-    li.className = "binding";
+    const group = document.createElement("li");
+    group.className = "binding-group";
 
-    const name = document.createElement("span");
-    name.className = "binding__label";
-    name.textContent = label;
-    name.id = `label-${id}`;
+    const heading = document.createElement("h3");
+    heading.className = "binding-group__title";
+    heading.textContent = family.label;
+    group.append(heading);
 
-    const controls = document.createElement("div");
-    controls.className = "binding__controls";
+    const list = document.createElement("ul");
+    list.className = "binding-group__list";
 
-    const record = document.createElement("button");
-    record.type = "button";
-    record.className = "binding__key";
-    record.setAttribute("aria-labelledby", `label-${id} key-${id}`);
-    record.id = `key-${id}`;
-    if (recording === id) {
-      record.classList.add("binding__key--recording");
-      record.textContent = "Press keys…";
-    } else {
-      record.textContent = hk ? formatHotkey(hk) : "Unbound";
-      if (!hk) record.classList.add("binding__key--empty");
-    }
-    record.addEventListener("click", () => startRecording(id));
-    controls.append(record);
-
-    if (hk && recording !== id) {
-      const clear = document.createElement("button");
-      clear.type = "button";
-      clear.className = "binding__clear";
-      clear.setAttribute("aria-label", `Clear shortcut for ${label}`);
-      clear.textContent = "✕";
-      clear.addEventListener("click", () => void applyBinding(id, null));
-      controls.append(clear);
+    for (const { id, label } of actions) {
+      list.append(renderBinding(cfg, conflicts, id, label));
     }
 
-    li.append(name, controls);
-
-    const failure = failureFor(id);
-    if (conflicts.has(id)) {
-      li.append(note("This shortcut is used by more than one action.", "error"));
-    } else if (failure) {
-      li.append(note(`The system rejected this shortcut: ${failure.reason}`, "error"));
-    }
-
-    dom.bindings.append(li);
+    group.append(list);
+    dom.bindings.append(group);
   }
+}
+
+function renderBinding(
+  cfg: Config,
+  conflicts: Set<WindowAction>,
+  id: WindowAction,
+  label: string,
+): HTMLLIElement {
+  const hk = cfg.bindings[id] ?? null;
+
+  const li = document.createElement("li");
+  li.className = "binding";
+
+  const name = document.createElement("span");
+  name.className = "binding__label";
+  name.textContent = label;
+  name.id = `label-${id}`;
+
+  const controls = document.createElement("div");
+  controls.className = "binding__controls";
+
+  const record = document.createElement("button");
+  record.type = "button";
+  record.className = "binding__key";
+  record.setAttribute("aria-labelledby", `label-${id} key-${id}`);
+  record.id = `key-${id}`;
+  if (recording === id) {
+    record.classList.add("binding__key--recording");
+    record.textContent = "Press keys…";
+  } else {
+    record.textContent = hk ? formatHotkey(hk) : "Unbound";
+    if (!hk) record.classList.add("binding__key--empty");
+  }
+  record.addEventListener("click", () => startRecording(id));
+  controls.append(record);
+
+  if (hk && recording !== id) {
+    const clear = document.createElement("button");
+    clear.type = "button";
+    clear.className = "binding__clear";
+    clear.setAttribute("aria-label", `Clear shortcut for ${label}`);
+    clear.textContent = "✕";
+    clear.addEventListener("click", () => void applyBinding(id, null));
+    controls.append(clear);
+  }
+
+  li.append(name, controls);
+
+  const failure = failureFor(id);
+  if (conflicts.has(id)) {
+    li.append(note("This shortcut is used by more than one action.", "error"));
+  } else if (failure) {
+    li.append(note(`The system rejected this shortcut: ${failure.reason}`, "error"));
+  }
+
+  return li;
 }
 
 function note(text: string, kind: "error" | "info"): HTMLElement {

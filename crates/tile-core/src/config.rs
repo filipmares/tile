@@ -218,6 +218,43 @@ fn default_true() -> bool {
     true
 }
 
+/// The default fraction for the [`WindowAction::AlmostMaximize`] size, matching
+/// Rectangle's 90% behaviour.
+fn default_almost_maximize_fraction() -> f64 {
+    0.9
+}
+
+/// Clamps a size fraction into `(0, 1]`, falling back to the default when the
+/// value is not a usable fraction (e.g. zero, negative, NaN, or above 1).
+fn normalize_fraction(value: f64) -> f64 {
+    if value.is_finite() && value > 0.0 && value <= 1.0 {
+        value
+    } else {
+        default_almost_maximize_fraction()
+    }
+}
+
+/// Fractions controlling the size-variant actions that resize a window rather
+/// than tile it into the grid.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SizeOptions {
+    /// [`WindowAction::AlmostMaximize`] width as a fraction of the work area,
+    /// in `(0, 1]`.
+    pub almost_maximize_width: f64,
+    /// [`WindowAction::AlmostMaximize`] height as a fraction of the work area,
+    /// in `(0, 1]`.
+    pub almost_maximize_height: f64,
+}
+
+impl Default for SizeOptions {
+    fn default() -> Self {
+        Self {
+            almost_maximize_width: default_almost_maximize_fraction(),
+            almost_maximize_height: default_almost_maximize_fraction(),
+        }
+    }
+}
+
 /// Persisted user settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -233,6 +270,12 @@ pub struct Config {
     pub launch_on_login: bool,
     /// Show the tray / menu-bar icon.
     pub show_tray_icon: bool,
+    /// [`WindowAction::AlmostMaximize`] width as a fraction of the work area.
+    #[serde(default = "default_almost_maximize_fraction")]
+    pub almost_maximize_width: f64,
+    /// [`WindowAction::AlmostMaximize`] height as a fraction of the work area.
+    #[serde(default = "default_almost_maximize_fraction")]
+    pub almost_maximize_height: f64,
 }
 
 impl Default for Config {
@@ -242,6 +285,8 @@ impl Default for Config {
             gaps: Gaps::default(),
             launch_on_login: false,
             show_tray_icon: default_true(),
+            almost_maximize_width: default_almost_maximize_fraction(),
+            almost_maximize_height: default_almost_maximize_fraction(),
         }
     }
 }
@@ -266,6 +311,16 @@ impl Config {
             None => true,
         });
         self.gaps.normalize();
+        self.almost_maximize_width = normalize_fraction(self.almost_maximize_width);
+        self.almost_maximize_height = normalize_fraction(self.almost_maximize_height);
+    }
+
+    /// The size-variant fractions, derived from the persisted configuration.
+    pub fn size_options(&self) -> SizeOptions {
+        SizeOptions {
+            almost_maximize_width: self.almost_maximize_width,
+            almost_maximize_height: self.almost_maximize_height,
+        }
     }
 
     pub fn binding(&self, action: WindowAction) -> Option<Hotkey> {
@@ -320,66 +375,157 @@ impl Config {
 /// Upper bound for the screen-edge gap, to stop a typo shrinking windows away.
 pub const MAX_GAP: f64 = 200.0;
 
-/// Platform-appropriate default key bindings.
+/// The modifier carrying the bulk of the default bindings.
 ///
-/// macOS keeps Rectangle's well-known `Control+Option` defaults so existing
-/// muscle memory carries over. Windows uses the `Win` key combinations users
-/// already associate with snapping; `Win+Arrow` is claimed from the shell by
-/// the low-level keyboard hook in the Windows backend.
+/// macOS uses `Control+Option`, matching Rectangle's alternate ("Magnet")
+/// default set, which is also what Tile has always shipped.
+///
+/// Windows deliberately uses `Win+Alt` rather than `Ctrl+Alt`, even though
+/// `Ctrl+Alt` would mirror macOS exactly. **Windows treats `Ctrl+Alt` as
+/// `AltGr`**: on many international layouts `AltGr`+key produces characters
+/// such as `@ € { } [ ] \ ~`. Because the Windows backend swallows any
+/// keystroke it matches, binding `Ctrl+Alt`+letter would make those characters
+/// impossible to type — a German user could not type `@`.
+#[cfg(target_os = "macos")]
+const BASE_MODIFIERS: Modifiers = Modifiers(Modifiers::CONTROL.0 | Modifiers::ALT.0);
+#[cfg(not(target_os = "macos"))]
+const BASE_MODIFIERS: Modifiers = Modifiers(Modifiers::META.0 | Modifiers::ALT.0);
+
+/// Default key bindings.
+///
+/// **Every default sits on the same base modifier**, so the two platforms
+/// differ in exactly one thing: what that modifier is. `Control+Option` on
+/// macOS, `Win+Alt` on Windows. Nothing else varies, so a user with a Mac and
+/// a PC learns one set of shortcuts.
+///
+/// The arrows point where the window goes, maximize and restore use `Enter`
+/// and `Backspace`, and the sizes are spatially mnemonic — a 2x3 block on the
+/// keyboard:
+///
+/// ```text
+///   Q  ·  E     two-thirds  (first / last; center is unbound, see below)
+///   A  S  D     thirds      (first / center / last)
+/// ```
+///
+/// Each third sits directly below its two-thirds variant, running left to
+/// right. The corners are a second block, `U`/`I` over `J`/`K`, matching the
+/// four screen corners.
+///
+/// # Why Windows does not use `Win+Arrow`
+///
+/// It used to. Moving the halves onto `Win+Alt` with everything else means
+/// Aero Snap keeps working, so users who want the native behaviour still have
+/// it and Tile's richer actions live entirely in its own namespace.
+///
+/// It is worth knowing that **no two-modifier arrow combination is unclaimed
+/// on Windows**: `Win+Arrow` is Aero Snap, `Win+Alt+Arrow` is Windows 11's
+/// snap variants, `Win+Shift+Arrow` moves between monitors and
+/// `Win+Ctrl+Left/Right` switches virtual desktop. Tile therefore preempts
+/// *something* whichever it picks. `Win+Alt` is the best of them: it is the
+/// least used, and the keyboard hook takes it cleanly because the owner
+/// registers through `RegisterHotKey`, which the hook runs ahead of.
+///
+/// # Keys Xbox Game Bar reserves
+///
+/// Game Bar owns eight shortcuts, and Tile cannot win any of them. `Win+Alt+G`
+/// is the clearest example: Game Bar's own hotkey is `Win+G` and its handler
+/// matches *loosely*, ignoring the extra `Alt`, so the overlay appears even
+/// with Tile shut down. The rest are handled by GameDVR through an input path
+/// that never reaches the keyboard hook. Users cannot fix this either — Game
+/// Bar's settings only *add* shortcuts, they never replace the built-in one.
+///
+/// The authoritative list is the `VK*` values under
+/// `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR`:
+///
+/// | Action | Shortcut |
+/// |---|---|
+/// | `ToggleGameBar` | `Win+G` |
+/// | `SaveHistoricalVideo` | `Win+Alt+G` |
+/// | `ToggleRecording` | `Win+Alt+R` |
+/// | `ToggleMicrophoneCapture` | `Win+Alt+M` |
+/// | `ToggleBroadcast` | `Win+Alt+B` |
+/// | `ToggleCameraCapture` | `Win+Alt+W` |
+/// | `ToggleRecordingIndicator` | `Win+Alt+T` |
+/// | `TakeScreenshot` | `Win+Alt+PrtScn` |
+///
+/// So `G`, `R`, `M`, `B`, `W` and `T` are all unusable. That is why the block
+/// sits at `Q`/`A`, and why center two thirds — whose natural key would be `W`
+/// — ships unbound. There is a test enforcing the whole set.
+///
+/// # Why not Rectangle's letters
+///
+/// Rectangle uses the same block one column to the right, `D`/`F`/`G` for the
+/// thirds with `E`/`R`/`T` above, and Tile shipped that briefly. Four of those
+/// six keys are reserved by Game Bar, so it had to move. Sliding the block
+/// left keeps the geometry exactly — the mnemonic is positional, not
+/// alphabetic. The letters moved on macOS too, so both platforms match.
 pub fn default_bindings() -> BTreeMap<WindowAction, Option<Hotkey>> {
     let mut map = BTreeMap::new();
+    let base = BASE_MODIFIERS;
 
-    #[cfg(target_os = "macos")]
-    {
-        let base = Modifiers::CONTROL | Modifiers::ALT;
-        map.insert(
-            WindowAction::LeftHalf,
-            Some(Hotkey::new(base, KeyCode::Left)),
-        );
-        map.insert(
-            WindowAction::RightHalf,
-            Some(Hotkey::new(base, KeyCode::Right)),
-        );
-        map.insert(WindowAction::TopHalf, Some(Hotkey::new(base, KeyCode::Up)));
-        map.insert(
-            WindowAction::BottomHalf,
-            Some(Hotkey::new(base, KeyCode::Down)),
-        );
-        map.insert(
-            WindowAction::Maximize,
-            Some(Hotkey::new(base, KeyCode::Enter)),
-        );
-        map.insert(WindowAction::Center, Some(Hotkey::new(base, KeyCode::C)));
-        map.insert(
-            WindowAction::Restore,
-            Some(Hotkey::new(base, KeyCode::Backspace)),
-        );
-    }
+    // Every default sits on the base modifier, so the two platforms differ
+    // only in what that modifier is. Halves point where the window goes;
+    // maximize and restore mirror Rectangle's Enter and Backspace.
+    map.insert(
+        WindowAction::LeftHalf,
+        Some(Hotkey::new(base, KeyCode::Left)),
+    );
+    map.insert(
+        WindowAction::RightHalf,
+        Some(Hotkey::new(base, KeyCode::Right)),
+    );
+    map.insert(WindowAction::TopHalf, Some(Hotkey::new(base, KeyCode::Up)));
+    map.insert(
+        WindowAction::BottomHalf,
+        Some(Hotkey::new(base, KeyCode::Down)),
+    );
+    map.insert(
+        WindowAction::Maximize,
+        Some(Hotkey::new(base, KeyCode::Enter)),
+    );
+    map.insert(
+        WindowAction::Restore,
+        Some(Hotkey::new(base, KeyCode::Backspace)),
+    );
 
-    #[cfg(not(target_os = "macos"))]
-    {
-        let win = Modifiers::META;
-        let win_alt = Modifiers::META | Modifiers::ALT;
-        map.insert(
-            WindowAction::LeftHalf,
-            Some(Hotkey::new(win, KeyCode::Left)),
-        );
-        map.insert(
-            WindowAction::RightHalf,
-            Some(Hotkey::new(win, KeyCode::Right)),
-        );
-        map.insert(WindowAction::Maximize, Some(Hotkey::new(win, KeyCode::Up)));
-        map.insert(WindowAction::Restore, Some(Hotkey::new(win, KeyCode::Down)));
-        map.insert(
-            WindowAction::TopHalf,
-            Some(Hotkey::new(win_alt, KeyCode::Up)),
-        );
-        map.insert(
-            WindowAction::BottomHalf,
-            Some(Hotkey::new(win_alt, KeyCode::Down)),
-        );
-        map.insert(WindowAction::Center, Some(Hotkey::new(win_alt, KeyCode::C)));
-    }
+    map.insert(WindowAction::Center, Some(Hotkey::new(base, KeyCode::C)));
+    map.insert(
+        WindowAction::FirstThird,
+        Some(Hotkey::new(base, KeyCode::A)),
+    );
+    map.insert(
+        WindowAction::FirstTwoThirds,
+        Some(Hotkey::new(base, KeyCode::Q)),
+    );
+    map.insert(
+        WindowAction::CenterThird,
+        Some(Hotkey::new(base, KeyCode::S)),
+    );
+    // Center two thirds is deliberately unbound. The key directly above `S` is
+    // `W`, which Xbox Game Bar reserves for its broadcast camera toggle and
+    // Tile cannot override. No other key preserves the block's geometry, so
+    // rather than pick an arbitrary one this action ships unbound and is
+    // available from the tray menu or a binding of the user's choosing.
+    // Rectangle treats it as a later addition too, rather than a core default.
+    map.insert(
+        WindowAction::LastTwoThirds,
+        Some(Hotkey::new(base, KeyCode::E)),
+    );
+    map.insert(WindowAction::LastThird, Some(Hotkey::new(base, KeyCode::D)));
+    map.insert(WindowAction::TopLeft, Some(Hotkey::new(base, KeyCode::U)));
+    map.insert(WindowAction::TopRight, Some(Hotkey::new(base, KeyCode::I)));
+    map.insert(
+        WindowAction::BottomLeft,
+        Some(Hotkey::new(base, KeyCode::J)),
+    );
+    map.insert(
+        WindowAction::BottomRight,
+        Some(Hotkey::new(base, KeyCode::K)),
+    );
+    map.insert(
+        WindowAction::MaximizeHeight,
+        Some(Hotkey::new(base | Modifiers::SHIFT, KeyCode::Up)),
+    );
 
     map
 }
@@ -388,14 +534,196 @@ pub fn default_bindings() -> BTreeMap<WindowAction, Option<Hotkey>> {
 mod tests {
     use super::*;
 
+    /// The actions that ship with a default binding.
+    ///
+    /// Halves, maximize, restore and center, plus the spatially mnemonic
+    /// letter bindings borrowed from Rectangle's alternate defaults (thirds
+    /// and corners) and maximize-height. The denser families — fourths,
+    /// corner thirds, sixths, ninths — stay unbound: there are not enough
+    /// memorable combinations to go round, and binding them by default would
+    /// steal far more of the OS keymap than most users would want.
+    const CORE_BOUND: [WindowAction; 17] = [
+        WindowAction::LeftHalf,
+        WindowAction::RightHalf,
+        WindowAction::TopHalf,
+        WindowAction::BottomHalf,
+        WindowAction::Maximize,
+        WindowAction::MaximizeHeight,
+        WindowAction::Center,
+        WindowAction::Restore,
+        WindowAction::FirstThird,
+        WindowAction::FirstTwoThirds,
+        WindowAction::CenterThird,
+        // CenterTwoThirds is deliberately absent: its natural key is `W`,
+        // which Game Bar reserves. See `default_bindings`.
+        WindowAction::LastTwoThirds,
+        WindowAction::LastThird,
+        WindowAction::TopLeft,
+        WindowAction::TopRight,
+        WindowAction::BottomLeft,
+        WindowAction::BottomRight,
+    ];
+
     #[test]
-    fn defaults_cover_every_action_without_conflicts() {
+    fn defaults_use_spatially_mnemonic_letters() {
+        // These letters are load-bearing, not arbitrary. They form a 2x3 block:
+        //
+        //   Q W E   two-thirds
+        //   A S D   thirds
+        //
+        // Each third sits directly below its two-thirds variant, running left
+        // to right, and U/I/J/K form a 2x2 block matching the screen corners.
+        // Changing one silently breaks the mnemonic, so they are pinned here.
         let config = Config::default();
-        for action in WindowAction::ALL {
+        let expected = [
+            (WindowAction::FirstThird, KeyCode::A),
+            (WindowAction::CenterThird, KeyCode::S),
+            (WindowAction::LastThird, KeyCode::D),
+            (WindowAction::FirstTwoThirds, KeyCode::Q),
+            (WindowAction::LastTwoThirds, KeyCode::E),
+            (WindowAction::TopLeft, KeyCode::U),
+            (WindowAction::TopRight, KeyCode::I),
+            (WindowAction::BottomLeft, KeyCode::J),
+            (WindowAction::BottomRight, KeyCode::K),
+        ];
+        for (action, key) in expected {
+            let hotkey = config.binding(action).expect("action must be bound");
+            assert_eq!(hotkey.key, key, "{action} lost its mnemonic key");
+            assert_eq!(
+                hotkey.modifiers, BASE_MODIFIERS,
+                "{action} should use the platform base modifier"
+            );
+        }
+
+        // The hole in the block is deliberate, not an oversight: `W` is Game
+        // Bar's broadcast camera toggle.
+        assert_eq!(
+            config.binding(WindowAction::CenterTwoThirds),
+            None,
+            "center two thirds must stay unbound while W is unusable"
+        );
+    }
+
+    /// Every default must be identical across platforms apart from the base
+    /// modifier, so someone with a Mac and a PC learns one set of shortcuts.
+    /// Hard-coded rather than derived, so a platform-specific edit to
+    /// `default_bindings` fails here instead of drifting silently.
+    #[test]
+    fn defaults_differ_only_by_the_base_modifier() {
+        let config = Config::default();
+        let expected = [
+            (WindowAction::LeftHalf, KeyCode::Left),
+            (WindowAction::RightHalf, KeyCode::Right),
+            (WindowAction::TopHalf, KeyCode::Up),
+            (WindowAction::BottomHalf, KeyCode::Down),
+            (WindowAction::Maximize, KeyCode::Enter),
+            (WindowAction::Restore, KeyCode::Backspace),
+            (WindowAction::Center, KeyCode::C),
+            (WindowAction::FirstThird, KeyCode::A),
+            (WindowAction::CenterThird, KeyCode::S),
+            (WindowAction::LastThird, KeyCode::D),
+            (WindowAction::FirstTwoThirds, KeyCode::Q),
+            (WindowAction::LastTwoThirds, KeyCode::E),
+            (WindowAction::TopLeft, KeyCode::U),
+            (WindowAction::TopRight, KeyCode::I),
+            (WindowAction::BottomLeft, KeyCode::J),
+            (WindowAction::BottomRight, KeyCode::K),
+        ];
+        for (action, key) in expected {
+            let hotkey = config.binding(action).expect("action must be bound");
+            assert_eq!(
+                hotkey.key, key,
+                "{action} must use the same key on every platform"
+            );
+            assert_eq!(
+                hotkey.modifiers, BASE_MODIFIERS,
+                "{action} should sit on the base modifier"
+            );
+        }
+
+        // The one intentional exception: maximize-height adds Shift so it can
+        // share the Up arrow with top-half.
+        let mh = config
+            .binding(WindowAction::MaximizeHeight)
+            .expect("maximize height must be bound");
+        assert_eq!(mh.key, KeyCode::Up);
+        assert_eq!(mh.modifiers, BASE_MODIFIERS | Modifiers::SHIFT);
+    }
+
+    /// Windows treats `Ctrl+Alt` as `AltGr`, which many international layouts
+    /// use to type `@ € { } [ ] \ ~`. Since the Windows backend swallows the
+    /// keystrokes it matches, a `Ctrl+Alt` default would make those characters
+    /// untypeable. Guard against anyone "simplifying" the modifiers to match
+    /// macOS exactly.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn windows_defaults_never_use_ctrl_alt() {
+        let config = Config::default();
+        for (hotkey, action) in config.active_bindings() {
+            let ctrl_alt = Modifiers::CONTROL | Modifiers::ALT;
+            assert!(
+                !hotkey.modifiers.contains(ctrl_alt),
+                "{action} uses Ctrl+Alt ({hotkey}), which collides with AltGr"
+            );
+        }
+    }
+
+    /// Xbox Game Bar owns eight shortcuts that Tile cannot win, listed against
+    /// `default_bindings`. `Win+Alt+G` fires even with Tile shut down, because
+    /// Game Bar's `Win+G` matches loosely; the others are handled by GameDVR
+    /// through an input path the keyboard hook never sees. Users cannot
+    /// disable them — Game Bar's settings only add shortcuts.
+    ///
+    /// The defaults were chosen to avoid all of these. This test is the guard,
+    /// and it is deliberately exhaustive: an earlier version listed only `G`,
+    /// `R`, `M` and `B`, which let a `W` binding ship and collide with Game
+    /// Bar's broadcast camera toggle.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn defaults_avoid_the_unwinnable_game_bar_shortcuts() {
+        // ToggleGameBar / SaveHistoricalVideo, ToggleRecording,
+        // ToggleMicrophoneCapture, ToggleBroadcast, ToggleCameraCapture,
+        // ToggleRecordingIndicator. (`Win+Alt+PrtScn` is reserved too, but
+        // Tile has no PrintScreen key code, so it cannot be bound at all.)
+        const RESERVED: [KeyCode; 6] = [
+            KeyCode::G,
+            KeyCode::R,
+            KeyCode::M,
+            KeyCode::B,
+            KeyCode::W,
+            KeyCode::T,
+        ];
+
+        let config = Config::default();
+        let win_alt = Modifiers::META | Modifiers::ALT;
+        for (hotkey, action) in config.active_bindings() {
+            if hotkey.modifiers != win_alt {
+                continue;
+            }
+            assert!(
+                !RESERVED.contains(&hotkey.key),
+                "{action} is bound to {hotkey}, which Game Bar reserves and Tile cannot override"
+            );
+        }
+    }
+
+    #[test]
+    fn defaults_bind_the_core_actions_without_conflicts() {
+        let config = Config::default();
+        for action in CORE_BOUND {
             assert!(
                 config.binding(action).is_some(),
                 "{action} has no default binding"
             );
+        }
+        // Every other action ships unbound.
+        for action in WindowAction::ALL {
+            if !CORE_BOUND.contains(&action) {
+                assert!(
+                    config.binding(action).is_none(),
+                    "{action} unexpectedly has a default binding"
+                );
+            }
         }
         assert_eq!(
             config.conflicts(),
@@ -519,9 +847,10 @@ mod tests {
     #[test]
     fn active_bindings_skips_unbound_actions() {
         let mut config = Config::default();
+        let before = config.active_bindings().len();
         config.set_binding(WindowAction::Center, None);
         let active = config.active_bindings();
-        assert_eq!(active.len(), WindowAction::ALL.len() - 1);
+        assert_eq!(active.len(), before - 1);
         assert!(!active.iter().any(|(_, a)| *a == WindowAction::Center));
     }
 }

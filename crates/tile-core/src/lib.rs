@@ -11,8 +11,10 @@ pub mod geometry;
 pub mod history;
 pub mod hotkey;
 
-pub use action::{ParseActionError, WindowAction};
-pub use config::{Config, ConfigError, Conflict, Gaps, SharedEdges, CONFIG_FILE_NAME, MAX_GAP};
+pub use action::{ParseActionError, WindowAction, WindowFamily};
+pub use config::{
+    Config, ConfigError, Conflict, Gaps, SharedEdges, SizeOptions, CONFIG_FILE_NAME, MAX_GAP,
+};
 pub use geometry::{Rect, Screen};
 pub use history::{WindowHistory, WindowId};
 pub use hotkey::{Hotkey, KeyCode, Modifiers, ParseHotkeyError};
@@ -86,6 +88,7 @@ impl Engine {
             &self.config.gaps,
             window.frame,
             screen.is_primary,
+            self.config.size_options(),
         ) else {
             return Plan::NoOp(NoOpReason::NoHistory);
         };

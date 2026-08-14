@@ -7,19 +7,199 @@ export type WindowAction =
   | "right-half"
   | "top-half"
   | "bottom-half"
+  | "top-left"
+  | "top-right"
+  | "bottom-left"
+  | "bottom-right"
+  | "first-third"
+  | "center-third"
+  | "last-third"
+  | "first-two-thirds"
+  | "last-two-thirds"
+  | "center-two-thirds"
+  | "top-vertical-third"
+  | "middle-vertical-third"
+  | "bottom-vertical-third"
+  | "top-vertical-two-thirds"
+  | "bottom-vertical-two-thirds"
+  | "first-fourth"
+  | "second-fourth"
+  | "third-fourth"
+  | "last-fourth"
+  | "first-three-fourths"
+  | "last-three-fourths"
+  | "center-three-fourths"
+  | "top-left-third"
+  | "top-right-third"
+  | "bottom-left-third"
+  | "bottom-right-third"
+  | "top-left-sixth"
+  | "top-center-sixth"
+  | "top-right-sixth"
+  | "bottom-left-sixth"
+  | "bottom-center-sixth"
+  | "bottom-right-sixth"
+  | "top-left-ninth"
+  | "top-center-ninth"
+  | "top-right-ninth"
+  | "middle-left-ninth"
+  | "middle-center-ninth"
+  | "middle-right-ninth"
+  | "bottom-left-ninth"
+  | "bottom-center-ninth"
+  | "bottom-right-ninth"
   | "maximize"
+  | "almost-maximize"
+  | "maximize-height"
+  | "center-half"
   | "center"
   | "restore";
 
-/** Order and labels mirror `WindowAction::ALL` / `WindowAction::label`. */
-export const ACTIONS: { id: WindowAction; label: string }[] = [
-  { id: "left-half", label: "Left Half" },
-  { id: "right-half", label: "Right Half" },
-  { id: "top-half", label: "Top Half" },
-  { id: "bottom-half", label: "Bottom Half" },
-  { id: "maximize", label: "Maximize" },
-  { id: "center", label: "Center" },
-  { id: "restore", label: "Restore" },
+/** Presentation families, mirroring `WindowFamily::ALL` and its labels. */
+export const FAMILIES: { id: string; label: string }[] = [
+  { id: "halves", label: "Halves" },
+  { id: "corners", label: "Corners" },
+  { id: "horizontal-thirds", label: "Horizontal Thirds" },
+  { id: "vertical-thirds", label: "Vertical Thirds" },
+  { id: "fourths", label: "Fourths" },
+  { id: "corner-thirds", label: "Corner Thirds" },
+  { id: "sixths", label: "Sixths" },
+  { id: "ninths", label: "Ninths" },
+  { id: "sizing", label: "Size & Position" },
+];
+
+/**
+ * Order, labels and families mirror `WindowAction::ALL`, `WindowAction::label`
+ * and `WindowAction::family`. `family` keys into {@link FAMILIES}.
+ */
+export const ACTIONS: { id: WindowAction; label: string; family: string }[] = [
+  { id: "left-half", label: "Left Half", family: "halves" },
+  { id: "right-half", label: "Right Half", family: "halves" },
+  { id: "top-half", label: "Top Half", family: "halves" },
+  { id: "bottom-half", label: "Bottom Half", family: "halves" },
+  { id: "top-left", label: "Top Left", family: "corners" },
+  { id: "top-right", label: "Top Right", family: "corners" },
+  { id: "bottom-left", label: "Bottom Left", family: "corners" },
+  { id: "bottom-right", label: "Bottom Right", family: "corners" },
+  { id: "first-third", label: "First Third", family: "horizontal-thirds" },
+  { id: "center-third", label: "Center Third", family: "horizontal-thirds" },
+  { id: "last-third", label: "Last Third", family: "horizontal-thirds" },
+  {
+    id: "first-two-thirds",
+    label: "First Two Thirds",
+    family: "horizontal-thirds",
+  },
+  {
+    id: "last-two-thirds",
+    label: "Last Two Thirds",
+    family: "horizontal-thirds",
+  },
+  {
+    id: "center-two-thirds",
+    label: "Center Two Thirds",
+    family: "horizontal-thirds",
+  },
+  {
+    id: "top-vertical-third",
+    label: "Top Vertical Third",
+    family: "vertical-thirds",
+  },
+  {
+    id: "middle-vertical-third",
+    label: "Middle Vertical Third",
+    family: "vertical-thirds",
+  },
+  {
+    id: "bottom-vertical-third",
+    label: "Bottom Vertical Third",
+    family: "vertical-thirds",
+  },
+  {
+    id: "top-vertical-two-thirds",
+    label: "Top Vertical Two Thirds",
+    family: "vertical-thirds",
+  },
+  {
+    id: "bottom-vertical-two-thirds",
+    label: "Bottom Vertical Two Thirds",
+    family: "vertical-thirds",
+  },
+  { id: "first-fourth", label: "First Fourth", family: "fourths" },
+  { id: "second-fourth", label: "Second Fourth", family: "fourths" },
+  { id: "third-fourth", label: "Third Fourth", family: "fourths" },
+  { id: "last-fourth", label: "Last Fourth", family: "fourths" },
+  {
+    id: "first-three-fourths",
+    label: "First Three Fourths",
+    family: "fourths",
+  },
+  {
+    id: "last-three-fourths",
+    label: "Last Three Fourths",
+    family: "fourths",
+  },
+  {
+    id: "center-three-fourths",
+    label: "Center Three Fourths",
+    family: "fourths",
+  },
+  { id: "top-left-third", label: "Top Left Third", family: "corner-thirds" },
+  { id: "top-right-third", label: "Top Right Third", family: "corner-thirds" },
+  {
+    id: "bottom-left-third",
+    label: "Bottom Left Third",
+    family: "corner-thirds",
+  },
+  {
+    id: "bottom-right-third",
+    label: "Bottom Right Third",
+    family: "corner-thirds",
+  },
+  { id: "top-left-sixth", label: "Top Left Sixth", family: "sixths" },
+  { id: "top-center-sixth", label: "Top Center Sixth", family: "sixths" },
+  { id: "top-right-sixth", label: "Top Right Sixth", family: "sixths" },
+  { id: "bottom-left-sixth", label: "Bottom Left Sixth", family: "sixths" },
+  {
+    id: "bottom-center-sixth",
+    label: "Bottom Center Sixth",
+    family: "sixths",
+  },
+  {
+    id: "bottom-right-sixth",
+    label: "Bottom Right Sixth",
+    family: "sixths",
+  },
+  { id: "top-left-ninth", label: "Top Left Ninth", family: "ninths" },
+  { id: "top-center-ninth", label: "Top Center Ninth", family: "ninths" },
+  { id: "top-right-ninth", label: "Top Right Ninth", family: "ninths" },
+  { id: "middle-left-ninth", label: "Middle Left Ninth", family: "ninths" },
+  {
+    id: "middle-center-ninth",
+    label: "Middle Center Ninth",
+    family: "ninths",
+  },
+  {
+    id: "middle-right-ninth",
+    label: "Middle Right Ninth",
+    family: "ninths",
+  },
+  { id: "bottom-left-ninth", label: "Bottom Left Ninth", family: "ninths" },
+  {
+    id: "bottom-center-ninth",
+    label: "Bottom Center Ninth",
+    family: "ninths",
+  },
+  {
+    id: "bottom-right-ninth",
+    label: "Bottom Right Ninth",
+    family: "ninths",
+  },
+  { id: "maximize", label: "Maximize", family: "sizing" },
+  { id: "almost-maximize", label: "Almost Maximize", family: "sizing" },
+  { id: "maximize-height", label: "Maximize Height", family: "sizing" },
+  { id: "center-half", label: "Center Half", family: "sizing" },
+  { id: "center", label: "Center", family: "sizing" },
+  { id: "restore", label: "Restore", family: "sizing" },
 ];
 
 /** `KeyCode` — serde `rename_all = "kebab-case"`. Mirrors `KeyCode::ALL`. */
@@ -164,6 +344,8 @@ export interface Config {
   gap: Gaps;
   launchOnLogin: boolean;
   showTrayIcon: boolean;
+  almostMaximizeWidth: number;
+  almostMaximizeHeight: number;
 }
 
 export type PermissionStatus = "granted" | "denied" | "not-required";
