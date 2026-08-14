@@ -76,29 +76,46 @@ Two defaults collide with Xbox Game Bar, and **Tile cannot win these**:
 
 | Shortcut | Tile | Game Bar |
 | -------- | ---- | -------- |
-| `Win` + `Alt` + `G` | Last third | Record last 30 seconds |
+| `Win` + `Alt` + `G` | Last third | Opens the Game Bar overlay |
 | `Win` + `Alt` + `R` | Center two thirds | Start/stop recording |
 
-Both will fire: the window tiles *and* Game Bar starts recording.
+Both will fire: the window tiles *and* Game Bar reacts.
 
-This is not something Tile can fix. Game Bar's capture shortcuts are handled by
-the GameDVR component through an input path that never reaches the user-mode
-keyboard hook, so there is nothing to suppress. Shell shortcuts such as Aero
-Snap *are* interceptable, and Tile blocks those successfully — GameDVR is the
-exception. (`Win`+`Alt`+`M`, `Win`+`Alt`+`B` and `Win`+`Alt`+`PrtScn` are
-reserved the same way; Tile does not bind them.)
+This is not something Tile can fix, and it is not caused by Tile. Pressing
+`Win`+`Alt`+`G` opens the Game Bar overlay **even with Tile shut down** — Game
+Bar's *Open Game Bar* hotkey is `Win`+`G`, and its handler matches loosely,
+ignoring the extra `Alt`. (The shell itself does not behave this way:
+`Win`+`Alt`+`↑` never triggers `Win`+`↑`.)
+
+Game Bar's capture shortcuts are also handled by the GameDVR component through
+an input path that never reaches the user-mode keyboard hook, so there is
+nothing for Tile to suppress. Ordinary shell shortcuts such as Aero Snap *are*
+interceptable, and Tile blocks those successfully — GameDVR is the exception.
+(`Win`+`Alt`+`M`, `Win`+`Alt`+`B` and `Win`+`Alt`+`PrtScn` are reserved the
+same way; Tile does not bind them.)
 
 These letters were kept anyway, deliberately. They are Rectangle's, and they
 are spatially mnemonic rather than arbitrary, so anyone running Rectangle on a
 Mac and Tile on Windows keeps one set of habits. The conflict is fixable by the
 user in about twenty seconds; a broken mnemonic would not be.
 
-**To fix it**, remap Game Bar's two conflicting shortcuts:
+**To fix it**, remap Game Bar's shortcuts:
 
 1. Press `Win` + `G` to open Game Bar
 2. Go to **Settings ▸ Inputs ▸ Keyboard**
-3. Give **Record last 30 seconds** and **Start/stop recording** new shortcuts
+3. Give these entries new shortcuts:
+
+| Game Bar entry | Default | Why | Suggested |
+| -------------- | ------- | --- | --------- |
+| **Game Bar** | `Win` + `G` | Matches `Win`+`Alt`+`G` loosely — this is the one that opens the overlay | `Ctrl` + `Shift` + `F7` |
+| **Record last 30 seconds** | `Win` + `Alt` + `G` | Exact clash with *Last third* | `Ctrl` + `Shift` + `F9` |
+| **Start/stop recording** | `Win` + `Alt` + `R` | Exact clash with *Center two thirds* | `Ctrl` + `Shift` + `F10` |
+
 4. Click **Save**
+
+Remapping **Game Bar** itself is the important one. Changing only the capture
+shortcuts leaves the overlay popping up, because that comes from the loose
+`Win`+`G` match.
 
 Game Bar has no way to leave a shortcut unset — it requires `Ctrl`, `Alt` or
 `Shift` plus another key. That restriction works in your favour: the field will
@@ -106,25 +123,16 @@ not accept the `Win` key, and **every Tile shortcut on Windows includes `Win`**,
 so whatever you choose cannot collide with Tile. You only need to avoid your
 other applications.
 
-| Game Bar action | Default | Suggested replacement |
-| --------------- | ------- | --------------------- |
-| Record last 30 seconds | `Win` + `Alt` + `G` | `Ctrl` + `Shift` + `F9` |
-| Start/stop recording | `Win` + `Alt` + `R` | `Ctrl` + `Shift` + `F10` |
-
 Function keys rather than letters, because `Ctrl`+`Shift`+`R` is hard-reload in
 every browser and `Ctrl`+`Shift`+`G` opens the Git panel in VS Code, whereas
-`Ctrl`+`Shift`+`F9`/`F10` are rarely bound by anything.
+`Ctrl`+`Shift`+`F7`/`F9`/`F10` are rarely bound by anything.
 
 If you pick your own, avoid `Ctrl`+`Alt`+anything — that is `AltGr` on
 international layouts — and `Alt`+`Shift`+anything, since `Alt`+`Shift` on its
 own switches keyboard layout in Windows.
 
-Game Bar's other reserved combinations (`Win`+`G`, `Win`+`Alt`+`M`,
-`Win`+`Alt`+`B`, `Win`+`Alt`+`PrtScn`) need no attention: Tile does not bind
-them.
-
-Alternatively, if you never use Game Bar's capture features, turn them off
-entirely in **Settings ▸ Gaming ▸ Captures**, or rebind Tile's *Last third* and
+Alternatively, if you never use Game Bar, turn it off entirely in
+**Settings ▸ Gaming ▸ Xbox Game Bar**, or rebind Tile's *Last third* and
 *Center two thirds* instead — every Tile shortcut is rebindable.
 
 Tile will not change Game Bar's settings for you. An application silently

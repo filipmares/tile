@@ -412,16 +412,21 @@ const BASE_MODIFIERS: Modifiers = Modifiers(Modifiers::META.0 | Modifiers::ALT.0
 ///
 /// # Known conflict on Windows
 ///
-/// `Win+Alt+G` and `Win+Alt+R` are also Xbox Game Bar's "record last 30
-/// seconds" and "start/stop recording". **Tile cannot suppress these.** Game
-/// Bar's capture shortcuts are handled by the GameDVR component through an
-/// input path that never reaches the keyboard hook, so both actions fire.
-/// `Win+Alt+M`, `Win+Alt+B` and `Win+Alt+PrtScn` are reserved the same way and
-/// are deliberately left unbound.
+/// `Win+Alt+G` and `Win+Alt+R` also reach Xbox Game Bar, and **Tile cannot
+/// suppress them.**
+///
+/// `Win+Alt+G` is the awkward one, and it is *not* caused by Tile: Game Bar's
+/// "open Game Bar" hotkey is `Win+G`, and its handler matches loosely, ignoring
+/// the extra `Alt`. Pressing `Win+Alt+G` opens the overlay even with Tile shut
+/// down. (The shell itself is strict — `Win+Alt+Up` never triggers `Win+Up`.)
+/// `Win+Alt+R` is Game Bar's start/stop recording, handled by GameDVR through
+/// an input path that never reaches the keyboard hook. `Win+Alt+M`,
+/// `Win+Alt+B` and `Win+Alt+PrtScn` are reserved the same way and are
+/// deliberately left unbound.
 ///
 /// This is a considered trade, not an oversight: the letters are kept so that
 /// muscle memory carries between Rectangle on macOS and Tile on Windows, and
-/// the user can clear the Game Bar shortcut in a few seconds. If you are
+/// the user can remap the Game Bar shortcuts in a few seconds. If you are
 /// tempted to "fix" it by moving these bindings, read
 /// <https://github.com/filipmares/tile/issues/18> first.
 pub fn default_bindings() -> BTreeMap<WindowAction, Option<Hotkey>> {
