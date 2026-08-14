@@ -255,6 +255,175 @@ impl Default for SizeOptions {
     }
 }
 
+/// What a *repeated* press of an already-satisfied action does.
+///
+/// This mirrors Rectangle's `subsequentExecutionMode`. Rectangle offers six
+/// values; Tile ships the two that need no multi-display support:
+///
+/// * [`SubsequentExecutionMode::CycleSizes`] — Rectangle's `resize`, the
+///   default there and here: the window cycles through [`Config::cycle_sizes`].
+/// * [`SubsequentExecutionMode::DoNothing`] — Rectangle's `none`: a repeat is
+///   a no-op, which is what Tile did before cycling existed.
+///
+/// Rectangle's remaining values (`acrossMonitor`, `acrossAndResize`,
+/// `cycleMonitor`) all move the window to another display. This enum is the
+/// seam where they will land once multi-display support arrives; nothing else
+/// needs to change to add them, because [`crate::Engine::plan`] already
+/// branches on this value before it computes any geometry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SubsequentExecutionMode {
+    /// Repeating an action walks the window through the configured sizes.
+    #[default]
+    CycleSizes,
+    /// Repeating an action does nothing.
+    DoNothing,
+}
+
+impl SubsequentExecutionMode {
+    /// Stable config identifier.
+    pub const fn id(self) -> &'static str {
+        match self {
+            SubsequentExecutionMode::CycleSizes => "cycle-sizes",
+            SubsequentExecutionMode::DoNothing => "do-nothing",
+        }
+    }
+
+    fn from_id(id: &str) -> Option<Self> {
+        match id {
+            "cycle-sizes" => Some(SubsequentExecutionMode::CycleSizes),
+            "do-nothing" => Some(SubsequentExecutionMode::DoNothing),
+            _ => None,
+        }
+    }
+}
+
+/// An unknown mode falls back to the default rather than failing the whole
+/// load, so a config written by a newer build (say, one that grows a
+/// `next-display` mode) still opens on an older one.
+impl<'de> Deserialize<'de> for SubsequentExecutionMode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Ok(SubsequentExecutionMode::from_id(&raw).unwrap_or_default())
+    }
+}
+
+/// One step of a size cycle, as a fraction of the work area along the axis the
+/// action grows on. Mirrors Rectangle's `CycleSize`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CycleSize {
+    OneQuarter,
+    OneThird,
+    OneHalf,
+    TwoThirds,
+    ThreeQuarters,
+}
+
+impl CycleSize {
+    /// Every size, smallest first.
+    pub const ALL: [CycleSize; 5] = [
+        CycleSize::OneQuarter,
+        CycleSize::OneThird,
+        CycleSize::OneHalf,
+        CycleSize::TwoThirds,
+        CycleSize::ThreeQuarters,
+    ];
+
+    /// The size a cycle always starts from, matching Rectangle's
+    /// `CycleSize.firstSize`. It is also the size every cycling action's own
+    /// rectangle already has, so the first press lands on it naturally.
+    pub const FIRST: CycleSize = CycleSize::OneHalf;
+
+    /// Stable config identifier. These strings are persisted; never rename one.
+    pub const fn id(self) -> &'static str {
+        match self {
+            CycleSize::OneQuarter => "one-quarter",
+            CycleSize::OneThird => "one-third",
+            CycleSize::OneHalf => "one-half",
+            CycleSize::TwoThirds => "two-thirds",
+            CycleSize::ThreeQuarters => "three-quarters",
+        }
+    }
+
+    /// Human-readable label for the settings window.
+    pub const fn label(self) -> &'static str {
+        match self {
+            CycleSize::OneQuarter => "One Quarter",
+            CycleSize::OneThird => "One Third",
+            CycleSize::OneHalf => "One Half",
+            CycleSize::TwoThirds => "Two Thirds",
+            CycleSize::ThreeQuarters => "Three Quarters",
+        }
+    }
+
+    /// The fraction of the work area this size occupies.
+    pub const fn fraction(self) -> f64 {
+        match self {
+            CycleSize::OneQuarter => 1.0 / 4.0,
+            CycleSize::OneThird => 1.0 / 3.0,
+            CycleSize::OneHalf => 1.0 / 2.0,
+            CycleSize::TwoThirds => 2.0 / 3.0,
+            CycleSize::ThreeQuarters => 3.0 / 4.0,
+        }
+    }
+
+    fn from_id(id: &str) -> Option<Self> {
+        CycleSize::ALL.into_iter().find(|s| s.id() == id)
+    }
+
+    /// Position in the canonical cycle order: start at [`CycleSize::FIRST`],
+    /// grow to the largest size, then wrap around to the smallest and grow
+    /// back. With every size selected that is ½, ⅔, ¾, ¼, ⅓ — Rectangle's
+    /// `CycleSize.sortedSizes`.
+    fn cycle_rank(self) -> u8 {
+        match self {
+            // Ranked so that FIRST leads, larger sizes follow in ascending
+            // order, then the smaller ones, also ascending.
+            CycleSize::OneHalf => 0,
+            CycleSize::TwoThirds => 1,
+            CycleSize::ThreeQuarters => 2,
+            CycleSize::OneQuarter => 3,
+            CycleSize::OneThird => 4,
+        }
+    }
+}
+
+/// An unrecognised entry is dropped rather than failing the load, for the same
+/// forward-compatibility reason as [`SubsequentExecutionMode`].
+impl<'de> Deserialize<'de> for CycleSize {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        CycleSize::from_id(&raw)
+            .ok_or_else(|| de::Error::custom(format!("unknown cycle size {raw}")))
+    }
+}
+
+fn deserialize_cycle_sizes<'de, D>(deserializer: D) -> Result<Vec<CycleSize>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw = Vec::<String>::deserialize(deserializer)?;
+    Ok(raw.iter().filter_map(|s| CycleSize::from_id(s)).collect())
+}
+
+/// The sizes a repeated shortcut cycles through by default, matching
+/// Rectangle's `CycleSize.defaultSizes` — a half, then two thirds, then a
+/// third.
+fn default_cycle_sizes() -> Vec<CycleSize> {
+    vec![
+        CycleSize::OneHalf,
+        CycleSize::TwoThirds,
+        CycleSize::OneThird,
+    ]
+}
+
 /// Persisted user settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -276,6 +445,17 @@ pub struct Config {
     /// [`WindowAction::AlmostMaximize`] height as a fraction of the work area.
     #[serde(default = "default_almost_maximize_fraction")]
     pub almost_maximize_height: f64,
+    /// What a repeated press of an already-satisfied action does.
+    #[serde(default)]
+    pub subsequent_execution_mode: SubsequentExecutionMode,
+    /// The sizes a repeated press cycles through, in cycle order. An empty
+    /// list disables cycling as surely as
+    /// [`SubsequentExecutionMode::DoNothing`] does.
+    #[serde(
+        default = "default_cycle_sizes",
+        deserialize_with = "deserialize_cycle_sizes"
+    )]
+    pub cycle_sizes: Vec<CycleSize>,
 }
 
 impl Default for Config {
@@ -287,6 +467,8 @@ impl Default for Config {
             show_tray_icon: default_true(),
             almost_maximize_width: default_almost_maximize_fraction(),
             almost_maximize_height: default_almost_maximize_fraction(),
+            subsequent_execution_mode: SubsequentExecutionMode::default(),
+            cycle_sizes: default_cycle_sizes(),
         }
     }
 }
@@ -313,6 +495,27 @@ impl Config {
         self.gaps.normalize();
         self.almost_maximize_width = normalize_fraction(self.almost_maximize_width);
         self.almost_maximize_height = normalize_fraction(self.almost_maximize_height);
+        self.normalize_cycle_sizes();
+    }
+
+    /// Drops duplicates and puts the cycle into its canonical order, so the
+    /// sequence a user sees does not depend on the order the settings window
+    /// happened to write the sizes in.
+    fn normalize_cycle_sizes(&mut self) {
+        self.cycle_sizes.sort_by_key(|s| s.cycle_rank());
+        self.cycle_sizes.dedup();
+    }
+
+    /// The sizes a repeated press cycles through, in cycle order.
+    pub fn cycle_sizes(&self) -> &[CycleSize] {
+        &self.cycle_sizes
+    }
+
+    /// Whether a repeat should cycle at all: the mode has to allow it and
+    /// there has to be at least one size to cycle through.
+    pub fn cycles_sizes(&self) -> bool {
+        self.subsequent_execution_mode == SubsequentExecutionMode::CycleSizes
+            && !self.cycle_sizes.is_empty()
     }
 
     /// The size-variant fractions, derived from the persisted configuration.
@@ -842,6 +1045,127 @@ mod tests {
         };
         let parsed = Config::from_json(&config.to_json().unwrap()).unwrap();
         assert_eq!(config, parsed);
+    }
+
+    #[test]
+    fn cycling_defaults_match_rectangle() {
+        let config = Config::default();
+        assert_eq!(
+            config.subsequent_execution_mode,
+            SubsequentExecutionMode::CycleSizes
+        );
+        assert_eq!(
+            config.cycle_sizes(),
+            [
+                CycleSize::OneHalf,
+                CycleSize::TwoThirds,
+                CycleSize::OneThird
+            ]
+        );
+        assert!(config.cycles_sizes());
+    }
+
+    #[test]
+    fn a_config_predating_cycling_still_loads() {
+        // Exactly what an older build would have written: no cycling keys at
+        // all, and the legacy scalar gap for good measure.
+        let json = r#"{
+            "bindings": {},
+            "gap": 8,
+            "launchOnLogin": true,
+            "showTrayIcon": false
+        }"#;
+        let config = Config::from_json(json).unwrap();
+        assert_eq!(config.gaps, Gaps::uniform(8.0));
+        assert!(config.launch_on_login);
+        assert!(!config.show_tray_icon);
+        // Cycling arrives switched on, with Rectangle's defaults.
+        assert_eq!(
+            config.subsequent_execution_mode,
+            SubsequentExecutionMode::CycleSizes
+        );
+        assert_eq!(config.cycle_sizes(), Config::default().cycle_sizes());
+    }
+
+    #[test]
+    fn cycling_settings_round_trip_through_json() {
+        let config = Config {
+            subsequent_execution_mode: SubsequentExecutionMode::DoNothing,
+            cycle_sizes: vec![CycleSize::OneHalf, CycleSize::ThreeQuarters],
+            ..Default::default()
+        };
+        let json = config.to_json().unwrap();
+        assert!(json.contains(r#""subsequentExecutionMode": "do-nothing""#));
+        assert!(json.contains(r#""three-quarters""#));
+        assert_eq!(Config::from_json(&json).unwrap(), config);
+    }
+
+    #[test]
+    fn unknown_cycling_values_fall_back_instead_of_failing_the_load() {
+        // A config written by a future build that grew a "next-display" mode
+        // and a size this build does not know about.
+        let json = r#"{
+            "subsequentExecutionMode": "next-display",
+            "cycleSizes": ["one-half", "one-fifth", "two-thirds"]
+        }"#;
+        let config = Config::from_json(json).unwrap();
+        assert_eq!(
+            config.subsequent_execution_mode,
+            SubsequentExecutionMode::CycleSizes
+        );
+        assert_eq!(
+            config.cycle_sizes(),
+            [CycleSize::OneHalf, CycleSize::TwoThirds]
+        );
+    }
+
+    #[test]
+    fn cycle_sizes_are_deduplicated_and_ordered_canonically() {
+        let mut config = Config {
+            cycle_sizes: vec![
+                CycleSize::OneThird,
+                CycleSize::ThreeQuarters,
+                CycleSize::OneHalf,
+                CycleSize::OneThird,
+                CycleSize::OneQuarter,
+                CycleSize::TwoThirds,
+            ],
+            ..Default::default()
+        };
+        config.normalize();
+        // Rectangle's order: start at a half, grow, then wrap to the smallest.
+        assert_eq!(
+            config.cycle_sizes(),
+            [
+                CycleSize::OneHalf,
+                CycleSize::TwoThirds,
+                CycleSize::ThreeQuarters,
+                CycleSize::OneQuarter,
+                CycleSize::OneThird,
+            ]
+        );
+    }
+
+    #[test]
+    fn an_empty_size_list_disables_cycling() {
+        let config = Config::from_json(r#"{"cycleSizes": []}"#).unwrap();
+        assert!(config.cycle_sizes().is_empty());
+        assert!(!config.cycles_sizes());
+    }
+
+    #[test]
+    fn cycle_size_ids_are_stable_and_unique() {
+        let mut ids: Vec<&str> = CycleSize::ALL.iter().map(|s| s.id()).collect();
+        ids.sort_unstable();
+        let count = ids.len();
+        ids.dedup();
+        assert_eq!(ids.len(), count);
+        // These strings are persisted config keys; pin them.
+        assert_eq!(CycleSize::OneHalf.id(), "one-half");
+        assert_eq!(CycleSize::TwoThirds.id(), "two-thirds");
+        assert_eq!(CycleSize::ThreeQuarters.id(), "three-quarters");
+        assert_eq!(CycleSize::OneThird.id(), "one-third");
+        assert_eq!(CycleSize::OneQuarter.id(), "one-quarter");
     }
 
     #[test]
