@@ -391,11 +391,16 @@ const BASE_MODIFIERS: Modifiers = Modifiers(Modifiers::CONTROL.0 | Modifiers::AL
 #[cfg(not(target_os = "macos"))]
 const BASE_MODIFIERS: Modifiers = Modifiers(Modifiers::META.0 | Modifiers::ALT.0);
 
-/// Platform-appropriate default key bindings.
+/// Default key bindings.
 ///
-/// The letter bindings are **identical on both platforms**, so anyone using
-/// Tile on a Mac and a PC keeps one set of habits. They are spatially mnemonic
-/// rather than arbitrary — a 2x3 block on the keyboard:
+/// **Every default sits on the same base modifier**, so the two platforms
+/// differ in exactly one thing: what that modifier is. `Control+Option` on
+/// macOS, `Win+Alt` on Windows. Nothing else varies, so a user with a Mac and
+/// a PC learns one set of shortcuts.
+///
+/// The arrows point where the window goes, maximize and restore use `Enter`
+/// and `Backspace`, and the sizes are spatially mnemonic — a 2x3 block on the
+/// keyboard:
 ///
 /// ```text
 ///   Q  ·  E     two-thirds  (first / last; center is unbound, see below)
@@ -406,9 +411,19 @@ const BASE_MODIFIERS: Modifiers = Modifiers(Modifiers::META.0 | Modifiers::ALT.0
 /// right. The corners are a second block, `U`/`I` over `J`/`K`, matching the
 /// four screen corners.
 ///
-/// Only the halves differ per platform: Windows keeps `Win+Arrow`, which is
-/// what users there already reach for, claimed back from Aero Snap by the
-/// low-level keyboard hook in the Windows backend.
+/// # Why Windows does not use `Win+Arrow`
+///
+/// It used to. Moving the halves onto `Win+Alt` with everything else means
+/// Aero Snap keeps working, so users who want the native behaviour still have
+/// it and Tile's richer actions live entirely in its own namespace.
+///
+/// It is worth knowing that **no two-modifier arrow combination is unclaimed
+/// on Windows**: `Win+Arrow` is Aero Snap, `Win+Alt+Arrow` is Windows 11's
+/// snap variants, `Win+Shift+Arrow` moves between monitors and
+/// `Win+Ctrl+Left/Right` switches virtual desktop. Tile therefore preempts
+/// *something* whichever it picks. `Win+Alt` is the best of them: it is the
+/// least used, and the keyboard hook takes it cleanly because the owner
+/// registers through `RegisterHotKey`, which the hook runs ahead of.
 ///
 /// # Keys Xbox Game Bar reserves
 ///
@@ -439,65 +454,40 @@ const BASE_MODIFIERS: Modifiers = Modifiers(Modifiers::META.0 | Modifiers::ALT.0
 ///
 /// # Why not Rectangle's letters
 ///
-/// Rectangle uses the same shape one column to the right, `D`/`F`/`G` for the
+/// Rectangle uses the same block one column to the right, `D`/`F`/`G` for the
 /// thirds with `E`/`R`/`T` above, and Tile shipped that briefly. Four of those
-/// six keys are reserved, so it had to move. Sliding the block left keeps the
-/// geometry exactly — the mnemonic is positional, not alphabetic.
-///
-/// The letters moved on macOS too, so both platforms match. Tile is its own
-/// app rather than a Rectangle port, and one consistent set of shortcuts
-/// across a user's machines is worth more than compatibility with a different
-/// app on one of them.
+/// six keys are reserved by Game Bar, so it had to move. Sliding the block
+/// left keeps the geometry exactly — the mnemonic is positional, not
+/// alphabetic. The letters moved on macOS too, so both platforms match.
 pub fn default_bindings() -> BTreeMap<WindowAction, Option<Hotkey>> {
     let mut map = BTreeMap::new();
     let base = BASE_MODIFIERS;
 
-    #[cfg(target_os = "macos")]
-    {
-        map.insert(
-            WindowAction::LeftHalf,
-            Some(Hotkey::new(base, KeyCode::Left)),
-        );
-        map.insert(
-            WindowAction::RightHalf,
-            Some(Hotkey::new(base, KeyCode::Right)),
-        );
-        map.insert(WindowAction::TopHalf, Some(Hotkey::new(base, KeyCode::Up)));
-        map.insert(
-            WindowAction::BottomHalf,
-            Some(Hotkey::new(base, KeyCode::Down)),
-        );
-        map.insert(
-            WindowAction::Maximize,
-            Some(Hotkey::new(base, KeyCode::Enter)),
-        );
-        map.insert(
-            WindowAction::Restore,
-            Some(Hotkey::new(base, KeyCode::Backspace)),
-        );
-    }
+    // Every default sits on the base modifier, so the two platforms differ
+    // only in what that modifier is. Halves point where the window goes;
+    // maximize and restore mirror Rectangle's Enter and Backspace.
+    map.insert(
+        WindowAction::LeftHalf,
+        Some(Hotkey::new(base, KeyCode::Left)),
+    );
+    map.insert(
+        WindowAction::RightHalf,
+        Some(Hotkey::new(base, KeyCode::Right)),
+    );
+    map.insert(WindowAction::TopHalf, Some(Hotkey::new(base, KeyCode::Up)));
+    map.insert(
+        WindowAction::BottomHalf,
+        Some(Hotkey::new(base, KeyCode::Down)),
+    );
+    map.insert(
+        WindowAction::Maximize,
+        Some(Hotkey::new(base, KeyCode::Enter)),
+    );
+    map.insert(
+        WindowAction::Restore,
+        Some(Hotkey::new(base, KeyCode::Backspace)),
+    );
 
-    #[cfg(not(target_os = "macos"))]
-    {
-        let win = Modifiers::META;
-        map.insert(
-            WindowAction::LeftHalf,
-            Some(Hotkey::new(win, KeyCode::Left)),
-        );
-        map.insert(
-            WindowAction::RightHalf,
-            Some(Hotkey::new(win, KeyCode::Right)),
-        );
-        map.insert(WindowAction::Maximize, Some(Hotkey::new(win, KeyCode::Up)));
-        map.insert(WindowAction::Restore, Some(Hotkey::new(win, KeyCode::Down)));
-        map.insert(WindowAction::TopHalf, Some(Hotkey::new(base, KeyCode::Up)));
-        map.insert(
-            WindowAction::BottomHalf,
-            Some(Hotkey::new(base, KeyCode::Down)),
-        );
-    }
-
-    // Shared across platforms: only the modifier differs.
     map.insert(WindowAction::Center, Some(Hotkey::new(base, KeyCode::C)));
     map.insert(
         WindowAction::FirstThird,
@@ -614,31 +604,50 @@ mod tests {
         );
     }
 
-    /// The letters must be the same on every platform, so that someone using
-    /// Tile on both a Mac and a PC has one set of habits rather than two.
+    /// Every default must be identical across platforms apart from the base
+    /// modifier, so someone with a Mac and a PC learns one set of shortcuts.
     /// Hard-coded rather than derived, so a platform-specific edit to
     /// `default_bindings` fails here instead of drifting silently.
     #[test]
-    fn letter_defaults_do_not_vary_by_platform() {
+    fn defaults_differ_only_by_the_base_modifier() {
         let config = Config::default();
-        for (action, key) in [
+        let expected = [
+            (WindowAction::LeftHalf, KeyCode::Left),
+            (WindowAction::RightHalf, KeyCode::Right),
+            (WindowAction::TopHalf, KeyCode::Up),
+            (WindowAction::BottomHalf, KeyCode::Down),
+            (WindowAction::Maximize, KeyCode::Enter),
+            (WindowAction::Restore, KeyCode::Backspace),
+            (WindowAction::Center, KeyCode::C),
             (WindowAction::FirstThird, KeyCode::A),
             (WindowAction::CenterThird, KeyCode::S),
             (WindowAction::LastThird, KeyCode::D),
             (WindowAction::FirstTwoThirds, KeyCode::Q),
             (WindowAction::LastTwoThirds, KeyCode::E),
-            (WindowAction::Center, KeyCode::C),
             (WindowAction::TopLeft, KeyCode::U),
             (WindowAction::TopRight, KeyCode::I),
             (WindowAction::BottomLeft, KeyCode::J),
             (WindowAction::BottomRight, KeyCode::K),
-        ] {
+        ];
+        for (action, key) in expected {
+            let hotkey = config.binding(action).expect("action must be bound");
             assert_eq!(
-                config.binding(action).map(|h| h.key),
-                Some(key),
+                hotkey.key, key,
                 "{action} must use the same key on every platform"
             );
+            assert_eq!(
+                hotkey.modifiers, BASE_MODIFIERS,
+                "{action} should sit on the base modifier"
+            );
         }
+
+        // The one intentional exception: maximize-height adds Shift so it can
+        // share the Up arrow with top-half.
+        let mh = config
+            .binding(WindowAction::MaximizeHeight)
+            .expect("maximize height must be bound");
+        assert_eq!(mh.key, KeyCode::Up);
+        assert_eq!(mh.modifiers, BASE_MODIFIERS | Modifiers::SHIFT);
     }
 
     /// Windows treats `Ctrl+Alt` as `AltGr`, which many international layouts

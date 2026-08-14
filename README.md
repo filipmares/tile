@@ -8,60 +8,66 @@ app — built from scratch in Rust so the same window-tiling ergonomics work on
 both macOS **and** Windows. Snap the focused window to halves of the screen,
 maximize it, center it, or undo the last move, all from the keyboard.
 
-> **Status: early MVP.** Tile currently implements a focused set of actions:
-> **left half, right half, top half, bottom half, maximize, center, and
-> restore**. That is the whole scope today — it is deliberately small. More
-> actions (quarters, thirds, multi-monitor throws, and a settings UI) are
-> planned, but this README only documents what actually works right now.
+> **Status: early days.** Tile implements 51 window actions — halves, thirds,
+> two-thirds, fourths, corner thirds, sixths, ninths, corners, maximize,
+> maximize-height, almost-maximize, center and restore — with a settings UI and
+> a tray/menu-bar icon. Cycling, multi-monitor throws, per-app rules and
+> drag-snapping are not built yet. This README documents only what actually
+> works today.
 
 ## Default keyboard shortcuts
 
-Only the halves differ between platforms. Every letter binding is the same on
-Windows and macOS, so one set of habits works on both.
+Every shortcut is the same on both platforms. Only the modifier you hold
+differs:
 
-The letters are spatially mnemonic rather than arbitrary — a 2×3 block on the
-keyboard:
+- **macOS** — `Control` + `Option`
+- **Windows** — `Win` + `Alt`
+
+Hold that, then press:
+
+| Key | Action |
+| --- | ------ |
+| `←` `→` `↑` `↓` | Left / right / top / bottom **half** |
+| `Return` | Maximize |
+| `Backspace` | Restore to the window's previous position |
+| `Shift` + `↑` | Maximize height only |
+| `C` | Center |
+| `A` `S` `D` | First / center / last **third** |
+| `Q` `E` | First / last **two thirds** |
+| `U` `I` `J` `K` | **Corners** — top-left, top-right, bottom-left, bottom-right |
+
+The sizes are spatially mnemonic rather than arbitrary — a 2×3 block on the
+keyboard, with each third directly below its two-thirds variant:
 
 ```text
-  Q  ·  E     two-thirds  (first / last — see below)
+  Q  ·  E     two-thirds  (first / last)
   A  S  D     thirds      (first / center / last)
 ```
 
-Each third sits directly below its two-thirds variant, running left to right.
-The corners are a second block, `U`/`I` over `J`/`K`, mapping onto the four
-screen corners.
+`U`/`I` over `J`/`K` form a second block mapping onto the four screen corners.
 
-Every shortcut is rebindable, and the wider catalogue (fourths, sixths, ninths,
+Everything is rebindable, and the wider catalogue (fourths, sixths, ninths,
 corner thirds) ships unbound — reachable from the tray menu, or bind your own.
 
-| Action            | macOS                            | Windows                       |
-| ----------------- | -------------------------------- | ----------------------------- |
-| Left half         | `Ctrl` + `Option` + `←`          | `Win` + `←`                   |
-| Right half        | `Ctrl` + `Option` + `→`          | `Win` + `→`                   |
-| Top half          | `Ctrl` + `Option` + `↑`          | `Win` + `Alt` + `↑`           |
-| Bottom half       | `Ctrl` + `Option` + `↓`          | `Win` + `Alt` + `↓`           |
-| Maximize          | `Ctrl` + `Option` + `Return`     | `Win` + `↑`                   |
-| Restore           | `Ctrl` + `Option` + `Backspace`  | `Win` + `↓`                   |
-| Maximize height   | `Ctrl` + `Option` + `Shift` + `↑`| `Win` + `Alt` + `Shift` + `↑` |
-| Center            | `Ctrl` + `Option` + `C`          | `Win` + `Alt` + `C`           |
-| First third       | `Ctrl` + `Option` + `A`          | `Win` + `Alt` + `A`           |
-| Center third      | `Ctrl` + `Option` + `S`          | `Win` + `Alt` + `S`           |
-| Last third        | `Ctrl` + `Option` + `D`          | `Win` + `Alt` + `D`           |
-| First two thirds  | `Ctrl` + `Option` + `Q`          | `Win` + `Alt` + `Q`           |
-| Last two thirds   | `Ctrl` + `Option` + `E`          | `Win` + `Alt` + `E`           |
-| Top left          | `Ctrl` + `Option` + `U`          | `Win` + `Alt` + `U`           |
-| Top right         | `Ctrl` + `Option` + `I`          | `Win` + `Alt` + `I`           |
-| Bottom left       | `Ctrl` + `Option` + `J`          | `Win` + `Alt` + `J`           |
-| Bottom right      | `Ctrl` + `Option` + `K`          | `Win` + `Alt` + `K`           |
+### Windows: why not `Win`+Arrow?
 
-### Why Windows uses `Win`+`Alt` and not `Ctrl`+`Alt`
+Because leaving it alone means **Aero Snap keeps working**. Users who want the
+native snapping still have it, and Tile's richer actions live entirely in their
+own namespace.
 
-Mirroring macOS exactly would mean `Ctrl`+`Alt`+letter — but **Windows treats
-`Ctrl`+`Alt` as `AltGr`**. On many international layouts `AltGr`+key is how you
-type `@ € { } [ ] \ ~`. Because Tile's keyboard hook swallows the keystrokes it
-matches, `Ctrl`+`Alt` defaults would make those characters impossible to type;
-on a German layout you could no longer type `@`. `Win`+`Alt` avoids this
-entirely.
+Worth knowing: no two-modifier arrow combination is unclaimed on Windows.
+`Win`+Arrow is Aero Snap, `Win`+`Alt`+Arrow is Windows 11's snap variants,
+`Win`+`Shift`+Arrow moves between monitors, and `Win`+`Ctrl`+`←`/`→` switches
+virtual desktop. Tile preempts *something* whichever it picks. `Win`+`Alt` is
+the least-used of them, and Tile's keyboard hook takes it cleanly because the
+owner registers through `RegisterHotKey`, which the hook runs ahead of.
+
+### Windows: why not `Ctrl`+`Alt` to match macOS exactly?
+
+Because **Windows treats `Ctrl`+`Alt` as `AltGr`**. On many international
+layouts `AltGr`+key is how you type `@ € { } [ ] \ ~`, and Tile's hook swallows
+the keystrokes it matches — so `Ctrl`+`Alt` defaults would make those characters
+impossible to type. On a German layout you could no longer type `@`.
 
 ### Keys Xbox Game Bar reserves
 
@@ -71,9 +77,8 @@ handler matches *loosely*, ignoring the extra `Alt`, so the overlay appears even
 with Tile shut down. The rest are handled by GameDVR through an input path that
 never reaches the keyboard hook.
 
-Users cannot disable them either. Game Bar's settings panel only *adds*
-shortcuts — the built-in ones remain active — so short of uninstalling Game Bar
-there is no remedy.
+Users cannot disable them either — Game Bar's settings panel only *adds*
+shortcuts, leaving the built-in ones active.
 
 The authoritative list is the `VK*` values under
 `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR`:
@@ -89,46 +94,47 @@ The authoritative list is the `VK*` values under
 | Show/hide recording timer | `Win` + `Alt` + `T` |
 | Take a screenshot | `Win` + `Alt` + `PrtScn` |
 
-So `G`, `R`, `M`, `B`, `W` and `T` are all unusable as Tile defaults. A test
-enforces that the defaults stay clear of the whole set.
-
-That is also why **center two thirds ships unbound**: the key directly above `S`
-is `W`, and no other key preserves the block's geometry. It is available from
-the tray menu, or bind it to whatever you like.
+So `G`, `R`, `M`, `B`, `W` and `T` are unusable as defaults, and a test enforces
+that the defaults stay clear of all six. It is also why **center two thirds
+ships unbound**: the key directly above `S` is `W`, and no other key preserves
+the block's geometry.
 
 ### Why not Rectangle's letters
 
-Rectangle uses the same 2×3 shape one column to the right — `D`/`F`/`G` for the
+Rectangle uses the same block one column to the right — `D`/`F`/`G` for the
 thirds with `E`/`R`/`T` above — and Tile shipped that briefly. Four of those six
 keys are reserved by Game Bar, so it had to move. Sliding the block left keeps
 the geometry exactly, because the mnemonic is positional rather than alphabetic.
 
-The letters then moved on macOS too, so that both platforms match. Tile is its
-own app rather than a Rectangle port, and one consistent set of shortcuts across
-your machines is worth more than compatibility with a different app on one of
-them.
+The letters moved on macOS too, so both platforms match. Tile is its own app
+rather than a Rectangle port, and one consistent set of shortcuts across your
+machines is worth more than compatibility with a different app on one of them.
 
-<sub>These tables are generated from `crates/tile-core/src/config.rs`
+<sub>This table is generated from `crates/tile-core/src/config.rs`
 (`default_bindings`) — the single source of truth for Tile's defaults.</sub>
-
 
 ## Platform notes
 
-### Windows: Tile takes over `Win`+Arrow from Aero Snap
+### Windows: the keyboard hook
 
-On Windows, Tile installs a **low-level keyboard hook** (`WH_KEYBOARD_LL`) so it
-can claim `Win`+Arrow combinations that the shell otherwise routes to the
-built-in **Aero Snap**. This means:
+On Windows, Tile installs a **low-level keyboard hook** (`WH_KEYBOARD_LL`)
+rather than registering its shortcuts with the OS. That is what lets it claim
+combinations the shell already owns — `Win`+`Alt`+Arrow belongs to Windows 11's
+snap variants, for instance. This means:
 
-- While Tile is running, `Win`+`←`/`→`/`↑`/`↓` drive Tile instead of Aero Snap.
+- Tile's shortcuts take precedence over the OS's for the combinations it binds.
+  `Win`+Arrow is deliberately left alone, so **Aero Snap keeps working**.
 - The hook **cannot see input directed at windows owned by elevated
   (administrator) processes** unless Tile itself is running as administrator. If
   a shortcut seems to do nothing over an elevated app, that's why.
-- Some corporate security / anti-cheat software is suspicious of global
-  keyboard hooks and may flag or block them.
+- Xbox Game Bar is the one exception it cannot beat — see
+  [Keys Xbox Game Bar reserves](#keys-xbox-game-bar-reserves) above.
+- Some corporate security software is suspicious of global keyboard hooks and
+  may flag or block them.
 
-If you'd rather keep Aero Snap, **rebind** Tile's shortcuts to combinations that
-don't collide with the shell.
+Replacing the hook with `RegisterHotKey` wherever the OS will grant the
+combination is tracked in
+[#19](https://github.com/filipmares/tile/issues/19).
 
 ### macOS: Accessibility permission
 
