@@ -338,6 +338,26 @@ export interface Gaps {
   mainScreenOnly: boolean;
 }
 
+/** `SubsequentExecutionMode` — what a repeated press of an action does. */
+export type SubsequentExecutionMode = "cycle-sizes" | "do-nothing";
+
+/** `CycleSize` — one step of a size cycle. */
+export type CycleSize =
+  | "one-quarter"
+  | "one-third"
+  | "one-half"
+  | "two-thirds"
+  | "three-quarters";
+
+/** Cycle sizes in the canonical cycle order, with their labels. */
+export const CYCLE_SIZES: ReadonlyArray<{ id: CycleSize; label: string }> = [
+  { id: "one-half", label: "½" },
+  { id: "two-thirds", label: "⅔" },
+  { id: "three-quarters", label: "¾" },
+  { id: "one-quarter", label: "¼" },
+  { id: "one-third", label: "⅓" },
+];
+
 /** `Config` — serde `rename_all = "camelCase"`. */
 export interface Config {
   bindings: Partial<Record<WindowAction, Hotkey | null>>;
@@ -346,6 +366,8 @@ export interface Config {
   showTrayIcon: boolean;
   almostMaximizeWidth: number;
   almostMaximizeHeight: number;
+  subsequentExecutionMode: SubsequentExecutionMode;
+  cycleSizes: CycleSize[];
 }
 
 export type PermissionStatus = "granted" | "denied" | "not-required";

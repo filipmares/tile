@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, Runtime, State};
 use tauri_plugin_autostart::ManagerExt;
-use tile_core::{Config, Gaps, Hotkey, WindowAction};
+use tile_core::{Config, CycleSize, Gaps, Hotkey, SubsequentExecutionMode, WindowAction};
 
 use crate::dto::{HotkeyFailureDto, PermissionStatusDto};
 use crate::state::AppState;
@@ -47,6 +47,21 @@ pub fn set_binding(
 #[tauri::command]
 pub fn set_gaps(state: State<'_, Shared>, gaps: Gaps) -> Config {
     state.update_config(|config| config.gaps = gaps)
+}
+
+/// Sets what a repeated press of an already-satisfied shortcut does, and which
+/// sizes it cycles through. The two travel together because a mode of
+/// "cycle sizes" with no sizes selected is indistinguishable from "do nothing".
+#[tauri::command]
+pub fn set_cycling(
+    state: State<'_, Shared>,
+    mode: SubsequentExecutionMode,
+    sizes: Vec<CycleSize>,
+) -> Config {
+    state.update_config(|config| {
+        config.subsequent_execution_mode = mode;
+        config.cycle_sizes = sizes;
+    })
 }
 
 #[tauri::command]

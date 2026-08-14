@@ -8,6 +8,7 @@ import {
   getPermissionStatus,
   resetToDefaults,
   setBinding,
+  setCycling,
   setGaps,
   setLaunchOnLogin,
 } from "./api";
@@ -15,10 +16,13 @@ import { formatHotkey, interpret } from "./hotkey";
 import {
   ACTIONS,
   Config,
+  CYCLE_SIZES,
+  CycleSize,
   FAMILIES,
   Gaps,
   Hotkey,
   HotkeyFailure,
+  SubsequentExecutionMode,
   WindowAction,
 } from "./types";
 
@@ -43,6 +47,9 @@ const dom = {
   gapEdgeRight: el<HTMLInputElement>("#gap-edge-right"),
   gapSkipTop: el<HTMLInputElement>("#gap-skip-top"),
   gapMainOnly: el<HTMLInputElement>("#gap-main-only"),
+  subsequentMode: el<HTMLSelectElement>("#subsequent-mode"),
+  cycleSizes: el<HTMLFieldSetElement>("#cycle-sizes"),
+  cycleSizesGrid: el<HTMLDivElement>("#cycle-sizes-grid"),
   launch: el<HTMLInputElement>("#launch-on-login"),
   reset: el<HTMLButtonElement>("#reset"),
   permissionPanel: el<HTMLElement>("#permission-panel"),
@@ -247,7 +254,54 @@ function renderBehaviour(): void {
   dom.gapEdgeRight.value = String(g.edgeRight);
   dom.gapSkipTop.checked = g.skipTopEdge;
   dom.gapMainOnly.checked = g.mainScreenOnly;
+  dom.subsequentMode.value = config.subsequentExecutionMode;
+  renderCycleSizes(config);
   dom.launch.checked = config.launchOnLogin;
+}
+
+/** Builds the cycle-size checkboxes once, then reflects the saved selection. */
+function renderCycleSizes(cfg: Config): void {
+  if (dom.cycleSizesGrid.childElementCount === 0) {
+    for (const size of CYCLE_SIZES) {
+      const label = document.createElement("label");
+      label.className = "field__sub";
+      label.htmlFor = `cycle-size-${size.id}`;
+      label.textContent = size.label;
+
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.id = `cycle-size-${size.id}`;
+      input.dataset.size = size.id;
+      input.addEventListener("change", () => void commitCycling());
+
+      dom.cycleSizesGrid.append(label, input);
+    }
+  }
+
+  const selected = new Set(cfg.cycleSizes);
+  for (const input of cycleSizeInputs()) {
+    input.checked = selected.has(input.dataset.size as CycleSize);
+  }
+  // With cycling switched off the sizes have no effect, so say so rather than
+  // leaving controls that silently do nothing.
+  dom.cycleSizes.disabled = cfg.subsequentExecutionMode !== "cycle-sizes";
+}
+
+function cycleSizeInputs(): HTMLInputElement[] {
+  return [...dom.cycleSizesGrid.querySelectorAll<HTMLInputElement>("input")];
+}
+
+async function commitCycling(): Promise<void> {
+  const mode = dom.subsequentMode.value as SubsequentExecutionMode;
+  const sizes = cycleSizeInputs()
+    .filter((input) => input.checked)
+    .map((input) => input.dataset.size as CycleSize);
+  try {
+    config = await setCycling(mode, sizes);
+    renderBehaviour();
+  } catch (err) {
+    setRecordingStatus(`Could not save cycling settings: ${String(err)}`);
+  }
 }
 
 function clampGap(value: number): number {
@@ -327,6 +381,7 @@ function wireEvents(): void {
   }
   dom.gapSkipTop.addEventListener("change", () => void commitGaps());
   dom.gapMainOnly.addEventListener("change", () => void commitGaps());
+  dom.subsequentMode.addEventListener("change", () => void commitCycling());
 
   dom.launch.addEventListener("change", async () => {
     try {

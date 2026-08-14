@@ -3,10 +3,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import {
   Config,
+  CycleSize,
   Gaps,
   Hotkey,
   HotkeyFailure,
   PermissionStatus,
+  SubsequentExecutionMode,
   WindowAction,
 } from "./types";
 
@@ -19,6 +21,11 @@ export const setBinding = (
 
 export const setGaps = (gaps: Gaps): Promise<Config> =>
   invoke("set_gaps", { gaps });
+
+export const setCycling = (
+  mode: SubsequentExecutionMode,
+  sizes: CycleSize[],
+): Promise<Config> => invoke("set_cycling", { mode, sizes });
 
 export const setLaunchOnLogin = (enabled: boolean): Promise<Config> =>
   invoke("set_launch_on_login", { enabled });
