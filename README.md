@@ -23,7 +23,7 @@ The letters are spatially mnemonic rather than arbitrary — a 2×3 block on the
 keyboard:
 
 ```text
-  Q  W  E     two-thirds  (first / center / last)
+  Q  ·  E     two-thirds  (first / last — see below)
   A  S  D     thirds      (first / center / last)
 ```
 
@@ -48,7 +48,6 @@ corner thirds) ships unbound — reachable from the tray menu, or bind your own.
 | Center third      | `Ctrl` + `Option` + `S`          | `Win` + `Alt` + `S`           |
 | Last third        | `Ctrl` + `Option` + `D`          | `Win` + `Alt` + `D`           |
 | First two thirds  | `Ctrl` + `Option` + `Q`          | `Win` + `Alt` + `Q`           |
-| Center two thirds | `Ctrl` + `Option` + `W`          | `Win` + `Alt` + `W`           |
 | Last two thirds   | `Ctrl` + `Option` + `E`          | `Win` + `Alt` + `E`           |
 | Top left          | `Ctrl` + `Option` + `U`          | `Win` + `Alt` + `U`           |
 | Top right         | `Ctrl` + `Option` + `I`          | `Win` + `Alt` + `I`           |
@@ -64,24 +63,45 @@ matches, `Ctrl`+`Alt` defaults would make those characters impossible to type;
 on a German layout you could no longer type `@`. `Win`+`Alt` avoids this
 entirely.
 
+### Keys Xbox Game Bar reserves
+
+Game Bar owns eight shortcuts, and **Tile cannot win any of them.**
+`Win`+`Alt`+`G` is the clearest case: Game Bar's own hotkey is `Win`+`G` and its
+handler matches *loosely*, ignoring the extra `Alt`, so the overlay appears even
+with Tile shut down. The rest are handled by GameDVR through an input path that
+never reaches the keyboard hook.
+
+Users cannot disable them either. Game Bar's settings panel only *adds*
+shortcuts — the built-in ones remain active — so short of uninstalling Game Bar
+there is no remedy.
+
+The authoritative list is the `VK*` values under
+`HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR`:
+
+| Game Bar action | Shortcut |
+| --------------- | -------- |
+| Open Game Bar | `Win` + `G` |
+| Record last 30 seconds | `Win` + `Alt` + `G` |
+| Start/stop recording | `Win` + `Alt` + `R` |
+| Microphone on/off | `Win` + `Alt` + `M` |
+| Start/stop broadcast | `Win` + `Alt` + `B` |
+| Camera on/off in broadcast | `Win` + `Alt` + `W` |
+| Show/hide recording timer | `Win` + `Alt` + `T` |
+| Take a screenshot | `Win` + `Alt` + `PrtScn` |
+
+So `G`, `R`, `M`, `B`, `W` and `T` are all unusable as Tile defaults. A test
+enforces that the defaults stay clear of the whole set.
+
+That is also why **center two thirds ships unbound**: the key directly above `S`
+is `W`, and no other key preserves the block's geometry. It is available from
+the tray menu, or bind it to whatever you like.
+
 ### Why not Rectangle's letters
 
 Rectangle uses the same 2×3 shape one column to the right — `D`/`F`/`G` for the
-thirds with `E`/`R`/`T` above — and Tile shipped that briefly. It had to move,
-because two of those keys are unusable on Windows:
-
-- **`Win`+`Alt`+`G` opens the Xbox Game Bar overlay.** Game Bar's own hotkey is
-  `Win`+`G`, and its handler matches *loosely*, ignoring the extra `Alt`. The
-  overlay appears even with Tile shut down, so it is not something Tile can
-  suppress — and the user cannot fix it either: Game Bar's settings only *add*
-  shortcuts, never replace the built-in one. Short of uninstalling Game Bar
-  there is no remedy.
-- **`Win`+`Alt`+`R`** is Game Bar's start/stop recording, handled by GameDVR
-  through an input path that never reaches the keyboard hook.
-
-Sliding the block two columns left keeps the geometry exactly — the mnemonic is
-positional, not alphabetic — while avoiding every key Game Bar reserves (`G`,
-`R`, `M`, `B`). A test enforces that the defaults stay clear of them.
+thirds with `E`/`R`/`T` above — and Tile shipped that briefly. Four of those six
+keys are reserved by Game Bar, so it had to move. Sliding the block left keeps
+the geometry exactly, because the mnemonic is positional rather than alphabetic.
 
 The letters then moved on macOS too, so that both platforms match. Tile is its
 own app rather than a Rectangle port, and one consistent set of shortcuts across

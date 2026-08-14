@@ -398,7 +398,7 @@ const BASE_MODIFIERS: Modifiers = Modifiers(Modifiers::META.0 | Modifiers::ALT.0
 /// rather than arbitrary — a 2x3 block on the keyboard:
 ///
 /// ```text
-///   Q  W  E     two-thirds  (first / center / last)
+///   Q  ·  E     two-thirds  (first / last; center is unbound, see below)
 ///   A  S  D     thirds      (first / center / last)
 /// ```
 ///
@@ -410,24 +410,44 @@ const BASE_MODIFIERS: Modifiers = Modifiers(Modifiers::META.0 | Modifiers::ALT.0
 /// what users there already reach for, claimed back from Aero Snap by the
 /// low-level keyboard hook in the Windows backend.
 ///
+/// # Keys Xbox Game Bar reserves
+///
+/// Game Bar owns eight shortcuts, and Tile cannot win any of them. `Win+Alt+G`
+/// is the clearest example: Game Bar's own hotkey is `Win+G` and its handler
+/// matches *loosely*, ignoring the extra `Alt`, so the overlay appears even
+/// with Tile shut down. The rest are handled by GameDVR through an input path
+/// that never reaches the keyboard hook. Users cannot fix this either — Game
+/// Bar's settings only *add* shortcuts, they never replace the built-in one.
+///
+/// The authoritative list is the `VK*` values under
+/// `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR`:
+///
+/// | Action | Shortcut |
+/// |---|---|
+/// | `ToggleGameBar` | `Win+G` |
+/// | `SaveHistoricalVideo` | `Win+Alt+G` |
+/// | `ToggleRecording` | `Win+Alt+R` |
+/// | `ToggleMicrophoneCapture` | `Win+Alt+M` |
+/// | `ToggleBroadcast` | `Win+Alt+B` |
+/// | `ToggleCameraCapture` | `Win+Alt+W` |
+/// | `ToggleRecordingIndicator` | `Win+Alt+T` |
+/// | `TakeScreenshot` | `Win+Alt+PrtScn` |
+///
+/// So `G`, `R`, `M`, `B`, `W` and `T` are all unusable. That is why the block
+/// sits at `Q`/`A`, and why center two thirds — whose natural key would be `W`
+/// — ships unbound. There is a test enforcing the whole set.
+///
 /// # Why not Rectangle's letters
 ///
-/// Rectangle uses the same shape one column to the right — `D`/`F`/`G` for the
-/// thirds with `E`/`R`/`T` above — and Tile shipped that briefly. It had to
-/// move because two of those keys are unusable on Windows:
+/// Rectangle uses the same shape one column to the right, `D`/`F`/`G` for the
+/// thirds with `E`/`R`/`T` above, and Tile shipped that briefly. Four of those
+/// six keys are reserved, so it had to move. Sliding the block left keeps the
+/// geometry exactly — the mnemonic is positional, not alphabetic.
 ///
-/// - `Win+Alt+G` opens the Xbox Game Bar overlay. Game Bar's own hotkey is
-///   `Win+G`, and its handler matches *loosely*, ignoring the extra `Alt`. The
-///   overlay appears even with Tile shut down, so this is not something Tile
-///   can suppress, and the user cannot fix it: Game Bar's settings only *add*
-///   shortcuts, they never replace the built-in one. Short of uninstalling
-///   Game Bar there is no remedy.
-/// - `Win+Alt+R` is Game Bar's start/stop recording, handled by GameDVR
-///   through an input path that never reaches the keyboard hook.
-///
-/// Sliding the block two columns left keeps the geometry exactly — the
-/// mnemonic is positional, not alphabetic — while avoiding every key Game Bar
-/// reserves (`G`, `R`, `M`, `B`). There is a test enforcing that.
+/// The letters moved on macOS too, so both platforms match. Tile is its own
+/// app rather than a Rectangle port, and one consistent set of shortcuts
+/// across a user's machines is worth more than compatibility with a different
+/// app on one of them.
 pub fn default_bindings() -> BTreeMap<WindowAction, Option<Hotkey>> {
     let mut map = BTreeMap::new();
     let base = BASE_MODIFIERS;
@@ -491,10 +511,12 @@ pub fn default_bindings() -> BTreeMap<WindowAction, Option<Hotkey>> {
         WindowAction::CenterThird,
         Some(Hotkey::new(base, KeyCode::S)),
     );
-    map.insert(
-        WindowAction::CenterTwoThirds,
-        Some(Hotkey::new(base, KeyCode::W)),
-    );
+    // Center two thirds is deliberately unbound. The key directly above `S` is
+    // `W`, which Xbox Game Bar reserves for its broadcast camera toggle and
+    // Tile cannot override. No other key preserves the block's geometry, so
+    // rather than pick an arbitrary one this action ships unbound and is
+    // available from the tray menu or a binding of the user's choosing.
+    // Rectangle treats it as a later addition too, rather than a core default.
     map.insert(
         WindowAction::LastTwoThirds,
         Some(Hotkey::new(base, KeyCode::E)),
@@ -530,7 +552,7 @@ mod tests {
     /// corner thirds, sixths, ninths — stay unbound: there are not enough
     /// memorable combinations to go round, and binding them by default would
     /// steal far more of the OS keymap than most users would want.
-    const CORE_BOUND: [WindowAction; 18] = [
+    const CORE_BOUND: [WindowAction; 17] = [
         WindowAction::LeftHalf,
         WindowAction::RightHalf,
         WindowAction::TopHalf,
@@ -542,7 +564,8 @@ mod tests {
         WindowAction::FirstThird,
         WindowAction::FirstTwoThirds,
         WindowAction::CenterThird,
-        WindowAction::CenterTwoThirds,
+        // CenterTwoThirds is deliberately absent: its natural key is `W`,
+        // which Game Bar reserves. See `default_bindings`.
         WindowAction::LastTwoThirds,
         WindowAction::LastThird,
         WindowAction::TopLeft,
@@ -567,7 +590,6 @@ mod tests {
             (WindowAction::CenterThird, KeyCode::S),
             (WindowAction::LastThird, KeyCode::D),
             (WindowAction::FirstTwoThirds, KeyCode::Q),
-            (WindowAction::CenterTwoThirds, KeyCode::W),
             (WindowAction::LastTwoThirds, KeyCode::E),
             (WindowAction::TopLeft, KeyCode::U),
             (WindowAction::TopRight, KeyCode::I),
@@ -582,6 +604,14 @@ mod tests {
                 "{action} should use the platform base modifier"
             );
         }
+
+        // The hole in the block is deliberate, not an oversight: `W` is Game
+        // Bar's broadcast camera toggle.
+        assert_eq!(
+            config.binding(WindowAction::CenterTwoThirds),
+            None,
+            "center two thirds must stay unbound while W is unusable"
+        );
     }
 
     /// The letters must be the same on every platform, so that someone using
@@ -596,7 +626,6 @@ mod tests {
             (WindowAction::CenterThird, KeyCode::S),
             (WindowAction::LastThird, KeyCode::D),
             (WindowAction::FirstTwoThirds, KeyCode::Q),
-            (WindowAction::CenterTwoThirds, KeyCode::W),
             (WindowAction::LastTwoThirds, KeyCode::E),
             (WindowAction::Center, KeyCode::C),
             (WindowAction::TopLeft, KeyCode::U),
@@ -630,19 +659,31 @@ mod tests {
         }
     }
 
-    /// Xbox Game Bar reserves several `Win+Alt` combinations that Tile cannot
-    /// win. `Win+Alt+G` opens the overlay even with Tile shut down, because
-    /// Game Bar's `Win+G` hotkey matches loosely; `R`, `M` and `B` are handled
-    /// by GameDVR through an input path the keyboard hook never sees. The
-    /// defaults were moved off these keys deliberately, so this test keeps
-    /// them clear rather than letting a future binding wander back in.
+    /// Xbox Game Bar owns eight shortcuts that Tile cannot win, listed against
+    /// `default_bindings`. `Win+Alt+G` fires even with Tile shut down, because
+    /// Game Bar's `Win+G` matches loosely; the others are handled by GameDVR
+    /// through an input path the keyboard hook never sees. Users cannot
+    /// disable them — Game Bar's settings only add shortcuts.
+    ///
+    /// The defaults were chosen to avoid all of these. This test is the guard,
+    /// and it is deliberately exhaustive: an earlier version listed only `G`,
+    /// `R`, `M` and `B`, which let a `W` binding ship and collide with Game
+    /// Bar's broadcast camera toggle.
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn defaults_avoid_the_unwinnable_game_bar_shortcuts() {
-        // Open overlay / start-stop recording / microphone / HDR.
-        // (`Win+Alt+PrtScn` is reserved too, but Tile has no PrintScreen key
-        // code, so it cannot be bound in the first place.)
-        const RESERVED: [KeyCode; 4] = [KeyCode::G, KeyCode::R, KeyCode::M, KeyCode::B];
+        // ToggleGameBar / SaveHistoricalVideo, ToggleRecording,
+        // ToggleMicrophoneCapture, ToggleBroadcast, ToggleCameraCapture,
+        // ToggleRecordingIndicator. (`Win+Alt+PrtScn` is reserved too, but
+        // Tile has no PrintScreen key code, so it cannot be bound at all.)
+        const RESERVED: [KeyCode; 6] = [
+            KeyCode::G,
+            KeyCode::R,
+            KeyCode::M,
+            KeyCode::B,
+            KeyCode::W,
+            KeyCode::T,
+        ];
 
         let config = Config::default();
         let win_alt = Modifiers::META | Modifiers::ALT;
