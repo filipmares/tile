@@ -93,16 +93,39 @@ are spatially mnemonic rather than arbitrary, so anyone running Rectangle on a
 Mac and Tile on Windows keeps one set of habits. The conflict is fixable by the
 user in about twenty seconds; a broken mnemonic would not be.
 
-**To fix it**, clear Game Bar's shortcuts:
+**To fix it**, remap Game Bar's two conflicting shortcuts:
 
 1. Press `Win` + `G` to open Game Bar
-2. Go to **Settings ▸ Inputs ▸ Keyboard** (the gear icon)
-3. Clear or replace **Record last 30 seconds** and **Start/stop recording**
+2. Go to **Settings ▸ Inputs ▸ Keyboard**
+3. Give **Record last 30 seconds** and **Start/stop recording** new shortcuts
 4. Click **Save**
 
-Alternatively, disable Game Bar captures entirely in **Settings ▸ Gaming ▸
-Captures**, or rebind Tile's *Last third* and *Center two thirds* to keys of
-your choosing — every Tile shortcut is rebindable.
+Game Bar has no way to leave a shortcut unset — it requires `Ctrl`, `Alt` or
+`Shift` plus another key. That restriction works in your favour: the field will
+not accept the `Win` key, and **every Tile shortcut on Windows includes `Win`**,
+so whatever you choose cannot collide with Tile. You only need to avoid your
+other applications.
+
+| Game Bar action | Default | Suggested replacement |
+| --------------- | ------- | --------------------- |
+| Record last 30 seconds | `Win` + `Alt` + `G` | `Ctrl` + `Shift` + `F9` |
+| Start/stop recording | `Win` + `Alt` + `R` | `Ctrl` + `Shift` + `F10` |
+
+Function keys rather than letters, because `Ctrl`+`Shift`+`R` is hard-reload in
+every browser and `Ctrl`+`Shift`+`G` opens the Git panel in VS Code, whereas
+`Ctrl`+`Shift`+`F9`/`F10` are rarely bound by anything.
+
+If you pick your own, avoid `Ctrl`+`Alt`+anything — that is `AltGr` on
+international layouts — and `Alt`+`Shift`+anything, since `Alt`+`Shift` on its
+own switches keyboard layout in Windows.
+
+Game Bar's other reserved combinations (`Win`+`G`, `Win`+`Alt`+`M`,
+`Win`+`Alt`+`B`, `Win`+`Alt`+`PrtScn`) need no attention: Tile does not bind
+them.
+
+Alternatively, if you never use Game Bar's capture features, turn them off
+entirely in **Settings ▸ Gaming ▸ Captures**, or rebind Tile's *Last third* and
+*Center two thirds* instead — every Tile shortcut is rebindable.
 
 Tile will not change Game Bar's settings for you. An application silently
 reconfiguring another application's shortcuts is not behaviour you should have
