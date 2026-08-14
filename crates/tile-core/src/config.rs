@@ -395,18 +395,35 @@ const BASE_MODIFIERS: Modifiers = Modifiers(Modifiers::META.0 | Modifiers::ALT.0
 ///
 /// The letter bindings are shared across platforms and are taken from
 /// Rectangle's alternate defaults, because they are *spatially* mnemonic
-/// rather than arbitrary:
+/// rather than arbitrary — a 2x3 block on the keyboard:
 ///
-/// - `D` `F` `G` are adjacent home-row keys running left to right, matching
-///   the first, center and last third.
-/// - `E` sits above the `D`/`F` boundary (the first two thirds) and `T` above
-///   `F`/`G` (the last two thirds).
-/// - `U` `I` `J` `K` form a 2x2 block on the keyboard that maps directly onto
-///   the four screen corners.
+/// ```text
+///   E  R  T     two-thirds  (first / center / last)
+///   D  F  G     thirds      (first / center / last)
+/// ```
+///
+/// Each third sits directly below its two-thirds variant, running left to
+/// right. The corners are a second block, `U`/`I` over `J`/`K`, matching the
+/// four screen corners.
 ///
 /// Only the halves differ per platform: Windows keeps `Win+Arrow`, which is
 /// what users there already reach for, claimed back from Aero Snap by the
 /// low-level keyboard hook in the Windows backend.
+///
+/// # Known conflict on Windows
+///
+/// `Win+Alt+G` and `Win+Alt+R` are also Xbox Game Bar's "record last 30
+/// seconds" and "start/stop recording". **Tile cannot suppress these.** Game
+/// Bar's capture shortcuts are handled by the GameDVR component through an
+/// input path that never reaches the keyboard hook, so both actions fire.
+/// `Win+Alt+M`, `Win+Alt+B` and `Win+Alt+PrtScn` are reserved the same way and
+/// are deliberately left unbound.
+///
+/// This is a considered trade, not an oversight: the letters are kept so that
+/// muscle memory carries between Rectangle on macOS and Tile on Windows, and
+/// the user can clear the Game Bar shortcut in a few seconds. If you are
+/// tempted to "fix" it by moving these bindings, read
+/// <https://github.com/filipmares/tile/issues/18> first.
 pub fn default_bindings() -> BTreeMap<WindowAction, Option<Hotkey>> {
     let mut map = BTreeMap::new();
     let base = BASE_MODIFIERS;
@@ -574,6 +591,32 @@ mod tests {
             assert!(
                 !hotkey.modifiers.contains(ctrl_alt),
                 "{action} uses Ctrl+Alt ({hotkey}), which collides with AltGr"
+            );
+        }
+    }
+
+    /// Xbox Game Bar reserves several `Win+Alt` combinations through GameDVR,
+    /// which Tile's keyboard hook cannot suppress — both actions fire. `G` and
+    /// `R` are knowingly accepted (see `default_bindings`), but the rest must
+    /// stay clear, so a future binding cannot wander into one unnoticed.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn defaults_avoid_the_unwinnable_game_bar_shortcuts() {
+        // Deliberate, documented exceptions.
+        const ACCEPTED: [KeyCode; 2] = [KeyCode::G, KeyCode::R];
+        // Microphone on/off, HDR on/off. (Win+Alt+PrtScn is also reserved;
+        // Tile has no PrintScreen key code, so it cannot be bound anyway.)
+        const RESERVED: [KeyCode; 2] = [KeyCode::M, KeyCode::B];
+
+        let config = Config::default();
+        let win_alt = Modifiers::META | Modifiers::ALT;
+        for (hotkey, action) in config.active_bindings() {
+            if hotkey.modifiers != win_alt || ACCEPTED.contains(&hotkey.key) {
+                continue;
+            }
+            assert!(
+                !RESERVED.contains(&hotkey.key),
+                "{action} is bound to {hotkey}, which Game Bar reserves and Tile cannot override"
             );
         }
     }

@@ -63,12 +63,50 @@ matches, `Ctrl`+`Alt` defaults would make those characters impossible to type;
 on a German layout you could no longer type `@`. `Win`+`Alt` avoids this
 entirely.
 
-A few defaults do take combinations Windows itself uses — `Win`+`Alt`+`G` and
-`Win`+`Alt`+`R` belong to Game Bar, and `Win`+`Alt`+`D` toggles the desktop
-clock. Tile wins those because it hooks the keyboard at a lower level, but that
-is a deliberate trade rather than an accident. See
+A few defaults do take combinations Windows itself uses — `Win`+`Alt`+`D`
+toggles the desktop clock, for instance. Tile wins those because it hooks the
+keyboard at a lower level, which is the same mechanism that lets it claim
+`Win`+Arrow back from Aero Snap. See
 [#18](https://github.com/filipmares/tile/issues/18) for the planned setting to
 hand individual combinations back to the OS.
+
+### Known conflict: Xbox Game Bar
+
+Two defaults collide with Xbox Game Bar, and **Tile cannot win these**:
+
+| Shortcut | Tile | Game Bar |
+| -------- | ---- | -------- |
+| `Win` + `Alt` + `G` | Last third | Record last 30 seconds |
+| `Win` + `Alt` + `R` | Center two thirds | Start/stop recording |
+
+Both will fire: the window tiles *and* Game Bar starts recording.
+
+This is not something Tile can fix. Game Bar's capture shortcuts are handled by
+the GameDVR component through an input path that never reaches the user-mode
+keyboard hook, so there is nothing to suppress. Shell shortcuts such as Aero
+Snap *are* interceptable, and Tile blocks those successfully — GameDVR is the
+exception. (`Win`+`Alt`+`M`, `Win`+`Alt`+`B` and `Win`+`Alt`+`PrtScn` are
+reserved the same way; Tile does not bind them.)
+
+These letters were kept anyway, deliberately. They are Rectangle's, and they
+are spatially mnemonic rather than arbitrary, so anyone running Rectangle on a
+Mac and Tile on Windows keeps one set of habits. The conflict is fixable by the
+user in about twenty seconds; a broken mnemonic would not be.
+
+**To fix it**, clear Game Bar's shortcuts:
+
+1. Press `Win` + `G` to open Game Bar
+2. Go to **Settings ▸ Inputs ▸ Keyboard** (the gear icon)
+3. Clear or replace **Record last 30 seconds** and **Start/stop recording**
+4. Click **Save**
+
+Alternatively, disable Game Bar captures entirely in **Settings ▸ Gaming ▸
+Captures**, or rebind Tile's *Last third* and *Center two thirds* to keys of
+your choosing — every Tile shortcut is rebindable.
+
+Tile will not change Game Bar's settings for you. An application silently
+reconfiguring another application's shortcuts is not behaviour you should have
+to trust.
 
 <sub>These tables are generated from `crates/tile-core/src/config.rs`
 (`default_bindings`) — the single source of truth for Tile's defaults.</sub>
