@@ -16,33 +16,59 @@ maximize it, center it, or undo the last move, all from the keyboard.
 
 ## Default keyboard shortcuts
 
-Defaults follow each platform's conventions. On macOS they mirror Rectangle so
-existing muscle memory carries over; on Windows they use the familiar `Win`-key
-snapping combinations. Every shortcut is rebindable.
+Only the halves differ between platforms. Everything else shares the same
+letters, so one set of habits works on both.
 
-### macOS
+Those letters come from Rectangle's alternate defaults, and they are
+*spatially* mnemonic rather than arbitrary:
 
-| Action        | Shortcut                  |
-| ------------- | ------------------------- |
-| Left half     | `Ctrl` + `Option` + `←`   |
-| Right half    | `Ctrl` + `Option` + `→`   |
-| Top half      | `Ctrl` + `Option` + `↑`   |
-| Bottom half   | `Ctrl` + `Option` + `↓`   |
-| Maximize      | `Ctrl` + `Option` + `Return` |
-| Center        | `Ctrl` + `Option` + `C`   |
-| Restore       | `Ctrl` + `Option` + `Backspace` |
+- `D` `F` `G` are adjacent home-row keys running left to right — first,
+  center and last third.
+- `E` sits above the `D`/`F` boundary (the first two thirds), `T` above
+  `F`/`G` (the last two thirds).
+- `U` `I` `J` `K` form a 2×2 block on the keyboard that maps onto the four
+  screen corners.
 
-### Windows
+Every shortcut is rebindable, and the wider catalogue (fourths, sixths,
+ninths, corner thirds) ships unbound — reachable from the tray menu, or bind
+your own.
 
-| Action        | Shortcut              |
-| ------------- | --------------------- |
-| Left half     | `Win` + `←`           |
-| Right half    | `Win` + `→`           |
-| Maximize      | `Win` + `↑`           |
-| Restore       | `Win` + `↓`           |
-| Top half      | `Win` + `Alt` + `↑`   |
-| Bottom half   | `Win` + `Alt` + `↓`   |
-| Center        | `Win` + `Alt` + `C`   |
+| Action            | macOS                            | Windows                       |
+| ----------------- | -------------------------------- | ----------------------------- |
+| Left half         | `Ctrl` + `Option` + `←`          | `Win` + `←`                   |
+| Right half        | `Ctrl` + `Option` + `→`          | `Win` + `→`                   |
+| Top half          | `Ctrl` + `Option` + `↑`          | `Win` + `Alt` + `↑`           |
+| Bottom half       | `Ctrl` + `Option` + `↓`          | `Win` + `Alt` + `↓`           |
+| Maximize          | `Ctrl` + `Option` + `Return`     | `Win` + `↑`                   |
+| Restore           | `Ctrl` + `Option` + `Backspace`  | `Win` + `↓`                   |
+| Maximize height   | `Ctrl` + `Option` + `Shift` + `↑`| `Win` + `Alt` + `Shift` + `↑` |
+| Center            | `Ctrl` + `Option` + `C`          | `Win` + `Alt` + `C`           |
+| First third       | `Ctrl` + `Option` + `D`          | `Win` + `Alt` + `D`           |
+| First two thirds  | `Ctrl` + `Option` + `E`          | `Win` + `Alt` + `E`           |
+| Center third      | `Ctrl` + `Option` + `F`          | `Win` + `Alt` + `F`           |
+| Center two thirds | `Ctrl` + `Option` + `R`          | `Win` + `Alt` + `R`           |
+| Last two thirds   | `Ctrl` + `Option` + `T`          | `Win` + `Alt` + `T`           |
+| Last third        | `Ctrl` + `Option` + `G`          | `Win` + `Alt` + `G`           |
+| Top left          | `Ctrl` + `Option` + `U`          | `Win` + `Alt` + `U`           |
+| Top right         | `Ctrl` + `Option` + `I`          | `Win` + `Alt` + `I`           |
+| Bottom left       | `Ctrl` + `Option` + `J`          | `Win` + `Alt` + `J`           |
+| Bottom right      | `Ctrl` + `Option` + `K`          | `Win` + `Alt` + `K`           |
+
+### Why Windows uses `Win`+`Alt` and not `Ctrl`+`Alt`
+
+Mirroring macOS exactly would mean `Ctrl`+`Alt`+letter — but **Windows treats
+`Ctrl`+`Alt` as `AltGr`**. On many international layouts `AltGr`+key is how you
+type `@ € { } [ ] \ ~`. Because Tile's keyboard hook swallows the keystrokes it
+matches, `Ctrl`+`Alt` defaults would make those characters impossible to type;
+on a German layout you could no longer type `@`. `Win`+`Alt` avoids this
+entirely.
+
+A few defaults do take combinations Windows itself uses — `Win`+`Alt`+`G` and
+`Win`+`Alt`+`R` belong to Game Bar, and `Win`+`Alt`+`D` toggles the desktop
+clock. Tile wins those because it hooks the keyboard at a lower level, but that
+is a deliberate trade rather than an accident. See
+[#18](https://github.com/filipmares/tile/issues/18) for the planned setting to
+hand individual combinations back to the OS.
 
 <sub>These tables are generated from `crates/tile-core/src/config.rs`
 (`default_bindings`) — the single source of truth for Tile's defaults.</sub>

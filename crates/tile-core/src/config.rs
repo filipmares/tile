@@ -375,18 +375,44 @@ impl Config {
 /// Upper bound for the screen-edge gap, to stop a typo shrinking windows away.
 pub const MAX_GAP: f64 = 200.0;
 
+/// The modifier carrying the bulk of the default bindings.
+///
+/// macOS uses `Control+Option`, matching Rectangle's alternate ("Magnet")
+/// default set, which is also what Tile has always shipped.
+///
+/// Windows deliberately uses `Win+Alt` rather than `Ctrl+Alt`, even though
+/// `Ctrl+Alt` would mirror macOS exactly. **Windows treats `Ctrl+Alt` as
+/// `AltGr`**: on many international layouts `AltGr`+key produces characters
+/// such as `@ € { } [ ] \ ~`. Because the Windows backend swallows any
+/// keystroke it matches, binding `Ctrl+Alt`+letter would make those characters
+/// impossible to type — a German user could not type `@`.
+#[cfg(target_os = "macos")]
+const BASE_MODIFIERS: Modifiers = Modifiers(Modifiers::CONTROL.0 | Modifiers::ALT.0);
+#[cfg(not(target_os = "macos"))]
+const BASE_MODIFIERS: Modifiers = Modifiers(Modifiers::META.0 | Modifiers::ALT.0);
+
 /// Platform-appropriate default key bindings.
 ///
-/// macOS keeps Rectangle's well-known `Control+Option` defaults so existing
-/// muscle memory carries over. Windows uses the `Win` key combinations users
-/// already associate with snapping; `Win+Arrow` is claimed from the shell by
-/// the low-level keyboard hook in the Windows backend.
+/// The letter bindings are shared across platforms and are taken from
+/// Rectangle's alternate defaults, because they are *spatially* mnemonic
+/// rather than arbitrary:
+///
+/// - `D` `F` `G` are adjacent home-row keys running left to right, matching
+///   the first, center and last third.
+/// - `E` sits above the `D`/`F` boundary (the first two thirds) and `T` above
+///   `F`/`G` (the last two thirds).
+/// - `U` `I` `J` `K` form a 2x2 block on the keyboard that maps directly onto
+///   the four screen corners.
+///
+/// Only the halves differ per platform: Windows keeps `Win+Arrow`, which is
+/// what users there already reach for, claimed back from Aero Snap by the
+/// low-level keyboard hook in the Windows backend.
 pub fn default_bindings() -> BTreeMap<WindowAction, Option<Hotkey>> {
     let mut map = BTreeMap::new();
+    let base = BASE_MODIFIERS;
 
     #[cfg(target_os = "macos")]
     {
-        let base = Modifiers::CONTROL | Modifiers::ALT;
         map.insert(
             WindowAction::LeftHalf,
             Some(Hotkey::new(base, KeyCode::Left)),
@@ -404,7 +430,6 @@ pub fn default_bindings() -> BTreeMap<WindowAction, Option<Hotkey>> {
             WindowAction::Maximize,
             Some(Hotkey::new(base, KeyCode::Enter)),
         );
-        map.insert(WindowAction::Center, Some(Hotkey::new(base, KeyCode::C)));
         map.insert(
             WindowAction::Restore,
             Some(Hotkey::new(base, KeyCode::Backspace)),
@@ -414,7 +439,6 @@ pub fn default_bindings() -> BTreeMap<WindowAction, Option<Hotkey>> {
     #[cfg(not(target_os = "macos"))]
     {
         let win = Modifiers::META;
-        let win_alt = Modifiers::META | Modifiers::ALT;
         map.insert(
             WindowAction::LeftHalf,
             Some(Hotkey::new(win, KeyCode::Left)),
@@ -425,16 +449,50 @@ pub fn default_bindings() -> BTreeMap<WindowAction, Option<Hotkey>> {
         );
         map.insert(WindowAction::Maximize, Some(Hotkey::new(win, KeyCode::Up)));
         map.insert(WindowAction::Restore, Some(Hotkey::new(win, KeyCode::Down)));
-        map.insert(
-            WindowAction::TopHalf,
-            Some(Hotkey::new(win_alt, KeyCode::Up)),
-        );
+        map.insert(WindowAction::TopHalf, Some(Hotkey::new(base, KeyCode::Up)));
         map.insert(
             WindowAction::BottomHalf,
-            Some(Hotkey::new(win_alt, KeyCode::Down)),
+            Some(Hotkey::new(base, KeyCode::Down)),
         );
-        map.insert(WindowAction::Center, Some(Hotkey::new(win_alt, KeyCode::C)));
     }
+
+    // Shared across platforms: only the modifier differs.
+    map.insert(WindowAction::Center, Some(Hotkey::new(base, KeyCode::C)));
+    map.insert(
+        WindowAction::FirstThird,
+        Some(Hotkey::new(base, KeyCode::D)),
+    );
+    map.insert(
+        WindowAction::FirstTwoThirds,
+        Some(Hotkey::new(base, KeyCode::E)),
+    );
+    map.insert(
+        WindowAction::CenterThird,
+        Some(Hotkey::new(base, KeyCode::F)),
+    );
+    map.insert(
+        WindowAction::CenterTwoThirds,
+        Some(Hotkey::new(base, KeyCode::R)),
+    );
+    map.insert(
+        WindowAction::LastTwoThirds,
+        Some(Hotkey::new(base, KeyCode::T)),
+    );
+    map.insert(WindowAction::LastThird, Some(Hotkey::new(base, KeyCode::G)));
+    map.insert(WindowAction::TopLeft, Some(Hotkey::new(base, KeyCode::U)));
+    map.insert(WindowAction::TopRight, Some(Hotkey::new(base, KeyCode::I)));
+    map.insert(
+        WindowAction::BottomLeft,
+        Some(Hotkey::new(base, KeyCode::J)),
+    );
+    map.insert(
+        WindowAction::BottomRight,
+        Some(Hotkey::new(base, KeyCode::K)),
+    );
+    map.insert(
+        WindowAction::MaximizeHeight,
+        Some(Hotkey::new(base | Modifiers::SHIFT, KeyCode::Up)),
+    );
 
     map
 }
@@ -443,18 +501,82 @@ pub fn default_bindings() -> BTreeMap<WindowAction, Option<Hotkey>> {
 mod tests {
     use super::*;
 
-    /// The actions that ship with a default binding. The wider catalogue
-    /// (corners, thirds, fourths, sixths, ninths, size variants) is deliberately
-    /// unbound so the defaults stay conflict-free and users can pick their own.
-    const CORE_BOUND: [WindowAction; 7] = [
+    /// The actions that ship with a default binding.
+    ///
+    /// Halves, maximize, restore and center, plus the spatially mnemonic
+    /// letter bindings borrowed from Rectangle's alternate defaults (thirds
+    /// and corners) and maximize-height. The denser families — fourths,
+    /// corner thirds, sixths, ninths — stay unbound: there are not enough
+    /// memorable combinations to go round, and binding them by default would
+    /// steal far more of the OS keymap than most users would want.
+    const CORE_BOUND: [WindowAction; 18] = [
         WindowAction::LeftHalf,
         WindowAction::RightHalf,
         WindowAction::TopHalf,
         WindowAction::BottomHalf,
         WindowAction::Maximize,
+        WindowAction::MaximizeHeight,
         WindowAction::Center,
         WindowAction::Restore,
+        WindowAction::FirstThird,
+        WindowAction::FirstTwoThirds,
+        WindowAction::CenterThird,
+        WindowAction::CenterTwoThirds,
+        WindowAction::LastTwoThirds,
+        WindowAction::LastThird,
+        WindowAction::TopLeft,
+        WindowAction::TopRight,
+        WindowAction::BottomLeft,
+        WindowAction::BottomRight,
     ];
+
+    #[test]
+    fn defaults_use_rectangles_spatially_mnemonic_letters() {
+        // These letters are load-bearing, not arbitrary: D/F/G run left to
+        // right along the home row for the thirds, E and T sit above the
+        // boundaries they span, and U/I/J/K form a 2x2 block matching the
+        // screen corners. Changing one silently breaks the mnemonic and
+        // diverges from Rectangle, so they are pinned here.
+        let config = Config::default();
+        let expected = [
+            (WindowAction::FirstThird, KeyCode::D),
+            (WindowAction::FirstTwoThirds, KeyCode::E),
+            (WindowAction::CenterThird, KeyCode::F),
+            (WindowAction::CenterTwoThirds, KeyCode::R),
+            (WindowAction::LastTwoThirds, KeyCode::T),
+            (WindowAction::LastThird, KeyCode::G),
+            (WindowAction::TopLeft, KeyCode::U),
+            (WindowAction::TopRight, KeyCode::I),
+            (WindowAction::BottomLeft, KeyCode::J),
+            (WindowAction::BottomRight, KeyCode::K),
+        ];
+        for (action, key) in expected {
+            let hotkey = config.binding(action).expect("action must be bound");
+            assert_eq!(hotkey.key, key, "{action} lost its mnemonic key");
+            assert_eq!(
+                hotkey.modifiers, BASE_MODIFIERS,
+                "{action} should use the platform base modifier"
+            );
+        }
+    }
+
+    /// Windows treats `Ctrl+Alt` as `AltGr`, which many international layouts
+    /// use to type `@ € { } [ ] \ ~`. Since the Windows backend swallows the
+    /// keystrokes it matches, a `Ctrl+Alt` default would make those characters
+    /// untypeable. Guard against anyone "simplifying" the modifiers to match
+    /// macOS exactly.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn windows_defaults_never_use_ctrl_alt() {
+        let config = Config::default();
+        for (hotkey, action) in config.active_bindings() {
+            let ctrl_alt = Modifiers::CONTROL | Modifiers::ALT;
+            assert!(
+                !hotkey.modifiers.contains(ctrl_alt),
+                "{action} uses Ctrl+Alt ({hotkey}), which collides with AltGr"
+            );
+        }
+    }
 
     #[test]
     fn defaults_bind_the_core_actions_without_conflicts() {
