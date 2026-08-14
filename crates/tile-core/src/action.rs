@@ -25,11 +25,14 @@ pub enum WindowFamily {
     Sixths,
     Ninths,
     Sizing,
+    Move,
+    Resize,
+    HalveDouble,
 }
 
 impl WindowFamily {
     /// Families in the order they should appear in the UI.
-    pub const ALL: [WindowFamily; 10] = [
+    pub const ALL: [WindowFamily; 13] = [
         WindowFamily::Halves,
         WindowFamily::Displays,
         WindowFamily::Corners,
@@ -40,6 +43,9 @@ impl WindowFamily {
         WindowFamily::Sixths,
         WindowFamily::Ninths,
         WindowFamily::Sizing,
+        WindowFamily::Move,
+        WindowFamily::Resize,
+        WindowFamily::HalveDouble,
     ];
 
     /// Human-readable heading for menus and the settings window.
@@ -55,6 +61,9 @@ impl WindowFamily {
             WindowFamily::Sixths => "Sixths",
             WindowFamily::Ninths => "Ninths",
             WindowFamily::Sizing => "Size & Position",
+            WindowFamily::Move => "Move",
+            WindowFamily::Resize => "Resize",
+            WindowFamily::HalveDouble => "Halve & Double",
         }
     }
 
@@ -130,12 +139,34 @@ pub enum WindowAction {
     CenterHalfBack,
     Center,
     Restore,
+    MoveLeft,
+    MoveRight,
+    MoveUp,
+    MoveDown,
+    Larger,
+    Smaller,
+    LargerWidth,
+    SmallerWidth,
+    LargerHeight,
+    SmallerHeight,
+    DoubleWidthLeft,
+    DoubleWidthRight,
+    DoubleHeightUp,
+    DoubleHeightDown,
+    HalveWidthLeft,
+    HalveWidthRight,
+    HalveHeightUp,
+    HalveHeightDown,
+    FirstDisplay,
+    SecondDisplay,
+    ThirdDisplay,
+    FourthDisplay,
 }
 
 impl WindowAction {
     /// All actions, grouped by [`WindowFamily`] in the order they appear in
     /// the UI.
-    pub const ALL: [WindowAction; 54] = [
+    pub const ALL: [WindowAction; 76] = [
         // Halves
         WindowAction::LeftHalf,
         WindowAction::RightHalf,
@@ -144,6 +175,10 @@ impl WindowAction {
         // Displays
         WindowAction::PreviousDisplay,
         WindowAction::NextDisplay,
+        WindowAction::FirstDisplay,
+        WindowAction::SecondDisplay,
+        WindowAction::ThirdDisplay,
+        WindowAction::FourthDisplay,
         // Corners
         WindowAction::TopLeft,
         WindowAction::TopRight,
@@ -200,6 +235,27 @@ impl WindowAction {
         WindowAction::CenterHalfBack,
         WindowAction::Center,
         WindowAction::Restore,
+        // Move
+        WindowAction::MoveLeft,
+        WindowAction::MoveRight,
+        WindowAction::MoveUp,
+        WindowAction::MoveDown,
+        // Resize
+        WindowAction::Larger,
+        WindowAction::Smaller,
+        WindowAction::LargerWidth,
+        WindowAction::SmallerWidth,
+        WindowAction::LargerHeight,
+        WindowAction::SmallerHeight,
+        // Halve & double
+        WindowAction::DoubleWidthLeft,
+        WindowAction::DoubleWidthRight,
+        WindowAction::DoubleHeightUp,
+        WindowAction::DoubleHeightDown,
+        WindowAction::HalveWidthLeft,
+        WindowAction::HalveWidthRight,
+        WindowAction::HalveHeightUp,
+        WindowAction::HalveHeightDown,
     ];
 
     /// Stable machine-readable identifier, also used as the JSON config key.
@@ -262,6 +318,28 @@ impl WindowAction {
             WindowAction::CenterHalfBack => "center-half-back",
             WindowAction::Center => "center",
             WindowAction::Restore => "restore",
+            WindowAction::MoveLeft => "move-left",
+            WindowAction::MoveRight => "move-right",
+            WindowAction::MoveUp => "move-up",
+            WindowAction::MoveDown => "move-down",
+            WindowAction::Larger => "larger",
+            WindowAction::Smaller => "smaller",
+            WindowAction::LargerWidth => "larger-width",
+            WindowAction::SmallerWidth => "smaller-width",
+            WindowAction::LargerHeight => "larger-height",
+            WindowAction::SmallerHeight => "smaller-height",
+            WindowAction::DoubleWidthLeft => "double-width-left",
+            WindowAction::DoubleWidthRight => "double-width-right",
+            WindowAction::DoubleHeightUp => "double-height-up",
+            WindowAction::DoubleHeightDown => "double-height-down",
+            WindowAction::HalveWidthLeft => "halve-width-left",
+            WindowAction::HalveWidthRight => "halve-width-right",
+            WindowAction::HalveHeightUp => "halve-height-up",
+            WindowAction::HalveHeightDown => "halve-height-down",
+            WindowAction::FirstDisplay => "first-display",
+            WindowAction::SecondDisplay => "second-display",
+            WindowAction::ThirdDisplay => "third-display",
+            WindowAction::FourthDisplay => "fourth-display",
         }
     }
 
@@ -322,6 +400,28 @@ impl WindowAction {
             WindowAction::CenterHalfBack => "Center Half (Previous Size)",
             WindowAction::Center => "Center",
             WindowAction::Restore => "Restore",
+            WindowAction::MoveLeft => "Move Left",
+            WindowAction::MoveRight => "Move Right",
+            WindowAction::MoveUp => "Move Up",
+            WindowAction::MoveDown => "Move Down",
+            WindowAction::Larger => "Larger",
+            WindowAction::Smaller => "Smaller",
+            WindowAction::LargerWidth => "Larger Width",
+            WindowAction::SmallerWidth => "Smaller Width",
+            WindowAction::LargerHeight => "Larger Height",
+            WindowAction::SmallerHeight => "Smaller Height",
+            WindowAction::DoubleWidthLeft => "Double Width Left",
+            WindowAction::DoubleWidthRight => "Double Width Right",
+            WindowAction::DoubleHeightUp => "Double Height Up",
+            WindowAction::DoubleHeightDown => "Double Height Down",
+            WindowAction::HalveWidthLeft => "Halve Width Left",
+            WindowAction::HalveWidthRight => "Halve Width Right",
+            WindowAction::HalveHeightUp => "Halve Height Up",
+            WindowAction::HalveHeightDown => "Halve Height Down",
+            WindowAction::FirstDisplay => "First Display",
+            WindowAction::SecondDisplay => "Second Display",
+            WindowAction::ThirdDisplay => "Third Display",
+            WindowAction::FourthDisplay => "Fourth Display",
         }
     }
 
@@ -381,6 +481,28 @@ impl WindowAction {
             | WindowAction::CenterHalfBack
             | WindowAction::Center
             | WindowAction::Restore => WindowFamily::Sizing,
+            WindowAction::MoveLeft
+            | WindowAction::MoveRight
+            | WindowAction::MoveUp
+            | WindowAction::MoveDown => WindowFamily::Move,
+            WindowAction::Larger
+            | WindowAction::Smaller
+            | WindowAction::LargerWidth
+            | WindowAction::SmallerWidth
+            | WindowAction::LargerHeight
+            | WindowAction::SmallerHeight => WindowFamily::Resize,
+            WindowAction::DoubleWidthLeft
+            | WindowAction::DoubleWidthRight
+            | WindowAction::DoubleHeightUp
+            | WindowAction::DoubleHeightDown
+            | WindowAction::HalveWidthLeft
+            | WindowAction::HalveWidthRight
+            | WindowAction::HalveHeightUp
+            | WindowAction::HalveHeightDown => WindowFamily::HalveDouble,
+            WindowAction::FirstDisplay
+            | WindowAction::SecondDisplay
+            | WindowAction::ThirdDisplay
+            | WindowAction::FourthDisplay => WindowFamily::Displays,
         }
     }
 
@@ -391,10 +513,22 @@ impl WindowAction {
     }
 
     /// Throws that pick another display rather than a rectangle on this one.
+    ///
+    /// Covers both the relative throws ([`WindowAction::NextDisplay`] and
+    /// [`WindowAction::PreviousDisplay`]) and the absolute ones that name a
+    /// display by its position in [`crate::Screen::geometrically_ordered`].
+    /// All of them resolve their destination from the whole screen list, so
+    /// like [`WindowAction::uses_history`] they have no computable
+    /// [`WindowAction::target_rect`] and are handled by [`crate::Engine::plan`].
     pub const fn moves_display(self) -> bool {
         matches!(
             self,
-            WindowAction::PreviousDisplay | WindowAction::NextDisplay
+            WindowAction::PreviousDisplay
+                | WindowAction::NextDisplay
+                | WindowAction::FirstDisplay
+                | WindowAction::SecondDisplay
+                | WindowAction::ThirdDisplay
+                | WindowAction::FourthDisplay
         )
     }
 
@@ -404,6 +538,62 @@ impl WindowAction {
             WindowAction::PreviousDisplay => -1,
             WindowAction::NextDisplay => 1,
             _ => 0,
+        }
+    }
+
+    /// Whether this action's rectangle is derived from the window's *current*
+    /// frame rather than naming a fixed region of the work area.
+    ///
+    /// These actions are not "slots": asked for a target they reproduce
+    /// something based on where the window already is, so they cannot be used
+    /// to recognise a window's position and rebuild it on another display.
+    /// [`crate::Engine`] skips them when matching a slot across a display
+    /// move, which is what lets a genuinely free-floating window fall through
+    /// to proportional mapping.
+    ///
+    /// [`WindowAction::Center`] and [`WindowAction::MaximizeHeight`] keep the
+    /// window's size or horizontal position; every incremental move, resize
+    /// and halve/double is by definition relative to the current frame.
+    pub const fn depends_on_current_frame(self) -> bool {
+        matches!(
+            self,
+            WindowAction::Center
+                | WindowAction::MaximizeHeight
+                | WindowAction::MoveLeft
+                | WindowAction::MoveRight
+                | WindowAction::MoveUp
+                | WindowAction::MoveDown
+                | WindowAction::Larger
+                | WindowAction::Smaller
+                | WindowAction::LargerWidth
+                | WindowAction::SmallerWidth
+                | WindowAction::LargerHeight
+                | WindowAction::SmallerHeight
+                | WindowAction::DoubleWidthLeft
+                | WindowAction::DoubleWidthRight
+                | WindowAction::DoubleHeightUp
+                | WindowAction::DoubleHeightDown
+                | WindowAction::HalveWidthLeft
+                | WindowAction::HalveWidthRight
+                | WindowAction::HalveHeightUp
+                | WindowAction::HalveHeightDown
+        )
+    }
+
+    /// The display this action names outright, as an index into
+    /// [`crate::Screen::geometrically_ordered`].
+    ///
+    /// Absolute rather than relative, so "second display" means the same
+    /// screen every time regardless of where the window currently is — which
+    /// is the whole point of having them alongside next/previous. An index
+    /// past the end of the list means that display is not plugged in.
+    pub const fn display_index(self) -> Option<usize> {
+        match self {
+            WindowAction::FirstDisplay => Some(0),
+            WindowAction::SecondDisplay => Some(1),
+            WindowAction::ThirdDisplay => Some(2),
+            WindowAction::FourthDisplay => Some(3),
+            _ => None,
         }
     }
 
@@ -689,17 +879,202 @@ impl WindowAction {
                         .rounded(),
                 );
             }
-            WindowAction::Restore | WindowAction::PreviousDisplay | WindowAction::NextDisplay => {
-                return None
-            }
+            WindowAction::Restore => return None,
+            // The display actions depend on the whole screen list, which this
+            // function does not have; `Engine::plan` handles them.
+            WindowAction::NextDisplay
+            | WindowAction::PreviousDisplay
+            | WindowAction::FirstDisplay
+            | WindowAction::SecondDisplay
+            | WindowAction::ThirdDisplay
+            | WindowAction::FourthDisplay => return None,
+
+            // Incremental moves slide the window by a fixed step without
+            // changing its size, stopping flush against the work area rather
+            // than travelling off the edge of it. Rectangle's `moveLeft` jumps
+            // straight to the edge instead; a step is what makes the action
+            // *incremental*, which is what this family is for, and repeated
+            // presses still end flush at the edge.
+            WindowAction::MoveLeft => moved(current, a, -sizes.move_step, 0.0),
+            WindowAction::MoveRight => moved(current, a, sizes.move_step, 0.0),
+            WindowAction::MoveUp => moved(current, a, 0.0, -sizes.move_step),
+            WindowAction::MoveDown => moved(current, a, 0.0, sizes.move_step),
+
+            WindowAction::Larger => resized(current, a, sizes.size_step, sizes.size_step, sizes),
+            WindowAction::Smaller => resized(current, a, -sizes.size_step, -sizes.size_step, sizes),
+            WindowAction::LargerWidth => resized(current, a, sizes.width_step, 0.0, sizes),
+            WindowAction::SmallerWidth => resized(current, a, -sizes.width_step, 0.0, sizes),
+            WindowAction::LargerHeight => resized(current, a, 0.0, sizes.size_step, sizes),
+            WindowAction::SmallerHeight => resized(current, a, 0.0, -sizes.size_step, sizes),
+
+            // Halving and doubling keep the edge named by the action: "double
+            // width left" grows leftwards from the window's right edge, and
+            // "halve width left" keeps the left half. Same convention as
+            // Rectangle's `HalfOrDoubleDimensionCalculation`.
+            WindowAction::DoubleWidthLeft => scaled(
+                current,
+                a,
+                Rect::new(
+                    current.x - current.width,
+                    current.y,
+                    current.width * 2.0,
+                    current.height,
+                ),
+                sizes,
+            ),
+            WindowAction::DoubleWidthRight => scaled(
+                current,
+                a,
+                Rect::new(current.x, current.y, current.width * 2.0, current.height),
+                sizes,
+            ),
+            WindowAction::DoubleHeightUp => scaled(
+                current,
+                a,
+                Rect::new(
+                    current.x,
+                    current.y - current.height,
+                    current.width,
+                    current.height * 2.0,
+                ),
+                sizes,
+            ),
+            WindowAction::DoubleHeightDown => scaled(
+                current,
+                a,
+                Rect::new(current.x, current.y, current.width, current.height * 2.0),
+                sizes,
+            ),
+            WindowAction::HalveWidthLeft => scaled(
+                current,
+                a,
+                Rect::new(current.x, current.y, current.width / 2.0, current.height),
+                sizes,
+            ),
+            WindowAction::HalveWidthRight => scaled(
+                current,
+                a,
+                Rect::new(
+                    current.x + current.width / 2.0,
+                    current.y,
+                    current.width / 2.0,
+                    current.height,
+                ),
+                sizes,
+            ),
+            WindowAction::HalveHeightUp => scaled(
+                current,
+                a,
+                Rect::new(current.x, current.y, current.width, current.height / 2.0),
+                sizes,
+            ),
+            WindowAction::HalveHeightDown => scaled(
+                current,
+                a,
+                Rect::new(
+                    current.x,
+                    current.y + current.height / 2.0,
+                    current.width,
+                    current.height / 2.0,
+                ),
+                sizes,
+            ),
         };
 
         Some(rect.rounded())
     }
 }
 
-/// Builds a grid cell spanning the given column and row fractions of
-/// `work_area`, applying the gap model. An edge whose fraction is exactly 0 or
+/// How close to a work-area edge a window has to be to count as flush against
+/// it, in the backend's own unit. Matches Rectangle's 5-unit default.
+///
+/// Being flush is what anchors an incremental resize: a window against the
+/// right edge grows leftwards rather than sliding off the screen.
+const EDGE_TOLERANCE: f64 = 5.0;
+
+/// Slides `current` by `(dx, dy)`, clamped so it stays wholly inside `area`.
+fn moved(current: Rect, area: Rect, dx: f64, dy: f64) -> Rect {
+    Rect::new(
+        current.x + dx,
+        current.y + dy,
+        current.width,
+        current.height,
+    )
+    .clamped_within(area)
+}
+
+/// Grows or shrinks `current` by `(dw, dh)`, anchored to whichever work-area
+/// edges it is already flush against and otherwise centred, then clamped into
+/// `area`.
+///
+/// Anchoring is the point. Centring the change reads correctly for a floating
+/// window, but a window already flush against the right edge would be pushed
+/// off it — so an edge the window is touching stays put, exactly as
+/// Rectangle's "curtain" resize does. A window flush against *both* opposing
+/// edges spans the work area on that axis and simply keeps doing so.
+///
+/// Returns `current` unchanged when the result would be smaller than the
+/// configured minimum, so repeated presses can never shrink a window away.
+fn resized(current: Rect, area: Rect, dw: f64, dh: f64, sizes: SizeOptions) -> Rect {
+    let against_left = (current.x - area.x).abs() <= EDGE_TOLERANCE;
+    let against_right = (current.max_x() - area.max_x()).abs() <= EDGE_TOLERANCE;
+    let against_top = (current.y - area.y).abs() <= EDGE_TOLERANCE;
+    let against_bottom = (current.max_y() - area.max_y()).abs() <= EDGE_TOLERANCE;
+
+    let width = (current.width + dw).min(area.width);
+    let height = (current.height + dh).min(area.height);
+
+    let x = match (against_left, against_right) {
+        // Flush against both edges the window spans the work area on this
+        // axis; shrinking it should leave it centred rather than pinned to one
+        // side. (Growing cannot move it, since the width is capped above.)
+        (true, true) => current.x + (current.width - width) / 2.0,
+        (true, false) => current.x,
+        (false, true) => current.max_x() - width,
+        (false, false) => current.x - (width - current.width) / 2.0,
+    };
+    let y = match (against_top, against_bottom) {
+        (true, true) => current.y + (current.height - height) / 2.0,
+        (true, false) => current.y,
+        (false, true) => current.max_y() - height,
+        (false, false) => current.y - (height - current.height) / 2.0,
+    };
+
+    let resized = Rect::new(x, y, width, height);
+    guard_minimum(current, resized, area, sizes)
+}
+
+/// Applies an already-computed halve or double rectangle, clamping it into
+/// `area` and refusing the change when it would leave the window below the
+/// configured minimum.
+fn scaled(current: Rect, area: Rect, target: Rect, sizes: SizeOptions) -> Rect {
+    guard_minimum(current, target, area, sizes)
+}
+
+/// Clamps `target` into `area`, unless doing so would shrink the window below
+/// the configured minimum on an axis it is shrinking on — in which case the
+/// window is left exactly where it is.
+///
+/// The guard is deliberately one-sided. Only a *reducing* change can be
+/// refused, so a wide, short window can still be made taller even while its
+/// height is below the floor; and only the axis actually shrinking is
+/// considered, so a width change is never blocked by the height. This is what
+/// stops repeated presses from shrinking a window away, without leaving an
+/// already-small window unresizable. Mirrors Rectangle's
+/// `resizedWindowRectIsTooSmall`, applied per axis.
+fn guard_minimum(current: Rect, target: Rect, area: Rect, sizes: SizeOptions) -> Rect {
+    let min_width = (area.width * sizes.minimum_width).max(1.0);
+    let min_height = (area.height * sizes.minimum_height).max(1.0);
+    let too_narrow = target.width < current.width && target.width < min_width;
+    let too_short = target.height < current.height && target.height < min_height;
+    if too_narrow || too_short {
+        current
+    } else {
+        target.clamped_within(area)
+    }
+}
+
+/// Builds a grid cell spanning the given column and row fractions of/// `work_area`, applying the gap model. An edge whose fraction is exactly 0 or
 /// 1 lies against the screen and receives a screen-edge gap; any other edge is
 /// shared with a neighbour and receives half the window gap, so two adjacent
 /// cells are separated by exactly one window gap.
@@ -1304,6 +1679,7 @@ mod tests {
         let sizes = SizeOptions {
             almost_maximize_width: 0.5,
             almost_maximize_height: 0.5,
+            ..SizeOptions::default()
         };
         let half = WindowAction::AlmostMaximize
             .target_rect(AREA, &NO_GAPS, CURRENT, true, sizes)
@@ -1499,5 +1875,301 @@ mod tests {
                 "fraction {bad} should not produce a rectangle"
             );
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // Incremental move and resize
+    // ---------------------------------------------------------------------
+
+    /// A 30-unit step with a 25% floor: the shipped defaults.
+    const STEPS: SizeOptions = SizeOptions {
+        almost_maximize_width: 0.9,
+        almost_maximize_height: 0.9,
+        size_step: 30.0,
+        width_step: 30.0,
+        move_step: 30.0,
+        minimum_width: 0.25,
+        minimum_height: 0.25,
+    };
+
+    fn adjust(action: WindowAction, current: Rect, area: Rect) -> Rect {
+        action
+            .target_rect(area, &NO_GAPS, current, true, STEPS)
+            .unwrap()
+    }
+
+    #[test]
+    fn moves_slide_the_window_by_one_step_without_resizing() {
+        let start = Rect::new(500.0, 400.0, 800.0, 600.0);
+        for (action, expected) in [
+            (
+                WindowAction::MoveLeft,
+                Rect::new(470.0, 400.0, 800.0, 600.0),
+            ),
+            (
+                WindowAction::MoveRight,
+                Rect::new(530.0, 400.0, 800.0, 600.0),
+            ),
+            (WindowAction::MoveUp, Rect::new(500.0, 370.0, 800.0, 600.0)),
+            (
+                WindowAction::MoveDown,
+                Rect::new(500.0, 430.0, 800.0, 600.0),
+            ),
+        ] {
+            assert_eq!(adjust(action, start, AREA), expected, "{action}");
+        }
+    }
+
+    #[test]
+    fn a_move_stops_flush_against_the_work_area_and_never_leaves_it() {
+        // Repeatedly nudging left ends flush at the edge and stays there.
+        let mut win = Rect::new(20.0, 20.0, 400.0, 300.0);
+        for _ in 0..10 {
+            win = adjust(WindowAction::MoveLeft, win, AREA);
+            assert!(win.x >= AREA.x, "moved past the left edge: {win:?}");
+        }
+        assert_eq!(win, Rect::new(0.0, 20.0, 400.0, 300.0));
+
+        // And the same on the far side, where the *right* edge is the limit.
+        let mut win = Rect::new(1400.0, 700.0, 400.0, 300.0);
+        for _ in 0..20 {
+            win = adjust(WindowAction::MoveRight, win, AREA);
+            win = adjust(WindowAction::MoveDown, win, AREA);
+        }
+        assert_eq!(win.max_x(), AREA.max_x());
+        assert_eq!(win.max_y(), AREA.max_y());
+        assert_eq!((win.width, win.height), (400.0, 300.0));
+    }
+
+    #[test]
+    fn a_move_respects_an_offset_work_area() {
+        let win = Rect::new(OFFSET_AREA.x, OFFSET_AREA.y, 400.0, 300.0);
+        // Already flush against the top-left of a taskbar-offset work area, so
+        // there is nowhere further up or left to go.
+        assert_eq!(adjust(WindowAction::MoveLeft, win, OFFSET_AREA), win);
+        assert_eq!(adjust(WindowAction::MoveUp, win, OFFSET_AREA), win);
+    }
+
+    #[test]
+    fn a_floating_window_resizes_around_its_centre() {
+        let start = Rect::new(500.0, 400.0, 800.0, 600.0);
+        let larger = adjust(WindowAction::Larger, start, AREA);
+        assert_eq!(larger, Rect::new(485.0, 385.0, 830.0, 630.0));
+        assert_eq!(larger.center(), start.center());
+
+        let smaller = adjust(WindowAction::Smaller, start, AREA);
+        assert_eq!(smaller, Rect::new(515.0, 415.0, 770.0, 570.0));
+        assert_eq!(smaller.center(), start.center());
+    }
+
+    /// The behaviour the issue singles out: a window flush against a screen
+    /// edge grows away from that edge rather than being pushed through it.
+    #[test]
+    fn a_flush_window_resizes_from_its_anchored_edge() {
+        // A right half: the right edge is pinned, so growing extends leftwards.
+        let right_half = rect(WindowAction::RightHalf, AREA, &NO_GAPS);
+        let grown = adjust(WindowAction::LargerWidth, right_half, AREA);
+        assert_eq!(grown.max_x(), right_half.max_x());
+        assert_eq!(grown.width, right_half.width + 30.0);
+
+        // A left half: the left edge is pinned instead.
+        let left_half = rect(WindowAction::LeftHalf, AREA, &NO_GAPS);
+        let grown = adjust(WindowAction::LargerWidth, left_half, AREA);
+        assert_eq!(grown.x, left_half.x);
+        assert_eq!(grown.width, left_half.width + 30.0);
+
+        // A bottom half is pinned at the bottom.
+        let bottom = rect(WindowAction::BottomHalf, AREA, &NO_GAPS);
+        let grown = adjust(WindowAction::LargerHeight, bottom, AREA);
+        assert_eq!(grown.max_y(), bottom.max_y());
+        assert_eq!(grown.height, bottom.height + 30.0);
+    }
+
+    #[test]
+    fn width_and_height_resizes_touch_only_their_own_axis() {
+        let start = Rect::new(500.0, 400.0, 800.0, 600.0);
+        for action in [WindowAction::LargerWidth, WindowAction::SmallerWidth] {
+            let out = adjust(action, start, AREA);
+            assert_eq!((out.y, out.height), (start.y, start.height), "{action}");
+        }
+        for action in [WindowAction::LargerHeight, WindowAction::SmallerHeight] {
+            let out = adjust(action, start, AREA);
+            assert_eq!((out.x, out.width), (start.x, start.width), "{action}");
+        }
+    }
+
+    #[test]
+    fn growing_can_never_exceed_the_work_area() {
+        let mut win = Rect::new(500.0, 400.0, 800.0, 600.0);
+        for _ in 0..200 {
+            win = adjust(WindowAction::Larger, win, AREA);
+            assert!(
+                win.x >= AREA.x
+                    && win.y >= AREA.y
+                    && win.max_x() <= AREA.max_x()
+                    && win.max_y() <= AREA.max_y(),
+                "grew outside the work area: {win:?}"
+            );
+        }
+        assert_eq!(win, AREA);
+    }
+
+    #[test]
+    fn shrinking_stops_at_the_configured_minimum() {
+        let mut win = AREA;
+        for _ in 0..200 {
+            win = adjust(WindowAction::Smaller, win, AREA);
+        }
+        // A quarter of the work area on each axis is the floor, and the window
+        // is still a real window rather than a sliver.
+        assert!(win.width >= AREA.width * 0.25, "{win:?}");
+        assert!(win.height >= AREA.height * 0.25, "{win:?}");
+        // One more press changes nothing at all.
+        assert_eq!(adjust(WindowAction::Smaller, win, AREA), win);
+    }
+
+    #[test]
+    fn a_maximized_window_shrinks_towards_its_centre() {
+        let smaller = adjust(WindowAction::Smaller, AREA, AREA);
+        assert_eq!(smaller.width, AREA.width - 30.0);
+        assert_eq!(smaller.height, AREA.height - 30.0);
+        assert_eq!(smaller.center(), AREA.center());
+    }
+
+    #[test]
+    fn halving_keeps_the_named_half() {
+        let start = Rect::new(400.0, 200.0, 1200.0, 800.0);
+        assert_eq!(
+            adjust(WindowAction::HalveWidthLeft, start, AREA),
+            Rect::new(400.0, 200.0, 600.0, 800.0)
+        );
+        assert_eq!(
+            adjust(WindowAction::HalveWidthRight, start, AREA),
+            Rect::new(1000.0, 200.0, 600.0, 800.0)
+        );
+        assert_eq!(
+            adjust(WindowAction::HalveHeightUp, start, AREA),
+            Rect::new(400.0, 200.0, 1200.0, 400.0)
+        );
+        assert_eq!(
+            adjust(WindowAction::HalveHeightDown, start, AREA),
+            Rect::new(400.0, 600.0, 1200.0, 400.0)
+        );
+    }
+
+    #[test]
+    fn doubling_grows_towards_the_named_edge() {
+        let start = Rect::new(600.0, 400.0, 400.0, 300.0);
+        assert_eq!(
+            adjust(WindowAction::DoubleWidthRight, start, AREA),
+            Rect::new(600.0, 400.0, 800.0, 300.0)
+        );
+        assert_eq!(
+            adjust(WindowAction::DoubleWidthLeft, start, AREA),
+            Rect::new(200.0, 400.0, 800.0, 300.0)
+        );
+        assert_eq!(
+            adjust(WindowAction::DoubleHeightDown, start, AREA),
+            Rect::new(600.0, 400.0, 400.0, 600.0)
+        );
+        assert_eq!(
+            adjust(WindowAction::DoubleHeightUp, start, AREA),
+            Rect::new(600.0, 100.0, 400.0, 600.0)
+        );
+    }
+
+    #[test]
+    fn doubling_clamps_to_the_work_area() {
+        // Doubling repeatedly can only ever reach the work area, never pass it.
+        let mut win = Rect::new(1500.0, 800.0, 300.0, 200.0);
+        for _ in 0..10 {
+            win = adjust(WindowAction::DoubleWidthRight, win, AREA);
+            win = adjust(WindowAction::DoubleHeightDown, win, AREA);
+            assert!(
+                win.max_x() <= AREA.max_x() && win.max_y() <= AREA.max_y(),
+                "doubled outside the work area: {win:?}"
+            );
+        }
+        assert_eq!(win, AREA);
+    }
+
+    #[test]
+    fn halving_refuses_to_go_below_the_minimum() {
+        // A quarter-width window cannot be halved again with a 25% floor.
+        let quarter = Rect::new(0.0, 0.0, AREA.width / 4.0, AREA.height);
+        assert_eq!(
+            adjust(WindowAction::HalveWidthLeft, quarter, AREA),
+            quarter,
+            "halving below the minimum must be refused, not clamped"
+        );
+    }
+
+    #[test]
+    fn a_larger_minimum_forbids_more() {
+        let sizes = SizeOptions {
+            minimum_width: 0.5,
+            ..STEPS
+        };
+        let half = rect(WindowAction::LeftHalf, AREA, &NO_GAPS);
+        assert_eq!(
+            WindowAction::SmallerWidth
+                .target_rect(AREA, &NO_GAPS, half, true, sizes)
+                .unwrap(),
+            half
+        );
+    }
+
+    #[test]
+    fn display_actions_have_no_computable_rectangle() {
+        // Their destination depends on the screen list, so `Engine::plan`
+        // owns them; `target_rect` must not guess.
+        for action in WindowAction::ALL.into_iter().filter(|a| a.moves_display()) {
+            assert_eq!(
+                action.target_rect(AREA, &NO_GAPS, CURRENT, true, STEPS),
+                None,
+                "{action} produced a rectangle without a screen list"
+            );
+        }
+    }
+
+    #[test]
+    fn display_actions_are_relative_or_absolute_but_never_both() {
+        let moving: Vec<&str> = WindowAction::ALL
+            .into_iter()
+            .filter(|a| a.moves_display())
+            .map(|a| a.id())
+            .collect();
+        assert_eq!(
+            moving,
+            [
+                "previous-display",
+                "next-display",
+                "first-display",
+                "second-display",
+                "third-display",
+                "fourth-display",
+            ]
+        );
+        for action in WindowAction::ALL.into_iter().filter(|a| a.moves_display()) {
+            let relative = action.display_step() != 0;
+            let absolute = action.display_index().is_some();
+            assert!(
+                relative ^ absolute,
+                "{action} must be exactly one of relative or absolute"
+            );
+        }
+        // And an action that does not move displays claims neither.
+        for action in WindowAction::ALL.into_iter().filter(|a| !a.moves_display()) {
+            assert_eq!(action.display_step(), 0, "{action}");
+            assert_eq!(action.display_index(), None, "{action}");
+        }
+    }
+
+    #[test]
+    fn the_named_displays_index_in_geometric_order() {
+        assert_eq!(WindowAction::FirstDisplay.display_index(), Some(0));
+        assert_eq!(WindowAction::SecondDisplay.display_index(), Some(1));
+        assert_eq!(WindowAction::ThirdDisplay.display_index(), Some(2));
+        assert_eq!(WindowAction::FourthDisplay.display_index(), Some(3));
     }
 }
