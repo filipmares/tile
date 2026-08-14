@@ -17,6 +17,7 @@
 //! Note: a low-level hook cannot intercept input directed at an elevated
 //! process or the secure desktop unless Tile itself runs elevated.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
@@ -41,7 +42,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, PostThreadMessageW, SetWindowsHookExW,
     TranslateMessage, UnhookWindowsHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, MSG,
-    WH_KEYBOARD_LL, WM_KEYDOWN, WM_QUIT, WM_SYSKEYDOWN,
+    WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
 use crate::{HotkeyBackend, HotkeyFailure, PlatformError, Result};
@@ -76,6 +77,62 @@ static HOOK_STATE: OnceLock<Mutex<Option<HookState>>> = OnceLock::new();
 /// Marker stamped into `dwExtraInfo` of the keystrokes we inject ourselves so
 /// the hook can recognise and ignore them (and so it never recurses).
 const INJECTED_TAG: usize = 0x54_49_4C_45; // "TILE"
+
+/// Tracks which key-*down* events the hook swallowed, so the matching key-*up*
+/// can be swallowed too.
+///
+/// Swallowing only the key-down is not enough. Anything else listening for the
+/// combination — the shell, Game Bar, another app's hook further along the
+/// chain — can still observe the key-up and treat the keystroke as having
+/// happened, which is why a bound shortcut could fire Tile's action *and* the
+/// OS action. Suppressing both halves makes the keystroke invisible to
+/// everything downstream.
+///
+/// A lock-free bitset rather than the `HOOK_STATE` mutex: the hook runs for
+/// every key event, and Windows silently removes hooks whose callback exceeds
+/// `LowLevelHooksTimeout` (300 ms by default), so the key-up path must never
+/// contend on a lock.
+///
+/// Indexed by virtual key *and* the extended flag — `VK_RETURN` is both Enter
+/// and numpad Enter, distinguished only by that flag — giving 512 slots.
+static SWALLOWED_KEYS: [AtomicU64; 8] = [
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+];
+
+/// Bit position for a `(vk, extended)` pair within [`SWALLOWED_KEYS`].
+const fn swallow_index(vk: u16, extended: bool) -> usize {
+    (vk as usize & 0xFF) + if extended { 256 } else { 0 }
+}
+
+/// Records that a key-down was swallowed, so its key-up will be too.
+fn mark_swallowed(vk: u16, extended: bool) {
+    let index = swallow_index(vk, extended);
+    SWALLOWED_KEYS[index / 64].fetch_or(1u64 << (index % 64), Ordering::Relaxed);
+}
+
+/// Consumes the record for a key-up, returning whether its key-down had been
+/// swallowed (and so this key-up should be swallowed as well).
+fn take_swallowed(vk: u16, extended: bool) -> bool {
+    let index = swallow_index(vk, extended);
+    let bit = 1u64 << (index % 64);
+    SWALLOWED_KEYS[index / 64].fetch_and(!bit, Ordering::Relaxed) & bit != 0
+}
+
+/// Clears every pending record. Used when the binding table changes or the
+/// hook shuts down, so a key-up cannot be swallowed on behalf of a binding
+/// that no longer exists.
+fn clear_swallowed() {
+    for word in &SWALLOWED_KEYS {
+        word.store(0, Ordering::Relaxed);
+    }
+}
 
 pub struct WindowsHotkeyBackend {
     thread: Option<JoinHandle<()>>,
@@ -149,6 +206,9 @@ impl HotkeyBackend for WindowsHotkeyBackend {
                 }
             }
         }
+        // A key-down swallowed under the old table must not cause its key-up to
+        // be swallowed under the new one.
+        clear_swallowed();
         Ok(Vec::new())
     }
 
@@ -272,6 +332,10 @@ unsafe extern "system" fn low_level_keyboard_proc(
                     let mods = current_modifiers();
                     let extended = (kb.flags.0 & LLKHF_EXTENDED.0) != 0;
                     if dispatch(vk, extended, mods) {
+                        // The key-up must be swallowed too, or anything else
+                        // watching for this combination still sees a completed
+                        // keystroke and fires its own action alongside ours.
+                        mark_swallowed(vk, extended);
                         // A Win-based combo was consumed. Without this, releasing
                         // the Win key would open the Start menu, because the shell
                         // opens Start on Win-*up* when no other key was seen as
@@ -283,6 +347,17 @@ unsafe extern "system" fn low_level_keyboard_proc(
                         // Return 1 to swallow the event so Aero Snap never fires.
                         return LRESULT(1);
                     }
+                }
+            }
+        } else if message == WM_KEYUP || message == WM_SYSKEYUP {
+            let kb = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
+            if kb.dwExtraInfo != INJECTED_TAG {
+                let vk = kb.vkCode as u16;
+                let extended = (kb.flags.0 & LLKHF_EXTENDED.0) != 0;
+                // Only swallowed if we swallowed the matching key-down, so a
+                // key-up we never claimed is always passed through.
+                if take_swallowed(vk, extended) {
+                    return LRESULT(1);
                 }
             }
         }
@@ -559,6 +634,74 @@ fn keycode_extended(key: KeyCode) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn swallowed_key_up_is_consumed_exactly_once() {
+        clear_swallowed();
+        let vk = 0x47; // 'G'
+
+        // A key-up we never claimed must always pass through.
+        assert!(!take_swallowed(vk, false));
+
+        mark_swallowed(vk, false);
+        assert!(
+            take_swallowed(vk, false),
+            "matching key-up must be swallowed"
+        );
+        assert!(
+            !take_swallowed(vk, false),
+            "the record must be consumed, so a later key-up passes through"
+        );
+        clear_swallowed();
+    }
+
+    #[test]
+    fn swallowing_distinguishes_the_two_enter_keys() {
+        // Both report VK_RETURN; only the extended flag separates them, so
+        // swallowing numpad Enter must not swallow main Enter's key-up.
+        clear_swallowed();
+        let vk_return = 0x0D;
+
+        mark_swallowed(vk_return, true); // numpad Enter
+        assert!(
+            !take_swallowed(vk_return, false),
+            "main Enter is unaffected"
+        );
+        assert!(take_swallowed(vk_return, true), "numpad Enter is swallowed");
+        clear_swallowed();
+    }
+
+    #[test]
+    fn swallowed_records_are_independent_across_keys() {
+        clear_swallowed();
+        mark_swallowed(0x41, false); // 'A'
+        mark_swallowed(0xFF, false); // last slot in the first half
+        assert!(!take_swallowed(0x42, false), "'B' was never marked");
+        assert!(take_swallowed(0x41, false));
+        assert!(take_swallowed(0xFF, false));
+        clear_swallowed();
+    }
+
+    #[test]
+    fn clear_swallowed_drops_every_pending_record() {
+        clear_swallowed();
+        mark_swallowed(0x47, false);
+        mark_swallowed(0x0D, true);
+        clear_swallowed();
+        assert!(!take_swallowed(0x47, false));
+        assert!(!take_swallowed(0x0D, true));
+    }
+
+    #[test]
+    fn swallow_index_covers_the_bitset_without_overlap() {
+        // 512 slots across 8 x 64-bit words, and the extended variant of a key
+        // must never alias the non-extended one.
+        assert_eq!(swallow_index(0, false), 0);
+        assert_eq!(swallow_index(0xFF, false), 255);
+        assert_eq!(swallow_index(0, true), 256);
+        assert_eq!(swallow_index(0xFF, true), 511);
+        assert_ne!(swallow_index(0x0D, false), swallow_index(0x0D, true));
+    }
 
     /// Reverse mapping, defined only for the round-trip test.
     fn vk_to_keycode(vk: u16, extended: bool) -> Option<KeyCode> {
