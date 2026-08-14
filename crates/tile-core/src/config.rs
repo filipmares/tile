@@ -393,13 +393,13 @@ const BASE_MODIFIERS: Modifiers = Modifiers(Modifiers::META.0 | Modifiers::ALT.0
 
 /// Platform-appropriate default key bindings.
 ///
-/// The letter bindings are shared across platforms and are taken from
-/// Rectangle's alternate defaults, because they are *spatially* mnemonic
+/// The letter bindings are **identical on both platforms**, so anyone using
+/// Tile on a Mac and a PC keeps one set of habits. They are spatially mnemonic
 /// rather than arbitrary — a 2x3 block on the keyboard:
 ///
 /// ```text
-///   E  R  T     two-thirds  (first / center / last)
-///   D  F  G     thirds      (first / center / last)
+///   Q  W  E     two-thirds  (first / center / last)
+///   A  S  D     thirds      (first / center / last)
 /// ```
 ///
 /// Each third sits directly below its two-thirds variant, running left to
@@ -410,25 +410,24 @@ const BASE_MODIFIERS: Modifiers = Modifiers(Modifiers::META.0 | Modifiers::ALT.0
 /// what users there already reach for, claimed back from Aero Snap by the
 /// low-level keyboard hook in the Windows backend.
 ///
-/// # Known conflict on Windows
+/// # Why not Rectangle's letters
 ///
-/// `Win+Alt+G` and `Win+Alt+R` also reach Xbox Game Bar, and **Tile cannot
-/// suppress them.**
+/// Rectangle uses the same shape one column to the right — `D`/`F`/`G` for the
+/// thirds with `E`/`R`/`T` above — and Tile shipped that briefly. It had to
+/// move because two of those keys are unusable on Windows:
 ///
-/// `Win+Alt+G` is the awkward one, and it is *not* caused by Tile: Game Bar's
-/// "open Game Bar" hotkey is `Win+G`, and its handler matches loosely, ignoring
-/// the extra `Alt`. Pressing `Win+Alt+G` opens the overlay even with Tile shut
-/// down. (The shell itself is strict — `Win+Alt+Up` never triggers `Win+Up`.)
-/// `Win+Alt+R` is Game Bar's start/stop recording, handled by GameDVR through
-/// an input path that never reaches the keyboard hook. `Win+Alt+M`,
-/// `Win+Alt+B` and `Win+Alt+PrtScn` are reserved the same way and are
-/// deliberately left unbound.
+/// - `Win+Alt+G` opens the Xbox Game Bar overlay. Game Bar's own hotkey is
+///   `Win+G`, and its handler matches *loosely*, ignoring the extra `Alt`. The
+///   overlay appears even with Tile shut down, so this is not something Tile
+///   can suppress, and the user cannot fix it: Game Bar's settings only *add*
+///   shortcuts, they never replace the built-in one. Short of uninstalling
+///   Game Bar there is no remedy.
+/// - `Win+Alt+R` is Game Bar's start/stop recording, handled by GameDVR
+///   through an input path that never reaches the keyboard hook.
 ///
-/// This is a considered trade, not an oversight: the letters are kept so that
-/// muscle memory carries between Rectangle on macOS and Tile on Windows, and
-/// the user can remap the Game Bar shortcuts in a few seconds. If you are
-/// tempted to "fix" it by moving these bindings, read
-/// <https://github.com/filipmares/tile/issues/18> first.
+/// Sliding the block two columns left keeps the geometry exactly — the
+/// mnemonic is positional, not alphabetic — while avoiding every key Game Bar
+/// reserves (`G`, `R`, `M`, `B`). There is a test enforcing that.
 pub fn default_bindings() -> BTreeMap<WindowAction, Option<Hotkey>> {
     let mut map = BTreeMap::new();
     let base = BASE_MODIFIERS;
@@ -482,25 +481,25 @@ pub fn default_bindings() -> BTreeMap<WindowAction, Option<Hotkey>> {
     map.insert(WindowAction::Center, Some(Hotkey::new(base, KeyCode::C)));
     map.insert(
         WindowAction::FirstThird,
-        Some(Hotkey::new(base, KeyCode::D)),
+        Some(Hotkey::new(base, KeyCode::A)),
     );
     map.insert(
         WindowAction::FirstTwoThirds,
-        Some(Hotkey::new(base, KeyCode::E)),
+        Some(Hotkey::new(base, KeyCode::Q)),
     );
     map.insert(
         WindowAction::CenterThird,
-        Some(Hotkey::new(base, KeyCode::F)),
+        Some(Hotkey::new(base, KeyCode::S)),
     );
     map.insert(
         WindowAction::CenterTwoThirds,
-        Some(Hotkey::new(base, KeyCode::R)),
+        Some(Hotkey::new(base, KeyCode::W)),
     );
     map.insert(
         WindowAction::LastTwoThirds,
-        Some(Hotkey::new(base, KeyCode::T)),
+        Some(Hotkey::new(base, KeyCode::E)),
     );
-    map.insert(WindowAction::LastThird, Some(Hotkey::new(base, KeyCode::G)));
+    map.insert(WindowAction::LastThird, Some(Hotkey::new(base, KeyCode::D)));
     map.insert(WindowAction::TopLeft, Some(Hotkey::new(base, KeyCode::U)));
     map.insert(WindowAction::TopRight, Some(Hotkey::new(base, KeyCode::I)));
     map.insert(
@@ -553,20 +552,23 @@ mod tests {
     ];
 
     #[test]
-    fn defaults_use_rectangles_spatially_mnemonic_letters() {
-        // These letters are load-bearing, not arbitrary: D/F/G run left to
-        // right along the home row for the thirds, E and T sit above the
-        // boundaries they span, and U/I/J/K form a 2x2 block matching the
-        // screen corners. Changing one silently breaks the mnemonic and
-        // diverges from Rectangle, so they are pinned here.
+    fn defaults_use_spatially_mnemonic_letters() {
+        // These letters are load-bearing, not arbitrary. They form a 2x3 block:
+        //
+        //   Q W E   two-thirds
+        //   A S D   thirds
+        //
+        // Each third sits directly below its two-thirds variant, running left
+        // to right, and U/I/J/K form a 2x2 block matching the screen corners.
+        // Changing one silently breaks the mnemonic, so they are pinned here.
         let config = Config::default();
         let expected = [
-            (WindowAction::FirstThird, KeyCode::D),
-            (WindowAction::FirstTwoThirds, KeyCode::E),
-            (WindowAction::CenterThird, KeyCode::F),
-            (WindowAction::CenterTwoThirds, KeyCode::R),
-            (WindowAction::LastTwoThirds, KeyCode::T),
-            (WindowAction::LastThird, KeyCode::G),
+            (WindowAction::FirstThird, KeyCode::A),
+            (WindowAction::CenterThird, KeyCode::S),
+            (WindowAction::LastThird, KeyCode::D),
+            (WindowAction::FirstTwoThirds, KeyCode::Q),
+            (WindowAction::CenterTwoThirds, KeyCode::W),
+            (WindowAction::LastTwoThirds, KeyCode::E),
             (WindowAction::TopLeft, KeyCode::U),
             (WindowAction::TopRight, KeyCode::I),
             (WindowAction::BottomLeft, KeyCode::J),
@@ -578,6 +580,34 @@ mod tests {
             assert_eq!(
                 hotkey.modifiers, BASE_MODIFIERS,
                 "{action} should use the platform base modifier"
+            );
+        }
+    }
+
+    /// The letters must be the same on every platform, so that someone using
+    /// Tile on both a Mac and a PC has one set of habits rather than two.
+    /// Hard-coded rather than derived, so a platform-specific edit to
+    /// `default_bindings` fails here instead of drifting silently.
+    #[test]
+    fn letter_defaults_do_not_vary_by_platform() {
+        let config = Config::default();
+        for (action, key) in [
+            (WindowAction::FirstThird, KeyCode::A),
+            (WindowAction::CenterThird, KeyCode::S),
+            (WindowAction::LastThird, KeyCode::D),
+            (WindowAction::FirstTwoThirds, KeyCode::Q),
+            (WindowAction::CenterTwoThirds, KeyCode::W),
+            (WindowAction::LastTwoThirds, KeyCode::E),
+            (WindowAction::Center, KeyCode::C),
+            (WindowAction::TopLeft, KeyCode::U),
+            (WindowAction::TopRight, KeyCode::I),
+            (WindowAction::BottomLeft, KeyCode::J),
+            (WindowAction::BottomRight, KeyCode::K),
+        ] {
+            assert_eq!(
+                config.binding(action).map(|h| h.key),
+                Some(key),
+                "{action} must use the same key on every platform"
             );
         }
     }
@@ -600,23 +630,24 @@ mod tests {
         }
     }
 
-    /// Xbox Game Bar reserves several `Win+Alt` combinations through GameDVR,
-    /// which Tile's keyboard hook cannot suppress — both actions fire. `G` and
-    /// `R` are knowingly accepted (see `default_bindings`), but the rest must
-    /// stay clear, so a future binding cannot wander into one unnoticed.
+    /// Xbox Game Bar reserves several `Win+Alt` combinations that Tile cannot
+    /// win. `Win+Alt+G` opens the overlay even with Tile shut down, because
+    /// Game Bar's `Win+G` hotkey matches loosely; `R`, `M` and `B` are handled
+    /// by GameDVR through an input path the keyboard hook never sees. The
+    /// defaults were moved off these keys deliberately, so this test keeps
+    /// them clear rather than letting a future binding wander back in.
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn defaults_avoid_the_unwinnable_game_bar_shortcuts() {
-        // Deliberate, documented exceptions.
-        const ACCEPTED: [KeyCode; 2] = [KeyCode::G, KeyCode::R];
-        // Microphone on/off, HDR on/off. (Win+Alt+PrtScn is also reserved;
-        // Tile has no PrintScreen key code, so it cannot be bound anyway.)
-        const RESERVED: [KeyCode; 2] = [KeyCode::M, KeyCode::B];
+        // Open overlay / start-stop recording / microphone / HDR.
+        // (`Win+Alt+PrtScn` is reserved too, but Tile has no PrintScreen key
+        // code, so it cannot be bound in the first place.)
+        const RESERVED: [KeyCode; 4] = [KeyCode::G, KeyCode::R, KeyCode::M, KeyCode::B];
 
         let config = Config::default();
         let win_alt = Modifiers::META | Modifiers::ALT;
         for (hotkey, action) in config.active_bindings() {
-            if hotkey.modifiers != win_alt || ACCEPTED.contains(&hotkey.key) {
+            if hotkey.modifiers != win_alt {
                 continue;
             }
             assert!(

@@ -16,22 +16,23 @@ maximize it, center it, or undo the last move, all from the keyboard.
 
 ## Default keyboard shortcuts
 
-Only the halves differ between platforms. Everything else shares the same
-letters, so one set of habits works on both.
+Only the halves differ between platforms. Every letter binding is the same on
+Windows and macOS, so one set of habits works on both.
 
-Those letters come from Rectangle's alternate defaults, and they are
-*spatially* mnemonic rather than arbitrary:
+The letters are spatially mnemonic rather than arbitrary — a 2×3 block on the
+keyboard:
 
-- `D` `F` `G` are adjacent home-row keys running left to right — first,
-  center and last third.
-- `E` sits above the `D`/`F` boundary (the first two thirds), `T` above
-  `F`/`G` (the last two thirds).
-- `U` `I` `J` `K` form a 2×2 block on the keyboard that maps onto the four
-  screen corners.
+```text
+  Q  W  E     two-thirds  (first / center / last)
+  A  S  D     thirds      (first / center / last)
+```
 
-Every shortcut is rebindable, and the wider catalogue (fourths, sixths,
-ninths, corner thirds) ships unbound — reachable from the tray menu, or bind
-your own.
+Each third sits directly below its two-thirds variant, running left to right.
+The corners are a second block, `U`/`I` over `J`/`K`, mapping onto the four
+screen corners.
+
+Every shortcut is rebindable, and the wider catalogue (fourths, sixths, ninths,
+corner thirds) ships unbound — reachable from the tray menu, or bind your own.
 
 | Action            | macOS                            | Windows                       |
 | ----------------- | -------------------------------- | ----------------------------- |
@@ -43,12 +44,12 @@ your own.
 | Restore           | `Ctrl` + `Option` + `Backspace`  | `Win` + `↓`                   |
 | Maximize height   | `Ctrl` + `Option` + `Shift` + `↑`| `Win` + `Alt` + `Shift` + `↑` |
 | Center            | `Ctrl` + `Option` + `C`          | `Win` + `Alt` + `C`           |
-| First third       | `Ctrl` + `Option` + `D`          | `Win` + `Alt` + `D`           |
-| First two thirds  | `Ctrl` + `Option` + `E`          | `Win` + `Alt` + `E`           |
-| Center third      | `Ctrl` + `Option` + `F`          | `Win` + `Alt` + `F`           |
-| Center two thirds | `Ctrl` + `Option` + `R`          | `Win` + `Alt` + `R`           |
-| Last two thirds   | `Ctrl` + `Option` + `T`          | `Win` + `Alt` + `T`           |
-| Last third        | `Ctrl` + `Option` + `G`          | `Win` + `Alt` + `G`           |
+| First third       | `Ctrl` + `Option` + `A`          | `Win` + `Alt` + `A`           |
+| Center third      | `Ctrl` + `Option` + `S`          | `Win` + `Alt` + `S`           |
+| Last third        | `Ctrl` + `Option` + `D`          | `Win` + `Alt` + `D`           |
+| First two thirds  | `Ctrl` + `Option` + `Q`          | `Win` + `Alt` + `Q`           |
+| Center two thirds | `Ctrl` + `Option` + `W`          | `Win` + `Alt` + `W`           |
+| Last two thirds   | `Ctrl` + `Option` + `E`          | `Win` + `Alt` + `E`           |
 | Top left          | `Ctrl` + `Option` + `U`          | `Win` + `Alt` + `U`           |
 | Top right         | `Ctrl` + `Option` + `I`          | `Win` + `Alt` + `I`           |
 | Bottom left       | `Ctrl` + `Option` + `J`          | `Win` + `Alt` + `J`           |
@@ -63,84 +64,33 @@ matches, `Ctrl`+`Alt` defaults would make those characters impossible to type;
 on a German layout you could no longer type `@`. `Win`+`Alt` avoids this
 entirely.
 
-A few defaults do take combinations Windows itself uses — `Win`+`Alt`+`D`
-toggles the desktop clock, for instance. Tile wins those because it hooks the
-keyboard at a lower level, which is the same mechanism that lets it claim
-`Win`+Arrow back from Aero Snap. See
-[#18](https://github.com/filipmares/tile/issues/18) for the planned setting to
-hand individual combinations back to the OS.
+### Why not Rectangle's letters
 
-### Known conflict: Xbox Game Bar
+Rectangle uses the same 2×3 shape one column to the right — `D`/`F`/`G` for the
+thirds with `E`/`R`/`T` above — and Tile shipped that briefly. It had to move,
+because two of those keys are unusable on Windows:
 
-Two defaults collide with Xbox Game Bar, and **Tile cannot win these**:
+- **`Win`+`Alt`+`G` opens the Xbox Game Bar overlay.** Game Bar's own hotkey is
+  `Win`+`G`, and its handler matches *loosely*, ignoring the extra `Alt`. The
+  overlay appears even with Tile shut down, so it is not something Tile can
+  suppress — and the user cannot fix it either: Game Bar's settings only *add*
+  shortcuts, never replace the built-in one. Short of uninstalling Game Bar
+  there is no remedy.
+- **`Win`+`Alt`+`R`** is Game Bar's start/stop recording, handled by GameDVR
+  through an input path that never reaches the keyboard hook.
 
-| Shortcut | Tile | Game Bar |
-| -------- | ---- | -------- |
-| `Win` + `Alt` + `G` | Last third | Opens the Game Bar overlay |
-| `Win` + `Alt` + `R` | Center two thirds | Start/stop recording |
+Sliding the block two columns left keeps the geometry exactly — the mnemonic is
+positional, not alphabetic — while avoiding every key Game Bar reserves (`G`,
+`R`, `M`, `B`). A test enforces that the defaults stay clear of them.
 
-Both will fire: the window tiles *and* Game Bar reacts.
-
-This is not something Tile can fix, and it is not caused by Tile. Pressing
-`Win`+`Alt`+`G` opens the Game Bar overlay **even with Tile shut down** — Game
-Bar's *Open Game Bar* hotkey is `Win`+`G`, and its handler matches loosely,
-ignoring the extra `Alt`. (The shell itself does not behave this way:
-`Win`+`Alt`+`↑` never triggers `Win`+`↑`.)
-
-Game Bar's capture shortcuts are also handled by the GameDVR component through
-an input path that never reaches the user-mode keyboard hook, so there is
-nothing for Tile to suppress. Ordinary shell shortcuts such as Aero Snap *are*
-interceptable, and Tile blocks those successfully — GameDVR is the exception.
-(`Win`+`Alt`+`M`, `Win`+`Alt`+`B` and `Win`+`Alt`+`PrtScn` are reserved the
-same way; Tile does not bind them.)
-
-These letters were kept anyway, deliberately. They are Rectangle's, and they
-are spatially mnemonic rather than arbitrary, so anyone running Rectangle on a
-Mac and Tile on Windows keeps one set of habits. The conflict is fixable by the
-user in about twenty seconds; a broken mnemonic would not be.
-
-**To fix it**, remap Game Bar's shortcuts:
-
-1. Press `Win` + `G` to open Game Bar
-2. Go to **Settings ▸ Inputs ▸ Keyboard**
-3. Give these entries new shortcuts:
-
-| Game Bar entry | Default | Why | Suggested |
-| -------------- | ------- | --- | --------- |
-| **Game Bar** | `Win` + `G` | Matches `Win`+`Alt`+`G` loosely — this is the one that opens the overlay | `Ctrl` + `Shift` + `F7` |
-| **Record last 30 seconds** | `Win` + `Alt` + `G` | Exact clash with *Last third* | `Ctrl` + `Shift` + `F9` |
-| **Start/stop recording** | `Win` + `Alt` + `R` | Exact clash with *Center two thirds* | `Ctrl` + `Shift` + `F10` |
-
-4. Click **Save**
-
-Remapping **Game Bar** itself is the important one. Changing only the capture
-shortcuts leaves the overlay popping up, because that comes from the loose
-`Win`+`G` match.
-
-Game Bar has no way to leave a shortcut unset — it requires `Ctrl`, `Alt` or
-`Shift` plus another key. That restriction works in your favour: the field will
-not accept the `Win` key, and **every Tile shortcut on Windows includes `Win`**,
-so whatever you choose cannot collide with Tile. You only need to avoid your
-other applications.
-
-Function keys rather than letters, because `Ctrl`+`Shift`+`R` is hard-reload in
-every browser and `Ctrl`+`Shift`+`G` opens the Git panel in VS Code, whereas
-`Ctrl`+`Shift`+`F7`/`F9`/`F10` are rarely bound by anything.
-
-If you pick your own, avoid `Ctrl`+`Alt`+anything — that is `AltGr` on
-international layouts — and `Alt`+`Shift`+anything, since `Alt`+`Shift` on its
-own switches keyboard layout in Windows.
-
-Alternatively, if you never use Game Bar, turn it off entirely in
-**Settings ▸ Gaming ▸ Xbox Game Bar**, or rebind Tile's *Last third* and
-*Center two thirds* instead — every Tile shortcut is rebindable.
-
-Tile will not change Game Bar's settings for you. An application silently
-reconfiguring another application's shortcuts is not behaviour you should have
-to trust.
+The letters then moved on macOS too, so that both platforms match. Tile is its
+own app rather than a Rectangle port, and one consistent set of shortcuts across
+your machines is worth more than compatibility with a different app on one of
+them.
 
 <sub>These tables are generated from `crates/tile-core/src/config.rs`
 (`default_bindings`) — the single source of truth for Tile's defaults.</sub>
+
 
 ## Platform notes
 
