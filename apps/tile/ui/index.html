@@ -121,6 +121,23 @@
           </label>
         </div>
 
+        <div class="field">
+          <label class="field__label" for="subsequent-mode">
+            Repeating a shortcut
+          </label>
+          <div class="field__control">
+            <select id="subsequent-mode">
+              <option value="cycle-sizes">Cycles through sizes</option>
+              <option value="do-nothing">Does nothing</option>
+            </select>
+          </div>
+        </div>
+
+        <fieldset class="field field--group" id="cycle-sizes">
+          <legend class="field__label">Sizes to cycle through</legend>
+          <div class="field__grid" id="cycle-sizes-grid"></div>
+        </fieldset>
+
         <div class="field field--inline">
           <input type="checkbox" id="launch-on-login" name="launch-on-login" />
           <label class="field__label" for="launch-on-login">

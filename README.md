@@ -11,9 +11,8 @@ maximize it, center it, or undo the last move, all from the keyboard.
 > **Status: early days.** Tile implements 51 window actions — halves, thirds,
 > two-thirds, fourths, corner thirds, sixths, ninths, corners, maximize,
 > maximize-height, almost-maximize, center and restore — with a settings UI and
-> a tray/menu-bar icon. Cycling, multi-monitor throws, per-app rules and
-> drag-snapping are not built yet. This README documents only what actually
-> works today.
+> a tray/menu-bar icon. Multi-monitor throws, per-app rules and drag-snapping
+> are not built yet. This README documents only what actually works today.
 
 ## Default keyboard shortcuts
 
@@ -48,6 +47,22 @@ keyboard, with each third directly below its two-thirds variant:
 
 Everything is rebindable, and the wider catalogue (fourths, sixths, ninths,
 corner thirds) ships unbound — reachable from the tray menu, or bind your own.
+
+### Press it again to change the size
+
+Pressing the same shortcut twice does not do nothing. The halves and the four
+corners **cycle through sizes**: `←` puts the window in the left half, again
+makes it two thirds wide, again a third, and again back to a half. Corners
+cycle their width the same way, keeping their half height.
+
+The sizes are configurable in Settings ▸ Behaviour — ½, ⅔, ¾, ¼ and ⅓, of
+which a half, two thirds and a third are on by default, matching Rectangle. The
+same section switches the behaviour off entirely if you would rather a repeat
+did nothing.
+
+The cycle restarts whenever you run a different action, switch to another
+window, or move the window yourself, and `Backspace` always restores the window
+to where it was **before** Tile first touched it, however long you cycled for.
 
 ### Windows: why not `Win`+Arrow?
 

@@ -372,6 +372,69 @@ impl WindowAction {
         matches!(self, WindowAction::Restore)
     }
 
+    /// Whether repeatedly pressing this action's shortcut cycles it through
+    /// [`crate::CycleSize`]s rather than doing nothing.
+    ///
+    /// Only actions with an unambiguous "grow from this edge" reading cycle:
+    /// the four halves and the four quarter corners. That matches Rectangle,
+    /// whose `cooperativeResizeSide` is defined for exactly those eight. An
+    /// explicitly-sized action such as `FirstThird` does not cycle, because
+    /// its size *is* the request — a user who presses "first third" twice
+    /// wants a first third, not a first half.
+    pub const fn cycles(self) -> bool {
+        matches!(
+            self,
+            WindowAction::LeftHalf
+                | WindowAction::RightHalf
+                | WindowAction::TopHalf
+                | WindowAction::BottomHalf
+                | WindowAction::TopLeft
+                | WindowAction::TopRight
+                | WindowAction::BottomLeft
+                | WindowAction::BottomRight
+        )
+    }
+
+    /// This action's rectangle resized to `fraction` of the work area along
+    /// its cycle axis, keeping the edge the action is anchored to.
+    ///
+    /// `LeftHalf` at ⅓ is a left third; `BottomRight` at ⅔ is a two-thirds
+    /// wide, half-height block in the bottom-right corner. Passing `0.5`
+    /// reproduces [`WindowAction::target_rect`] exactly, which is what makes
+    /// the first press of a shortcut the first step of its own cycle.
+    ///
+    /// Corners cycle **horizontally**, matching Rectangle's default
+    /// `cornerCycleExpansionAxis`; the vertical variant would be a per-user
+    /// setting rather than a different function. Returns `None` for actions
+    /// that do not cycle.
+    pub fn cycle_rect(
+        self,
+        work_area: Rect,
+        gaps: &Gaps,
+        main_screen: bool,
+        fraction: f64,
+    ) -> Option<Rect> {
+        let a = work_area;
+        // A fraction outside (0, 1] cannot describe a slice of the screen; a
+        // hand-edited config must not be able to produce an empty window.
+        if !(fraction.is_finite() && fraction > 0.0 && fraction <= 1.0) {
+            return None;
+        }
+        let f = fraction;
+        let rect = match self {
+            WindowAction::LeftHalf => grid(a, gaps, main_screen, (0.0, f), (0.0, 1.0)),
+            WindowAction::RightHalf => grid(a, gaps, main_screen, (1.0 - f, 1.0), (0.0, 1.0)),
+            WindowAction::TopHalf => grid(a, gaps, main_screen, (0.0, 1.0), (0.0, f)),
+            WindowAction::BottomHalf => grid(a, gaps, main_screen, (0.0, 1.0), (1.0 - f, 1.0)),
+            WindowAction::TopLeft => grid(a, gaps, main_screen, (0.0, f), (0.0, 0.5)),
+            WindowAction::TopRight => grid(a, gaps, main_screen, (1.0 - f, 1.0), (0.0, 0.5)),
+            WindowAction::BottomLeft => grid(a, gaps, main_screen, (0.0, f), (0.5, 1.0)),
+            WindowAction::BottomRight => grid(a, gaps, main_screen, (1.0 - f, 1.0), (0.5, 1.0)),
+            _ => return None,
+        };
+        Some(rect.rounded())
+    }
+
     /// Computes the destination rectangle for this action within `work_area`.
     ///
     /// `gaps` describes the window gap and the per-side screen-edge gaps;
@@ -1222,6 +1285,106 @@ mod tests {
         for a in WindowAction::ALL {
             let json = serde_json::to_string(&a).unwrap();
             assert_eq!(json, format!("\"{}\"", a.id()));
+        }
+    }
+
+    #[test]
+    fn a_half_fraction_reproduces_the_actions_own_rectangle() {
+        // This is what makes the first press of a shortcut the first step of
+        // its cycle: no special case is needed anywhere for index zero.
+        for action in WindowAction::ALL.into_iter().filter(|a| a.cycles()) {
+            for (area, gaps) in [(AREA, &NO_GAPS), (OFFSET_AREA, &GAPPY)] {
+                assert_eq!(
+                    action.cycle_rect(area, gaps, true, 0.5),
+                    Some(rect(action, area, gaps)),
+                    "{action} at a half diverges from its own rectangle"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn only_halves_and_corners_cycle() {
+        let cycling: Vec<&str> = WindowAction::ALL
+            .into_iter()
+            .filter(|a| a.cycles())
+            .map(|a| a.id())
+            .collect();
+        assert_eq!(
+            cycling,
+            [
+                "left-half",
+                "right-half",
+                "top-half",
+                "bottom-half",
+                "top-left",
+                "top-right",
+                "bottom-left",
+                "bottom-right",
+            ]
+        );
+        for action in WindowAction::ALL.into_iter().filter(|a| !a.cycles()) {
+            assert_eq!(
+                action.cycle_rect(AREA, &NO_GAPS, true, 1.0 / 3.0),
+                None,
+                "{action} does not cycle but produced a cycle rectangle"
+            );
+        }
+    }
+
+    #[test]
+    fn cycled_halves_stay_anchored_to_their_edge() {
+        let third = 1.0 / 3.0;
+        assert_eq!(
+            WindowAction::LeftHalf.cycle_rect(AREA, &NO_GAPS, true, third),
+            Some(Rect::new(0.0, 0.0, 640.0, 1040.0))
+        );
+        assert_eq!(
+            WindowAction::RightHalf.cycle_rect(AREA, &NO_GAPS, true, third),
+            Some(Rect::new(1280.0, 0.0, 640.0, 1040.0))
+        );
+        assert_eq!(
+            WindowAction::TopHalf.cycle_rect(AREA, &NO_GAPS, true, third),
+            Some(Rect::new(0.0, 0.0, 1920.0, 347.0))
+        );
+        assert_eq!(
+            WindowAction::BottomHalf.cycle_rect(AREA, &NO_GAPS, true, third),
+            Some(Rect::new(0.0, 693.0, 1920.0, 347.0))
+        );
+    }
+
+    #[test]
+    fn cycled_corners_grow_horizontally_and_keep_their_height() {
+        let two_thirds = 2.0 / 3.0;
+        let half = rect(WindowAction::TopRight, AREA, &NO_GAPS);
+        let grown = WindowAction::TopRight
+            .cycle_rect(AREA, &NO_GAPS, true, two_thirds)
+            .unwrap();
+        assert_eq!(grown.y, half.y);
+        assert_eq!(grown.height, half.height);
+        assert_eq!(grown.max_x(), half.max_x());
+        assert_eq!(grown.width, 1280.0);
+    }
+
+    #[test]
+    fn a_full_width_cycle_step_gets_screen_edge_gaps_on_both_sides() {
+        // At a fraction of 1 there is no neighbour, so both horizontal edges
+        // are screen edges rather than shared ones.
+        let full = WindowAction::LeftHalf
+            .cycle_rect(AREA, &GAPPY, true, 1.0)
+            .unwrap();
+        assert_eq!(full.x, 20.0);
+        assert_eq!(full.max_x(), AREA.max_x() - 20.0);
+    }
+
+    #[test]
+    fn an_unusable_fraction_yields_no_rectangle() {
+        for bad in [0.0, -0.5, 1.5, f64::NAN, f64::INFINITY] {
+            assert_eq!(
+                WindowAction::LeftHalf.cycle_rect(AREA, &NO_GAPS, true, bad),
+                None,
+                "fraction {bad} should not produce a rectangle"
+            );
         }
     }
 }
