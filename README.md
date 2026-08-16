@@ -171,14 +171,16 @@ move other applications' windows. Grant it under:
 
 You may need to toggle it off and on again after updating the app.
 
-Because the released builds are **unsigned and unnotarized** (see below),
-Gatekeeper will block the first launch. Remove the quarantine attribute:
+Builds you compile yourself are unsigned, so Gatekeeper blocks their first
+launch. Remove the quarantine attribute:
 
 ```sh
-xattr -d com.apple.quarantine /Applications/Tile.app
+xattr -dr com.apple.quarantine /Applications/Tile.app
 ```
 
-…or right-click the app in Finder and choose **Open** the first time.
+…or right-click the app in Finder and choose **Open** the first time. Builds
+from the [Releases](https://github.com/filipmares/tile/releases) page are signed
+and notarized and need neither.
 
 ## Installation
 
@@ -187,11 +189,15 @@ xattr -d com.apple.quarantine /Applications/Tile.app
 Grab the latest build from the [Releases](https://github.com/filipmares/tile/releases)
 page:
 
-- **Windows:** the `.msi` or the NSIS setup `.exe`.
-- **macOS:** the universal `.dmg` (runs on both Apple Silicon and Intel).
+- **macOS:** the universal `.dmg` (runs on both Apple Silicon and Intel). Open
+  it and drag **Tile** into Applications. The build is signed with a Developer
+  ID certificate and notarized by Apple, so it opens without a Gatekeeper
+  workaround.
+- **Windows:** the `.msi` or the NSIS setup `.exe`. These are **unsigned**, so
+  SmartScreen may warn you — choose **More info ▸ Run anyway**.
 
-> Release binaries are currently **unsigned**. Windows SmartScreen may warn you
-> (**More info ▸ Run anyway**), and macOS needs the Gatekeeper workaround above.
+Tile has no main window: after launching, look for its icon in the menu bar
+(macOS) or the system tray (Windows).
 
 ### From source
 
