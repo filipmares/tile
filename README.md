@@ -179,8 +179,9 @@ xattr -dr com.apple.quarantine /Applications/Tile.app
 ```
 
 …or right-click the app in Finder and choose **Open** the first time. Builds
-from the [Releases](https://github.com/filipmares/tile/releases) page are signed
-and notarized and need neither.
+published on the [Releases](https://github.com/filipmares/tile/releases) page are
+signed and notarized and need neither — each release's notes say so explicitly,
+and tell you what to do if a particular build was not signed.
 
 ## Installation
 
@@ -190,9 +191,9 @@ Grab the latest build from the [Releases](https://github.com/filipmares/tile/rel
 page:
 
 - **macOS:** the universal `.dmg` (runs on both Apple Silicon and Intel). Open
-  it and drag **Tile** into Applications. The build is signed with a Developer
-  ID certificate and notarized by Apple, so it opens without a Gatekeeper
-  workaround.
+  it and drag **Tile** into Applications. Signed and notarized builds open
+  without a Gatekeeper workaround; follow the release notes if a build is
+  marked unsigned.
 - **Windows:** the `.msi` or the NSIS setup `.exe`. These are **unsigned**, so
   SmartScreen may warn you — choose **More info ▸ Run anyway**.
 

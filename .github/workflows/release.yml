@@ -44,8 +44,14 @@ jobs:
         shell: bash
         env:
           # Only presence is checked; the values never leave this step.
+          # APPLE_SIGNING_IDENTITY is deliberately absent: when the .p12 is
+          # supplied the bundler derives the identity from it, so requiring the
+          # secret here would mislabel a genuinely signed build as unsigned.
           HAS_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE != '' }}
+          HAS_APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD != '' }}
           HAS_APPLE_ID: ${{ secrets.APPLE_ID != '' }}
+          HAS_APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD != '' }}
+          HAS_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID != '' }}
         run: |
           set -euo pipefail
           tag="${{ inputs.tag || github.ref_name }}"
@@ -67,11 +73,18 @@ jobs:
             fi
           done
 
-          if [ "$HAS_APPLE_CERTIFICATE" = "true" ] && [ "$HAS_APPLE_ID" = "true" ]; then
-            echo "macos_signed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "macos_signed=false" >> "$GITHUB_OUTPUT"
-          fi
+          # Signing and notarization are only claimed when *every* secret they
+          # need is present. Deriving this from a subset lets the release notes
+          # promise a notarized build that the bundler then declines to
+          # notarize, which is worse than saying nothing.
+          macos_signed=true
+          for flag in "$HAS_APPLE_CERTIFICATE" "$HAS_APPLE_CERTIFICATE_PASSWORD" \
+                      "$HAS_APPLE_ID" "$HAS_APPLE_PASSWORD" "$HAS_APPLE_TEAM_ID"; do
+            if [ "$flag" != "true" ]; then
+              macos_signed=false
+            fi
+          done
+          echo "macos_signed=$macos_signed" >> "$GITHUB_OUTPUT"
 
       - name: Compose release notes
         shell: bash
@@ -120,7 +133,13 @@ jobs:
         run: |
           set -euo pipefail
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release edit "$TAG" --title "Tile $TAG" --notes-file release-notes.md --draft
+            # A re-run must not disturb the publication state of an existing
+            # release: passing --draft unconditionally would silently unpublish
+            # a release users are already downloading. Refresh the notes only,
+            # and leave a published release published.
+            is_draft="$(gh release view "$TAG" --json isDraft --jq .isDraft)"
+            echo "Release $TAG already exists (draft: $is_draft); refreshing notes only."
+            gh release edit "$TAG" --title "Tile $TAG" --notes-file release-notes.md
           else
             gh release create "$TAG" --title "Tile $TAG" --notes-file release-notes.md --draft --verify-tag
           fi
@@ -205,6 +224,11 @@ jobs:
           export_if_set TAURI_SIGNING_PRIVATE_KEY "${IN_TAURI_SIGNING_PRIVATE_KEY:-}"
           export_if_set TAURI_SIGNING_PRIVATE_KEY_PASSWORD "${IN_TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
 
+          if [ -n "${IN_APPLE_CERTIFICATE:-}" ] && [ -z "${IN_APPLE_CERTIFICATE_PASSWORD:-}" ]; then
+            echo "::error::APPLE_CERTIFICATE is set but APPLE_CERTIFICATE_PASSWORD is not; the .p12 cannot be imported."
+            exit 1
+          fi
+
           if [ -n "${IN_APPLE_ID:-}" ] && [ -n "${IN_APPLE_PASSWORD:-}" ] && [ -n "${IN_APPLE_TEAM_ID:-}" ]; then
             export_if_set APPLE_ID "$IN_APPLE_ID"
             export_if_set APPLE_PASSWORD "$IN_APPLE_PASSWORD"
@@ -261,6 +285,19 @@ jobs:
           set -euo pipefail
           dmg="$(echo "$ARTIFACTS" | jq -r '.[] | select(endswith(".dmg"))' | head -n1)"
           app="$(find target -maxdepth 6 -name 'Tile.app' -type d | head -n1)"
+
+          # Without these guards a moved bundle path turns into an opaque
+          # `codesign: invalid argument` several lines later, so name the
+          # missing artifact and where it was looked for.
+          if [ -z "$dmg" ]; then
+            echo "::error::No .dmg found in build artifacts: $ARTIFACTS"
+            exit 1
+          fi
+          if [ -z "$app" ]; then
+            echo "::error::No Tile.app found under target/ (searched 6 levels deep). Bundle layout may have changed."
+            find target -maxdepth 6 -name '*.app' -type d || true
+            exit 1
+          fi
 
           echo "=== .app: $app ==="
           codesign --verify --deep --strict --verbose=2 "$app"

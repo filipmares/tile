@@ -2,8 +2,10 @@
 
 Releases are cut by pushing a `v*` tag. [`.github/workflows/release.yml`](../.github/workflows/release.yml)
 then creates a **draft** GitHub Release, builds a universal macOS `.dmg` and the
-Windows `.msi`/`.exe`, signs and notarizes the macOS artifacts, verifies the
-result, and uploads everything. A human publishes the draft.
+Windows `.msi`/`.exe`, and uploads them. When the Apple signing secrets are
+configured it also signs, notarizes and verifies the macOS artifacts; when they
+are not, it publishes them unsigned and says so in the release notes. A human
+publishes the draft either way.
 
 - [One-time macOS signing setup](#one-time-macos-signing-setup)
 - [Cutting a release](#cutting-a-release)
@@ -77,7 +79,17 @@ It looks like `abcd-efgh-ijkl-mnop` and becomes `APPLE_PASSWORD`.
 
 `APPLE_ID`, `APPLE_PASSWORD` and `APPLE_TEAM_ID` are all-or-nothing: the Tauri
 bundler fails the build when the first two are set without the third, so the
-workflow rejects a partial set up front with a clearer message.
+workflow rejects a partial set up front with a clearer message. The same applies
+to `APPLE_CERTIFICATE` without its password.
+
+The workflow only describes a build as signed and notarized once
+`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_PASSWORD`
+and `APPLE_TEAM_ID` are all present; with any of them missing it publishes
+unsigned artifacts and the release notes carry the quarantine workaround
+instead. `APPLE_SIGNING_IDENTITY` is not part of that check because the bundler
+derives the identity from the imported `.p12`, but setting it is still
+recommended: it makes the build fail loudly if the certificate is ever replaced
+with the wrong kind.
 
 Developer ID certificates expire after five years. Builds notarized before
 expiry keep working, but new builds need a fresh certificate.
