@@ -183,29 +183,37 @@ impl Engine {
     }
 
     /// Whether `window` is still exactly where the last cycle step for this
-    /// same action and window put it.
+    /// same cycle and window put it.
+    ///
+    /// Compared by [`WindowAction::cycle_anchor`] rather than by the action
+    /// itself, so stepping forwards with `CenterHalf` and backwards with
+    /// `CenterHalfBack` continues one cycle instead of restarting it.
     fn continues_cycle(&self, action: WindowAction, window: &WindowSnapshot) -> bool {
         self.cycle.as_ref().is_some_and(|state| {
             state.window == window.id
-                && state.action == action
+                && state.action.cycle_anchor() == action.cycle_anchor()
                 && state.applied.approx_eq(&window.frame, APPLIED_TOLERANCE)
         })
     }
 
     /// The next rectangle in `action`'s cycle, or `None` when every configured
     /// size lands on the rectangle the window already occupies.
+    ///
+    /// Actions where [`WindowAction::cycles_backwards`] holds walk the same
+    /// sequence in reverse.
     fn next_cycle_rect(
         &self,
         action: WindowAction,
         window: &WindowSnapshot,
         screen: &Screen,
     ) -> Option<Rect> {
+        let anchor = action.cycle_anchor();
         let rects: Vec<Rect> = self
             .config
             .cycle_sizes()
             .iter()
             .filter_map(|size| {
-                action.cycle_rect(
+                anchor.cycle_rect(
                     screen.work_area,
                     &self.config.gaps,
                     screen.is_primary,
@@ -219,18 +227,26 @@ impl Engine {
 
         // Recover the current step from geometry rather than from a stored
         // counter. A window that matches no configured size — because the
-        // sizes changed since the last press — restarts at the first one.
-        let start = rects
+        // sizes changed since the last press — restarts at one end.
+        let len = rects.len();
+        let current = rects
             .iter()
-            .position(|r| r.approx_eq(&window.frame, APPLIED_TOLERANCE))
-            .map_or(0, |i| i + 1);
+            .position(|r| r.approx_eq(&window.frame, APPLIED_TOLERANCE));
 
         // Skip any step that would leave the window exactly where it is, so a
         // duplicate-looking size (a half of a screen whose gaps make it equal
         // to another step) never turns a press into a no-op.
-        (0..rects.len())
-            .map(|offset| rects[(start + offset) % rects.len()])
-            .find(|r| !r.approx_eq(&window.frame, APPLIED_TOLERANCE))
+        if action.cycles_backwards() {
+            let start = current.map_or(len - 1, |i| (i + len - 1) % len);
+            (0..len)
+                .map(|offset| rects[(start + len - offset) % len])
+                .find(|r| !r.approx_eq(&window.frame, APPLIED_TOLERANCE))
+        } else {
+            let start = current.map_or(0, |i| i + 1);
+            (0..len)
+                .map(|offset| rects[(start + offset) % len])
+                .find(|r| !r.approx_eq(&window.frame, APPLIED_TOLERANCE))
+        }
     }
 
     /// Records a successful move so that `Restore` can undo it.
@@ -317,6 +333,63 @@ mod tests {
                 target: Rect::new(0.0, 0.0, 1280.0, 1040.0)
             }
         );
+    }
+
+    /// Up and Down share one cycle, so walking forward twice and back once
+    /// must land on the rectangle the first press produced. If they kept
+    /// separate cycle state, Down would restart instead of stepping back.
+    #[test]
+    fn up_and_down_walk_one_shared_centered_cycle() {
+        let mut engine = Engine::default();
+        let mut win = window();
+
+        // Forward to the centred half, then to the centred two thirds.
+        let apply = |engine: &mut Engine, action, win: &mut WindowSnapshot| match engine.plan(
+            action,
+            win,
+            &[screen()],
+        ) {
+            Plan::Move { target, .. } => {
+                engine.commit(action, win, target);
+                win.frame = target;
+                target
+            }
+            other => panic!("expected a move, got {other:?}"),
+        };
+
+        let half = apply(&mut engine, WindowAction::CenterHalf, &mut win);
+        assert_eq!(half, Rect::new(480.0, 0.0, 960.0, 1040.0));
+
+        let two_thirds = apply(&mut engine, WindowAction::CenterHalf, &mut win);
+        assert_eq!(two_thirds, Rect::new(320.0, 0.0, 1280.0, 1040.0));
+
+        // Back one step returns to the half rather than starting over.
+        let back = apply(&mut engine, WindowAction::CenterHalfBack, &mut win);
+        assert_eq!(back, half, "Down must step back into Up's cycle");
+    }
+
+    /// Stepping back from the first size wraps to the last, so Down is usable
+    /// as "make it smaller" straight from a fresh centred half.
+    #[test]
+    fn stepping_back_from_the_first_size_wraps_to_the_last() {
+        let mut engine = Engine::default();
+        let mut win = window();
+
+        let Plan::Move { target: half, .. } =
+            engine.plan(WindowAction::CenterHalf, &win, &[screen()])
+        else {
+            panic!("expected a move");
+        };
+        engine.commit(WindowAction::CenterHalf, &win, half);
+        win.frame = half;
+
+        let Plan::Move { target: back, .. } =
+            engine.plan(WindowAction::CenterHalfBack, &win, &[screen()])
+        else {
+            panic!("expected a move");
+        };
+        // Defaults are ½, ⅔, ⅓; stepping back from ½ lands on ⅓.
+        assert_eq!(back, Rect::new(640.0, 0.0, 640.0, 1040.0));
     }
 
     #[test]

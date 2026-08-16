@@ -5,14 +5,15 @@
 Tile is a cross-platform reimagining of the excellent
 [Rectangle](https://github.com/rxhanson/Rectangle) — the macOS window-snapping
 app — built from scratch in Rust so the same window-tiling ergonomics work on
-both macOS **and** Windows. Snap the focused window to halves of the screen,
-maximize it, center it, or undo the last move, all from the keyboard.
+both macOS **and** Windows. Snap the focused window to halves and thirds of the
+screen, maximize it, or undo the last move — all from the arrow keys.
 
-> **Status: early days.** Tile implements 51 window actions — halves, thirds,
+> **Status: early days.** Tile implements 52 window actions — halves, thirds,
 > two-thirds, fourths, corner thirds, sixths, ninths, corners, maximize,
-> maximize-height, almost-maximize, center and restore — with a settings UI and
-> a tray/menu-bar icon. Multi-monitor throws, per-app rules and drag-snapping
-> are not built yet. This README documents only what actually works today.
+> maximize-height, almost-maximize, center and restore — but only four ship
+> bound to keys, with a settings UI and a tray/menu-bar icon for the rest.
+> Multi-monitor throws, per-app rules and drag-snapping are not built yet. This
+> README documents only what actually works today.
 
 ## Default keyboard shortcuts
 
@@ -26,42 +27,46 @@ Hold that, then press:
 
 | Key | Action |
 | --- | ------ |
-| `←` `→` `↑` `↓` | Left / right / top / bottom **half** |
-| `Return` | Maximize |
-| `Backspace` | Restore to the window's previous position |
-| `Shift` + `↑` | Maximize height only |
-| `C` | Center |
-| `A` `S` `D` | First / center / last **third** |
-| `Q` `E` | First / last **two thirds** |
-| `U` `I` `J` `K` | **Corners** — top-left, top-right, bottom-left, bottom-right |
+| `←` `→` | **Left / right** — half, then two thirds, then a third (see below) |
+| `↑` | Maximize |
+| `↓` | Restore to the window's previous position |
 
-The sizes are spatially mnemonic rather than arbitrary — a 2×3 block on the
-keyboard, with each third directly below its two-thirds variant:
+That is the whole default set — **four arrows and nothing else.** No letters, no
+`Return`, no `Backspace`, and never a second modifier. The arrows sit under your
+right hand while the modifier is held with your left, which matters on a MacBook
+because there is no right `Control` key.
+
+The horizontal pair places the window and carries every size, because repeating
+an arrow cycles its width:
 
 ```text
-  Q  ·  E     two-thirds  (first / last)
-  A  S  D     thirds      (first / center / last)
+  ←   ½ → ⅔ → ⅓ → …   anchored left
+  →   ½ → ⅔ → ⅓ → …   anchored right
 ```
 
-`U`/`I` over `J`/`K` form a second block mapping onto the four screen corners.
+The vertical pair is the "bigger / undo" axis: `↑` maximizes, `↓` puts the
+window back where it was.
 
-Everything is rebindable, and the wider catalogue (fourths, sixths, ninths,
-corner thirds) ships unbound — reachable from the tray menu, or bind your own.
+Everything is rebindable, and the rest of the catalogue — the centered column,
+the explicitly-sized thirds and two-thirds, the corners, center, maximize-height,
+almost-maximize, plus fourths, sixths, ninths, corner thirds and the top/bottom
+halves — ships unbound, reachable from the tray menu or a binding of your own.
 
 ### Press it again to change the size
 
-Pressing the same shortcut twice does not do nothing. The halves and the four
-corners **cycle through sizes**: `←` puts the window in the left half, again
-makes it two thirds wide, again a third, and again back to a half. Corners
+Pressing the same shortcut twice does not do nothing. The horizontal arrows and
+the four corners **cycle through sizes**: `←` puts the window in the left half,
+again makes it two thirds wide, again a third, and again back to a half. Corners
 cycle their width the same way, keeping their half height.
 
 The sizes are configurable in Settings ▸ Behaviour — ½, ⅔, ¾, ¼ and ⅓, of
-which a half, two thirds and a third are on by default, matching Rectangle. The
-same section switches the behaviour off entirely if you would rather a repeat
-did nothing.
+which a half, two thirds and a third are on by default, matching Rectangle. Turn
+on ¼ for a four-step cycle. The same section switches the behaviour off entirely
+if you would rather a repeat did nothing — though with the sizes unbound by
+default, that leaves the arrows at halves only.
 
 The cycle restarts whenever you run a different action, switch to another
-window, or move the window yourself, and `Backspace` always restores the window
+window, or move the window yourself, and `↓` always restores the window
 to where it was **before** Tile first touched it, however long you cycled for.
 
 ### Windows: why not `Win`+Arrow?
@@ -110,20 +115,26 @@ The authoritative list is the `VK*` values under
 | Take a screenshot | `Win` + `Alt` + `PrtScn` |
 
 So `G`, `R`, `M`, `B`, `W` and `T` are unusable as defaults, and a test enforces
-that the defaults stay clear of all six. It is also why **center two thirds
-ships unbound**: the key directly above `S` is `W`, and no other key preserves
-the block's geometry.
+that the defaults stay clear of all six. This used to shape the whole layout —
+it is why the letter block sat at `Q`/`A`, and why **center two thirds shipped
+unbound**, since the key directly above `S` is `W`. The arrow-only defaults
+retire the problem completely: no default sits on a letter, so none of the
+reserved keys can collide.
 
 ### Why not Rectangle's letters
 
-Rectangle uses the same block one column to the right — `D`/`F`/`G` for the
-thirds with `E`/`R`/`T` above — and Tile shipped that briefly. Four of those six
-keys are reserved by Game Bar, so it had to move. Sliding the block left keeps
-the geometry exactly, because the mnemonic is positional rather than alphabetic.
+Rectangle puts the thirds on `D`/`F`/`G` with `E`/`R`/`T` above, and Tile
+shipped that briefly. Four of those six keys are reserved by Game Bar, so it
+moved one column left to `Q`/`A` — the mnemonic is positional rather than
+alphabetic, so sliding it kept the geometry.
 
-The letters moved on macOS too, so both platforms match. Tile is its own app
-rather than a Rectangle port, and one consistent set of shortcuts across your
-machines is worth more than compatibility with a different app on one of them.
+That block is now retired altogether. Holding `Control`+`Option` on a MacBook is
+a left-hand job, because there is no right `Control` key, so left-hand letters
+meant one hand doing both. Cycling the arrows reaches the same sizes with the
+hands split, and the explicitly-sized actions remain in the catalogue for anyone
+who prefers one press per size. Tile is its own app rather than a Rectangle
+port, and one consistent set of shortcuts across your machines is worth more
+than compatibility with a different app on one of them.
 
 <sub>This table is generated from `crates/tile-core/src/config.rs`
 (`default_bindings`) — the single source of truth for Tile's defaults.</sub>
@@ -252,9 +263,9 @@ cargo run --example live_hotkey -p tile-platform
 ```
 
 To test the shortcuts end to end, build and start the app, open a window you
-do not mind moving, and press <kbd>Win</kbd>+<kbd>←</kbd>. Note that the
-keyboard hook cannot see input aimed at windows owned by elevated processes
-unless Tile is itself running as administrator.
+do not mind moving, and press <kbd>Win</kbd>+<kbd>Alt</kbd>+<kbd>←</kbd>. Note
+that the keyboard hook cannot see input aimed at windows owned by elevated
+processes unless Tile is itself running as administrator.
 
 ## Architecture
 
@@ -300,11 +311,12 @@ the project layout, prerequisites, and the checks CI expects.
 ## Acknowledgements
 
 Tile is **inspired by** [Rectangle](https://github.com/rxhanson/Rectangle) by
-Ryan Hanson (MIT-licensed, © Ryan Hanson), and adopts its macOS default
-shortcuts so existing users feel at home. Tile is an **independent Rust
-implementation** — no Rectangle source code is used or copied. This
-acknowledgement is offered as attribution and courtesy, not as a licence
-obligation, and does **not** imply that the Rectangle project endorses Tile.
+Ryan Hanson (MIT-licensed, © Ryan Hanson). Tile is an **independent Rust
+implementation** — no Rectangle source code is used or copied. Its defaults
+started from Rectangle's alternate set but have since diverged: Tile's ship on
+the arrow keys alone, for the reasons above. This acknowledgement is offered as
+attribution and courtesy, not as a licence obligation, and does **not** imply
+that the Rectangle project endorses Tile.
 
 ## License
 

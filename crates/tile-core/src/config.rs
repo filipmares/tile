@@ -601,18 +601,46 @@ const BASE_MODIFIERS: Modifiers = Modifiers(Modifiers::META.0 | Modifiers::ALT.0
 /// macOS, `Win+Alt` on Windows. Nothing else varies, so a user with a Mac and
 /// a PC learns one set of shortcuts.
 ///
-/// The arrows point where the window goes, maximize and restore use `Enter`
-/// and `Backspace`, and the sizes are spatially mnemonic — a 2x3 block on the
-/// keyboard:
+/// The defaults are four arrows and nothing else. `Left` and `Right` place the
+/// window and carry the whole size catalogue by cycling; `Up` and `Down` are
+/// the "bigger / undo" axis:
 ///
 /// ```text
-///   Q  ·  E     two-thirds  (first / last; center is unbound, see below)
-///   A  S  D     thirds      (first / center / last)
+///   Left   ½ → ⅔ → ⅓ → …   anchored left
+///   Right  ½ → ⅔ → ⅓ → …   anchored right
+///   Up     maximize
+///   Down   restore
 /// ```
 ///
-/// Each third sits directly below its two-thirds variant, running left to
-/// right. The corners are a second block, `U`/`I` over `J`/`K`, matching the
-/// four screen corners.
+/// **No default sits on a letter**, none needs `Enter` or `Backspace`, and
+/// none adds a second modifier: the whole set is the base modifier plus one
+/// arrow. Center, the corners, maximize-height and the centred column are all
+/// in the catalogue but ship unbound, because every letter within reach is a
+/// left-hand key and the modifier is already a left-hand hold.
+///
+/// # Why the arrows, and not letters
+///
+/// Every default is pressed while the base modifier is held, and on a MacBook
+/// there is no right `Control`, so `Control+Option` can only be held with the
+/// left hand. That makes left-hand letters — the old `A`/`S`/`D` thirds and
+/// `Q`/`E` two-thirds — a one-handed contortion. The arrows sit under the
+/// right hand, so the two hands divide the work.
+///
+/// Dropping those letters also retires a Windows problem: the block sat at
+/// `Q`/`A` only because Game Bar reserves the keys Rectangle uses, and center
+/// two thirds shipped unbound entirely because its natural key was the
+/// reserved `W`. None of that constrains an arrow.
+///
+/// The cost is that a cycling arrow is stateful — landing on a third can take
+/// several presses, where a letter was one. The explicitly-sized actions all
+/// remain in the catalogue for anyone who wants that determinism back; they
+/// are simply not bound by default.
+///
+/// The vertical halves are unbound for the same reason: `Up` and `Down` are
+/// worth more as maximize and restore, and top/bottom halves are a
+/// portrait-monitor need rather than a universal one. The centred column keeps
+/// its full cycling behaviour — including the backwards step through
+/// [`WindowAction::cycle_anchor`] — for anyone who binds it.
 ///
 /// # Why Windows does not use `Win+Arrow`
 ///
@@ -651,24 +679,26 @@ const BASE_MODIFIERS: Modifiers = Modifiers(Modifiers::META.0 | Modifiers::ALT.0
 /// | `ToggleRecordingIndicator` | `Win+Alt+T` |
 /// | `TakeScreenshot` | `Win+Alt+PrtScn` |
 ///
-/// So `G`, `R`, `M`, `B`, `W` and `T` are all unusable. That is why the block
-/// sits at `Q`/`A`, and why center two thirds — whose natural key would be `W`
-/// — ships unbound. There is a test enforcing the whole set.
+/// So `G`, `R`, `M`, `B`, `W` and `T` are all unusable. No default lands on
+/// any of them, and there is a test enforcing the whole set. This used to
+/// constrain the layout heavily — it is why the letter block sat at `Q`/`A`
+/// and why center two thirds, whose natural key was `W`, shipped unbound. The
+/// arrow-and-cycle defaults sidestep the problem entirely: no default sits on
+/// a letter, so none of the reserved keys can collide.
 ///
 /// # Why not Rectangle's letters
 ///
-/// Rectangle uses the same block one column to the right, `D`/`F`/`G` for the
-/// thirds with `E`/`R`/`T` above, and Tile shipped that briefly. Four of those
-/// six keys are reserved by Game Bar, so it had to move. Sliding the block
-/// left keeps the geometry exactly — the mnemonic is positional, not
-/// alphabetic. The letters moved on macOS too, so both platforms match.
+/// Rectangle puts the thirds on `D`/`F`/`G` with `E`/`R`/`T` above, and Tile
+/// shipped that briefly. Four of those six keys are reserved by Game Bar, so
+/// it moved to `Q`/`A`; that block is now retired in favour of cycling the
+/// arrows, which needs no letters at all. Both platforms match either way.
 pub fn default_bindings() -> BTreeMap<WindowAction, Option<Hotkey>> {
     let mut map = BTreeMap::new();
     let base = BASE_MODIFIERS;
 
     // Every default sits on the base modifier, so the two platforms differ
-    // only in what that modifier is. Halves point where the window goes;
-    // maximize and restore mirror Rectangle's Enter and Backspace.
+    // only in what that modifier is. The three horizontal arrows carry the
+    // whole size catalogue by cycling; maximize mirrors Rectangle's Enter.
     map.insert(
         WindowAction::LeftHalf,
         Some(Hotkey::new(base, KeyCode::Left)),
@@ -677,57 +707,12 @@ pub fn default_bindings() -> BTreeMap<WindowAction, Option<Hotkey>> {
         WindowAction::RightHalf,
         Some(Hotkey::new(base, KeyCode::Right)),
     );
-    map.insert(WindowAction::TopHalf, Some(Hotkey::new(base, KeyCode::Up)));
-    map.insert(
-        WindowAction::BottomHalf,
-        Some(Hotkey::new(base, KeyCode::Down)),
-    );
-    map.insert(
-        WindowAction::Maximize,
-        Some(Hotkey::new(base, KeyCode::Enter)),
-    );
+    // Up maximizes and Down restores: the vertical pair is the "bigger /
+    // undo" axis, while the horizontal pair places the window.
+    map.insert(WindowAction::Maximize, Some(Hotkey::new(base, KeyCode::Up)));
     map.insert(
         WindowAction::Restore,
-        Some(Hotkey::new(base, KeyCode::Backspace)),
-    );
-
-    map.insert(WindowAction::Center, Some(Hotkey::new(base, KeyCode::C)));
-    map.insert(
-        WindowAction::FirstThird,
-        Some(Hotkey::new(base, KeyCode::A)),
-    );
-    map.insert(
-        WindowAction::FirstTwoThirds,
-        Some(Hotkey::new(base, KeyCode::Q)),
-    );
-    map.insert(
-        WindowAction::CenterThird,
-        Some(Hotkey::new(base, KeyCode::S)),
-    );
-    // Center two thirds is deliberately unbound. The key directly above `S` is
-    // `W`, which Xbox Game Bar reserves for its broadcast camera toggle and
-    // Tile cannot override. No other key preserves the block's geometry, so
-    // rather than pick an arbitrary one this action ships unbound and is
-    // available from the tray menu or a binding of the user's choosing.
-    // Rectangle treats it as a later addition too, rather than a core default.
-    map.insert(
-        WindowAction::LastTwoThirds,
-        Some(Hotkey::new(base, KeyCode::E)),
-    );
-    map.insert(WindowAction::LastThird, Some(Hotkey::new(base, KeyCode::D)));
-    map.insert(WindowAction::TopLeft, Some(Hotkey::new(base, KeyCode::U)));
-    map.insert(WindowAction::TopRight, Some(Hotkey::new(base, KeyCode::I)));
-    map.insert(
-        WindowAction::BottomLeft,
-        Some(Hotkey::new(base, KeyCode::J)),
-    );
-    map.insert(
-        WindowAction::BottomRight,
-        Some(Hotkey::new(base, KeyCode::K)),
-    );
-    map.insert(
-        WindowAction::MaximizeHeight,
-        Some(Hotkey::new(base | Modifiers::SHIFT, KeyCode::Up)),
+        Some(Hotkey::new(base, KeyCode::Down)),
     );
 
     map
@@ -739,55 +724,97 @@ mod tests {
 
     /// The actions that ship with a default binding.
     ///
-    /// Halves, maximize, restore and center, plus the spatially mnemonic
-    /// letter bindings borrowed from Rectangle's alternate defaults (thirds
-    /// and corners) and maximize-height. The denser families — fourths,
-    /// corner thirds, sixths, ninths — stay unbound: there are not enough
-    /// memorable combinations to go round, and binding them by default would
-    /// steal far more of the OS keymap than most users would want.
-    const CORE_BOUND: [WindowAction; 17] = [
+    /// Four arrows, and nothing else at all. The horizontal pair places the
+    /// window and cycles its width; the vertical pair maximizes and undoes.
+    /// Every other action — center, the corners, maximize-height, the centred
+    /// column and the explicitly-sized thirds and two-thirds — ships unbound:
+    /// every letter within reach is a left-hand key, the modifier is already a
+    /// left-hand hold, and a second modifier defeats the point.
+    const CORE_BOUND: [WindowAction; 4] = [
         WindowAction::LeftHalf,
         WindowAction::RightHalf,
-        WindowAction::TopHalf,
-        WindowAction::BottomHalf,
         WindowAction::Maximize,
-        WindowAction::MaximizeHeight,
-        WindowAction::Center,
         WindowAction::Restore,
-        WindowAction::FirstThird,
-        WindowAction::FirstTwoThirds,
-        WindowAction::CenterThird,
-        // CenterTwoThirds is deliberately absent: its natural key is `W`,
-        // which Game Bar reserves. See `default_bindings`.
-        WindowAction::LastTwoThirds,
-        WindowAction::LastThird,
-        WindowAction::TopLeft,
-        WindowAction::TopRight,
-        WindowAction::BottomLeft,
-        WindowAction::BottomRight,
     ];
 
+    /// Both horizontal arrows must cycle, because that is the only way the
+    /// thirds and two-thirds are reachable now that they ship unbound. A
+    /// future edit binding one to an explicitly-sized action would silently
+    /// strand every size except the half.
     #[test]
-    fn defaults_use_spatially_mnemonic_letters() {
-        // These letters are load-bearing, not arbitrary. They form a 2x3 block:
+    fn both_horizontal_arrows_cycle() {
+        let config = Config::default();
+        for action in [WindowAction::LeftHalf, WindowAction::RightHalf] {
+            assert!(
+                action.cycles(),
+                "{action} must cycle to reach the sizes that ship unbound"
+            );
+            assert!(
+                config.binding(action).is_some(),
+                "{action} must keep its arrow binding"
+            );
+        }
+
+        // The centred column is still cycleable, just no longer bound: Up and
+        // Down are maximize and restore. Keep the machinery intact so a user
+        // binding CenterHalf gets the full cycle, backwards step included.
+        assert!(WindowAction::CenterHalf.cycles());
+        assert_eq!(
+            WindowAction::CenterHalfBack.cycle_anchor(),
+            WindowAction::CenterHalf
+        );
+        assert!(WindowAction::CenterHalfBack.cycles_backwards());
+        assert_eq!(config.binding(WindowAction::CenterHalf), None);
+        assert_eq!(config.binding(WindowAction::CenterHalfBack), None);
+
+        // The sizes these arrows stand in for must stay in the catalogue, so
+        // the tray menu and custom bindings can still reach them directly.
+        for action in [
+            WindowAction::FirstThird,
+            WindowAction::CenterThird,
+            WindowAction::LastThird,
+            WindowAction::FirstTwoThirds,
+            WindowAction::CenterTwoThirds,
+            WindowAction::LastTwoThirds,
+        ] {
+            assert_eq!(
+                config.binding(action),
+                None,
+                "{action} is reached by cycling an arrow and should ship unbound"
+            );
+        }
+    }
+
+    /// No default may sit on a letter. The whole point of the arrow layout is
+    /// that the modifier hand and the action hand are different hands.
+    #[test]
+    fn no_default_binding_uses_a_letter() {
+        let config = Config::default();
+        for (hotkey, action) in config.active_bindings() {
+            assert!(
+                !('A'..='Z').any(|c| hotkey.key.label() == c.to_string()),
+                "{action} is bound to the letter {} ({hotkey})",
+                hotkey.key.label()
+            );
+        }
+    }
+
+    #[test]
+    fn defaults_use_spatially_mnemonic_keys() {
+        // These keys are load-bearing, not arbitrary. The horizontal pair
+        // places the window and cycles its width; the vertical pair is the
+        // "bigger / undo" axis:
         //
-        //   Q W E   two-thirds
-        //   A S D   thirds
+        //   Left / Right   place and resize
+        //   Up / Down      maximize and restore
         //
-        // Each third sits directly below its two-thirds variant, running left
-        // to right, and U/I/J/K form a 2x2 block matching the screen corners.
         // Changing one silently breaks the mnemonic, so they are pinned here.
         let config = Config::default();
         let expected = [
-            (WindowAction::FirstThird, KeyCode::A),
-            (WindowAction::CenterThird, KeyCode::S),
-            (WindowAction::LastThird, KeyCode::D),
-            (WindowAction::FirstTwoThirds, KeyCode::Q),
-            (WindowAction::LastTwoThirds, KeyCode::E),
-            (WindowAction::TopLeft, KeyCode::U),
-            (WindowAction::TopRight, KeyCode::I),
-            (WindowAction::BottomLeft, KeyCode::J),
-            (WindowAction::BottomRight, KeyCode::K),
+            (WindowAction::LeftHalf, KeyCode::Left),
+            (WindowAction::RightHalf, KeyCode::Right),
+            (WindowAction::Maximize, KeyCode::Up),
+            (WindowAction::Restore, KeyCode::Down),
         ];
         for (action, key) in expected {
             let hotkey = config.binding(action).expect("action must be bound");
@@ -798,13 +825,25 @@ mod tests {
             );
         }
 
-        // The hole in the block is deliberate, not an oversight: `W` is Game
-        // Bar's broadcast camera toggle.
-        assert_eq!(
-            config.binding(WindowAction::CenterTwoThirds),
-            None,
-            "center two thirds must stay unbound while W is unusable"
-        );
+        // Nothing else ships bound: the vertical halves, center, the corners
+        // and the centred column are all catalogue-only.
+        for action in [
+            WindowAction::TopHalf,
+            WindowAction::BottomHalf,
+            WindowAction::Center,
+            WindowAction::CenterHalf,
+            WindowAction::CenterHalfBack,
+            WindowAction::TopLeft,
+            WindowAction::TopRight,
+            WindowAction::BottomLeft,
+            WindowAction::BottomRight,
+        ] {
+            assert_eq!(
+                config.binding(action),
+                None,
+                "{action} must stay unbound under the arrow-only defaults"
+            );
+        }
     }
 
     /// Every default must be identical across platforms apart from the base
@@ -817,20 +856,8 @@ mod tests {
         let expected = [
             (WindowAction::LeftHalf, KeyCode::Left),
             (WindowAction::RightHalf, KeyCode::Right),
-            (WindowAction::TopHalf, KeyCode::Up),
-            (WindowAction::BottomHalf, KeyCode::Down),
-            (WindowAction::Maximize, KeyCode::Enter),
-            (WindowAction::Restore, KeyCode::Backspace),
-            (WindowAction::Center, KeyCode::C),
-            (WindowAction::FirstThird, KeyCode::A),
-            (WindowAction::CenterThird, KeyCode::S),
-            (WindowAction::LastThird, KeyCode::D),
-            (WindowAction::FirstTwoThirds, KeyCode::Q),
-            (WindowAction::LastTwoThirds, KeyCode::E),
-            (WindowAction::TopLeft, KeyCode::U),
-            (WindowAction::TopRight, KeyCode::I),
-            (WindowAction::BottomLeft, KeyCode::J),
-            (WindowAction::BottomRight, KeyCode::K),
+            (WindowAction::Maximize, KeyCode::Up),
+            (WindowAction::Restore, KeyCode::Down),
         ];
         for (action, key) in expected {
             let hotkey = config.binding(action).expect("action must be bound");
@@ -844,13 +871,14 @@ mod tests {
             );
         }
 
-        // The one intentional exception: maximize-height adds Shift so it can
-        // share the Up arrow with top-half.
-        let mh = config
-            .binding(WindowAction::MaximizeHeight)
-            .expect("maximize height must be bound");
-        assert_eq!(mh.key, KeyCode::Up);
-        assert_eq!(mh.modifiers, BASE_MODIFIERS | Modifiers::SHIFT);
+        // Nothing needs a second modifier: every default is the base modifier
+        // plus one arrow.
+        for (hotkey, action) in config.active_bindings() {
+            assert_eq!(
+                hotkey.modifiers, BASE_MODIFIERS,
+                "{action} adds a modifier beyond the base ({hotkey})"
+            );
+        }
     }
 
     /// Windows treats `Ctrl+Alt` as `AltGr`, which many international layouts
@@ -1172,9 +1200,9 @@ mod tests {
     fn active_bindings_skips_unbound_actions() {
         let mut config = Config::default();
         let before = config.active_bindings().len();
-        config.set_binding(WindowAction::Center, None);
+        config.set_binding(WindowAction::Maximize, None);
         let active = config.active_bindings();
         assert_eq!(active.len(), before - 1);
-        assert!(!active.iter().any(|(_, a)| *a == WindowAction::Center));
+        assert!(!active.iter().any(|(_, a)| *a == WindowAction::Maximize));
     }
 }

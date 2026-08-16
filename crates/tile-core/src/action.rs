@@ -122,6 +122,7 @@ pub enum WindowAction {
     AlmostMaximize,
     MaximizeHeight,
     CenterHalf,
+    CenterHalfBack,
     Center,
     Restore,
 }
@@ -129,7 +130,7 @@ pub enum WindowAction {
 impl WindowAction {
     /// All actions, grouped by [`WindowFamily`] in the order they appear in
     /// the UI.
-    pub const ALL: [WindowAction; 51] = [
+    pub const ALL: [WindowAction; 52] = [
         // Halves
         WindowAction::LeftHalf,
         WindowAction::RightHalf,
@@ -188,6 +189,7 @@ impl WindowAction {
         WindowAction::AlmostMaximize,
         WindowAction::MaximizeHeight,
         WindowAction::CenterHalf,
+        WindowAction::CenterHalfBack,
         WindowAction::Center,
         WindowAction::Restore,
     ];
@@ -247,6 +249,7 @@ impl WindowAction {
             WindowAction::AlmostMaximize => "almost-maximize",
             WindowAction::MaximizeHeight => "maximize-height",
             WindowAction::CenterHalf => "center-half",
+            WindowAction::CenterHalfBack => "center-half-back",
             WindowAction::Center => "center",
             WindowAction::Restore => "restore",
         }
@@ -304,6 +307,7 @@ impl WindowAction {
             WindowAction::AlmostMaximize => "Almost Maximize",
             WindowAction::MaximizeHeight => "Maximize Height",
             WindowAction::CenterHalf => "Center Half",
+            WindowAction::CenterHalfBack => "Center Half (Previous Size)",
             WindowAction::Center => "Center",
             WindowAction::Restore => "Restore",
         }
@@ -361,6 +365,7 @@ impl WindowAction {
             | WindowAction::AlmostMaximize
             | WindowAction::MaximizeHeight
             | WindowAction::CenterHalf
+            | WindowAction::CenterHalfBack
             | WindowAction::Center
             | WindowAction::Restore => WindowFamily::Sizing,
         }
@@ -375,12 +380,18 @@ impl WindowAction {
     /// Whether repeatedly pressing this action's shortcut cycles it through
     /// [`crate::CycleSize`]s rather than doing nothing.
     ///
-    /// Only actions with an unambiguous "grow from this edge" reading cycle:
-    /// the four halves and the four quarter corners. That matches Rectangle,
-    /// whose `cooperativeResizeSide` is defined for exactly those eight. An
-    /// explicitly-sized action such as `FirstThird` does not cycle, because
-    /// its size *is* the request — a user who presses "first third" twice
-    /// wants a first third, not a first half.
+    /// Only actions with an unambiguous "grow from this anchor" reading cycle:
+    /// the four halves, the four quarter corners, and `CenterHalf`. The first
+    /// eight match Rectangle, whose `cooperativeResizeSide` is defined for
+    /// exactly those. An explicitly-sized action such as `FirstThird` does not
+    /// cycle, because its size *is* the request — a user who presses "first
+    /// third" twice wants a first third, not a first half.
+    ///
+    /// `CenterHalf` is Tile's own addition and anchors to the screen's centre
+    /// line rather than an edge, growing symmetrically in both directions. It
+    /// is what puts the whole centred column — center half, two thirds, third
+    /// and quarter — behind a single shortcut, which is why the centred
+    /// actions need no letter bindings of their own.
     pub const fn cycles(self) -> bool {
         matches!(
             self,
@@ -392,7 +403,29 @@ impl WindowAction {
                 | WindowAction::TopRight
                 | WindowAction::BottomLeft
                 | WindowAction::BottomRight
+                | WindowAction::CenterHalf
+                | WindowAction::CenterHalfBack
         )
+    }
+
+    /// The action whose rectangles define this action's cycle.
+    ///
+    /// `CenterHalfBack` walks the *same* sequence as [`WindowAction::CenterHalf`],
+    /// just in the other direction, so both must resolve to one anchor. That is
+    /// what lets `Up` and `Down` share a single cycle: press `Up` twice and
+    /// `Down` once and you land back where the first press put you, rather than
+    /// starting a second, independent cycle.
+    pub const fn cycle_anchor(self) -> WindowAction {
+        match self {
+            WindowAction::CenterHalfBack => WindowAction::CenterHalf,
+            other => other,
+        }
+    }
+
+    /// Whether this action walks its cycle towards the *previous* size rather
+    /// than the next one.
+    pub const fn cycles_backwards(self) -> bool {
+        matches!(self, WindowAction::CenterHalfBack)
     }
 
     /// This action's rectangle resized to `fraction` of the work area along
@@ -405,8 +438,12 @@ impl WindowAction {
     ///
     /// Corners cycle **horizontally**, matching Rectangle's default
     /// `cornerCycleExpansionAxis`; the vertical variant would be a per-user
-    /// setting rather than a different function. Returns `None` for actions
-    /// that do not cycle.
+    /// setting rather than a different function.
+    ///
+    /// `CenterHalf` is the one action anchored to the centre rather than an
+    /// edge: it keeps `fraction` of the width centred, so ⅓ is exactly
+    /// `CenterThird` and ⅔ exactly `CenterTwoThirds`. Returns `None` for
+    /// actions that do not cycle.
     pub fn cycle_rect(
         self,
         work_area: Rect,
@@ -430,6 +467,16 @@ impl WindowAction {
             WindowAction::TopRight => grid(a, gaps, main_screen, (1.0 - f, 1.0), (0.0, 0.5)),
             WindowAction::BottomLeft => grid(a, gaps, main_screen, (0.0, f), (0.5, 1.0)),
             WindowAction::BottomRight => grid(a, gaps, main_screen, (1.0 - f, 1.0), (0.5, 1.0)),
+            // Centred on the screen's vertical axis, so it grows by f/2 on each
+            // side rather than from an edge. `CenterHalfBack` shares the
+            // rectangles and differs only in which way it walks them.
+            WindowAction::CenterHalf | WindowAction::CenterHalfBack => grid(
+                a,
+                gaps,
+                main_screen,
+                ((1.0 - f) / 2.0, (1.0 + f) / 2.0),
+                (0.0, 1.0),
+            ),
             _ => return None,
         };
         Some(rect.rounded())
@@ -578,7 +625,9 @@ impl WindowAction {
                 grid(a, gaps, main_screen, (2.0 / 3.0, 1.0), (2.0 / 3.0, 1.0))
             }
             WindowAction::Maximize => grid(a, gaps, main_screen, (0.0, 1.0), (0.0, 1.0)),
-            WindowAction::CenterHalf => grid(a, gaps, main_screen, (0.25, 0.75), (0.0, 1.0)),
+            WindowAction::CenterHalf | WindowAction::CenterHalfBack => {
+                grid(a, gaps, main_screen, (0.25, 0.75), (0.0, 1.0))
+            }
             WindowAction::MaximizeHeight => {
                 // Keep the window's current horizontal position and width, but
                 // stretch it to the full work-area height. The vertical extent
@@ -1304,7 +1353,7 @@ mod tests {
     }
 
     #[test]
-    fn only_halves_and_corners_cycle() {
+    fn only_halves_corners_and_center_half_cycle() {
         let cycling: Vec<&str> = WindowAction::ALL
             .into_iter()
             .filter(|a| a.cycles())
@@ -1321,6 +1370,8 @@ mod tests {
                 "top-right",
                 "bottom-left",
                 "bottom-right",
+                "center-half",
+                "center-half-back",
             ]
         );
         for action in WindowAction::ALL.into_iter().filter(|a| !a.cycles()) {
@@ -1351,6 +1402,36 @@ mod tests {
             WindowAction::BottomHalf.cycle_rect(AREA, &NO_GAPS, true, third),
             Some(Rect::new(0.0, 693.0, 1920.0, 347.0))
         );
+    }
+
+    /// The centred cycle is what replaces the old `S`/`W` letter bindings, so
+    /// its steps must land on exactly the same rectangles those actions
+    /// produce — otherwise `Up` would be a near-miss rather than a
+    /// replacement.
+    #[test]
+    fn cycled_center_half_matches_the_explicit_centered_actions() {
+        for (fraction, explicit) in [
+            (1.0 / 3.0, WindowAction::CenterThird),
+            (2.0 / 3.0, WindowAction::CenterTwoThirds),
+            (3.0 / 4.0, WindowAction::CenterThreeFourths),
+        ] {
+            assert_eq!(
+                WindowAction::CenterHalf.cycle_rect(AREA, &NO_GAPS, true, fraction),
+                Some(rect(explicit, AREA, &NO_GAPS)),
+                "centred cycle at {fraction} must equal {explicit}"
+            );
+        }
+    }
+
+    #[test]
+    fn cycled_center_half_stays_centered() {
+        let quarter = WindowAction::CenterHalf
+            .cycle_rect(AREA, &NO_GAPS, true, 1.0 / 4.0)
+            .unwrap();
+        assert_eq!(quarter.width, 480.0);
+        assert_eq!(quarter.height, AREA.height);
+        // Equal margins on both sides is the whole point of a centred anchor.
+        assert_eq!(quarter.x - AREA.x, AREA.max_x() - quarter.max_x());
     }
 
     #[test]
