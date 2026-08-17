@@ -4,18 +4,149 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and release (e.g. v0.1.0)'
+        required: true
+        type: string
 
-# Needed so tauri-action can create the GitHub Release and upload assets.
+# Needed so the workflow can create the GitHub Release and upload assets.
 permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Release (${{ matrix.os }})
+  # ---------------------------------------------------------------------------
+  # The draft release is created up front so the platform jobs have somewhere to
+  # upload to. Doing it here — rather than letting tauri-action create it — is
+  # what allows the macOS job to notarize and staple the .dmg *before* it is
+  # attached to the release; tauri-action uploads as part of the build step and
+  # leaves no window in between.
+  # ---------------------------------------------------------------------------
+  create-release:
+    name: Create draft release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      macos-signed: ${{ steps.meta.outputs.macos_signed }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        env:
+          # Only presence is checked; the values never leave this step.
+          # APPLE_SIGNING_IDENTITY is deliberately absent: when the .p12 is
+          # supplied the bundler derives the identity from it, so requiring the
+          # secret here would mislabel a genuinely signed build as unsigned.
+          HAS_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE != '' }}
+          HAS_APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD != '' }}
+          HAS_APPLE_ID: ${{ secrets.APPLE_ID != '' }}
+          HAS_APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD != '' }}
+          HAS_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID != '' }}
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag || github.ref_name }}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+          # A mismatch here ships installers whose in-app version disagrees with
+          # the release they hang off, which is impossible to diagnose from a bug
+          # report. Fail before anything is published. The version lives in three
+          # places and all of them must agree.
+          conf_version="$(jq -r .version apps/tile/tauri.conf.json)"
+          cargo_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
+          npm_version="$(jq -r .version apps/tile/ui/package.json)"
+          for pair in "apps/tile/tauri.conf.json:$conf_version" "Cargo.toml:$cargo_version" "apps/tile/ui/package.json:$npm_version"; do
+            file="${pair%%:*}"
+            version="${pair#*:}"
+            if [ "$tag" != "v$version" ]; then
+              echo "::error::Tag $tag does not match the version $version declared in $file (expected tag v$version)"
+              exit 1
+            fi
+          done
+
+          # Signing and notarization are only claimed when *every* secret they
+          # need is present. Deriving this from a subset lets the release notes
+          # promise a notarized build that the bundler then declines to
+          # notarize, which is worse than saying nothing.
+          macos_signed=true
+          for flag in "$HAS_APPLE_CERTIFICATE" "$HAS_APPLE_CERTIFICATE_PASSWORD" \
+                      "$HAS_APPLE_ID" "$HAS_APPLE_PASSWORD" "$HAS_APPLE_TEAM_ID"; do
+            if [ "$flag" != "true" ]; then
+              macos_signed=false
+            fi
+          done
+          echo "macos_signed=$macos_signed" >> "$GITHUB_OUTPUT"
+
+      - name: Compose release notes
+        shell: bash
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          MACOS_SIGNED: ${{ steps.meta.outputs.macos_signed }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Install"
+            echo
+            echo "**macOS** — download \`Tile_*_universal.dmg\`, open it and drag **Tile** into"
+            echo "Applications. The build is universal: one download for both Apple Silicon and"
+            echo "Intel Macs. Tile lives in the menu bar, not the Dock."
+            echo
+            if [ "$MACOS_SIGNED" = "true" ]; then
+              echo "The macOS build is signed with a Developer ID certificate and notarized by"
+              echo "Apple, so it opens without any Gatekeeper workaround."
+            else
+              echo "> [!WARNING]"
+              echo "> This macOS build is **not signed or notarized**, so Gatekeeper will refuse"
+              echo "> to open it. After dragging Tile into Applications, run:"
+              echo ">"
+              echo "> \`\`\`sh"
+              echo "> xattr -dr com.apple.quarantine /Applications/Tile.app"
+              echo "> \`\`\`"
+            fi
+            echo
+            echo "On first launch macOS asks for the **Accessibility** permission — Tile needs it"
+            echo "to move and resize other applications' windows."
+            echo
+            echo "**Windows** — download the NSIS setup \`.exe\` or the \`.msi\`. SmartScreen may"
+            echo "warn you; choose **More info ▸ Run anyway**."
+            echo
+            echo "---"
+            echo
+            echo "**Full changelog**: https://github.com/${{ github.repository }}/commits/$TAG"
+          } > release-notes.md
+          cat release-notes.md
+
+      - name: Create or update the draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # A re-run must not disturb the publication state of an existing
+            # release: passing --draft unconditionally would silently unpublish
+            # a release users are already downloading. Refresh the notes only,
+            # and leave a published release published.
+            is_draft="$(gh release view "$TAG" --json isDraft --jq .isDraft)"
+            echo "Release $TAG already exists (draft: $is_draft); refreshing notes only."
+            gh release edit "$TAG" --title "Tile $TAG" --notes-file release-notes.md
+          else
+            gh release create "$TAG" --title "Tile $TAG" --notes-file release-notes.md --draft --verify-tag
+          fi
+
+  build:
+    name: Build (${{ matrix.os }})
+    needs: create-release
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -33,6 +164,8 @@ jobs:
             args: ''
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.create-release.outputs.tag }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -57,9 +190,13 @@ jobs:
       # configured. Passing them through as empty strings is not harmless: the
       # Tauri bundler treats a *defined* APPLE_CERTIFICATE as "signing is on"
       # and then fails with "failed to import keychain certificate". Writing
-      # them to $GITHUB_ENV conditionally leaves them undefined until real
-      # secrets exist, so unsigned builds work today and adding the secrets
-      # later turns signing on with no workflow change.
+      # them to $GITHUB_ENV conditionally leaves them undefined when a secret is
+      # missing, so an unsigned build still succeeds.
+      #
+      # The notarization trio is all-or-nothing: with APPLE_ID and
+      # APPLE_PASSWORD set but no APPLE_TEAM_ID, the Tauri v2 bundler hard-errors
+      # rather than skipping notarization, so a partial configuration is
+      # rejected here with a comprehensible message instead.
       - name: Configure code signing (only when secrets are present)
         shell: bash
         env:
@@ -84,58 +221,115 @@ jobs:
           export_if_set APPLE_CERTIFICATE "${IN_APPLE_CERTIFICATE:-}"
           export_if_set APPLE_CERTIFICATE_PASSWORD "${IN_APPLE_CERTIFICATE_PASSWORD:-}"
           export_if_set APPLE_SIGNING_IDENTITY "${IN_APPLE_SIGNING_IDENTITY:-}"
-          export_if_set APPLE_ID "${IN_APPLE_ID:-}"
-          export_if_set APPLE_PASSWORD "${IN_APPLE_PASSWORD:-}"
-          export_if_set APPLE_TEAM_ID "${IN_APPLE_TEAM_ID:-}"
           export_if_set TAURI_SIGNING_PRIVATE_KEY "${IN_TAURI_SIGNING_PRIVATE_KEY:-}"
           export_if_set TAURI_SIGNING_PRIVATE_KEY_PASSWORD "${IN_TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
 
-      - name: Build and release
+          if [ -n "${IN_APPLE_CERTIFICATE:-}" ] && [ -z "${IN_APPLE_CERTIFICATE_PASSWORD:-}" ]; then
+            echo "::error::APPLE_CERTIFICATE is set but APPLE_CERTIFICATE_PASSWORD is not; the .p12 cannot be imported."
+            exit 1
+          fi
+
+          if [ -n "${IN_APPLE_ID:-}" ] && [ -n "${IN_APPLE_PASSWORD:-}" ] && [ -n "${IN_APPLE_TEAM_ID:-}" ]; then
+            export_if_set APPLE_ID "$IN_APPLE_ID"
+            export_if_set APPLE_PASSWORD "$IN_APPLE_PASSWORD"
+            export_if_set APPLE_TEAM_ID "$IN_APPLE_TEAM_ID"
+          elif [ -n "${IN_APPLE_ID:-}" ] || [ -n "${IN_APPLE_PASSWORD:-}" ] || [ -n "${IN_APPLE_TEAM_ID:-}" ]; then
+            echo "::error::Notarization needs APPLE_ID, APPLE_PASSWORD and APPLE_TEAM_ID together; only some of them are set."
+            exit 1
+          fi
+
+      # tauri-action is given no tagName, releaseName or releaseId, so it only
+      # builds and reports artifactPaths. Uploading happens at the end of the
+      # job, once the macOS artifacts have been notarized and stapled.
+      - name: Build the app
+        id: build
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # ---------------------------------------------------------------
-          # Code signing is intentionally left OFF for now. These artifacts
-          # are UNSIGNED and UNNOTARIZED. macOS Gatekeeper WILL block them:
-          # after downloading, a user must run
-          #     xattr -d com.apple.quarantine /Applications/Tile.app
-          # or right-click the app in Finder and choose "Open" the first time.
-          #
-          # To enable real signing later, add these repository secrets. The
-          # step above picks them up automatically — no workflow change
-          # required:
-          #   macOS notarization / signing:
-          #     APPLE_CERTIFICATE          (base64 .p12)
-          #     APPLE_CERTIFICATE_PASSWORD (password for the .p12)
-          #     APPLE_SIGNING_IDENTITY     ("Developer ID Application: ...")
-          #     APPLE_ID                   (Apple developer account e-mail)
-          #     APPLE_PASSWORD             (app-specific password)
-          #     APPLE_TEAM_ID              (10-char team id)
-          #   Windows updater signing:
-          #     TAURI_SIGNING_PRIVATE_KEY  (Tauri updater private key)
-          #     TAURI_SIGNING_PRIVATE_KEY_PASSWORD
-          # ---------------------------------------------------------------
         with:
           projectPath: apps/tile
-          tagName: ${{ github.ref_name }}
-          releaseName: 'Tile ${{ github.ref_name }}'
-          releaseBody: |
-            Tile ${{ github.ref_name }}
-
-            > **Unsigned builds.** These binaries are not code-signed or
-            > notarized. On macOS, Gatekeeper will refuse to open the app until
-            > you remove the quarantine attribute:
-            >
-            > ```sh
-            > xattr -d com.apple.quarantine /Applications/Tile.app
-            > ```
-            >
-            > …or right-click the app in Finder and choose **Open** the first
-            > time. On Windows, SmartScreen may warn you; choose
-            > **More info ▸ Run anyway**.
-
-            See the assets below to download and install.
-          # Draft so a human reviews the release before it goes public.
-          releaseDraft: true
-          prerelease: false
           args: ${{ matrix.args }}
+
+      # The Tauri bundler notarizes and staples the .app, then packages it into
+      # a signed .dmg — but the .dmg itself is never submitted to Apple. An
+      # un-notarized disk image makes Gatekeeper object when it is mounted from
+      # a quarantined download, so submit and staple it separately.
+      - name: Notarize and staple the .dmg
+        if: matrix.os == 'macos-latest' && needs.create-release.outputs.macos-signed == 'true'
+        shell: bash
+        env:
+          ARTIFACTS: ${{ steps.build.outputs.artifactPaths }}
+        run: |
+          set -euo pipefail
+          dmg="$(echo "$ARTIFACTS" | jq -r '.[] | select(endswith(".dmg"))' | head -n1)"
+          if [ -z "$dmg" ]; then
+            echo "::error::No .dmg found in build artifacts: $ARTIFACTS"
+            exit 1
+          fi
+          echo "Notarizing $dmg"
+          xcrun notarytool submit "$dmg" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$dmg"
+
+      # A silently unsigned build is indistinguishable from a signed one until a
+      # user downloads it, so assert the exact end state Gatekeeper will see.
+      - name: Verify signature and notarization
+        if: matrix.os == 'macos-latest' && needs.create-release.outputs.macos-signed == 'true'
+        shell: bash
+        env:
+          ARTIFACTS: ${{ steps.build.outputs.artifactPaths }}
+        run: |
+          set -euo pipefail
+          dmg="$(echo "$ARTIFACTS" | jq -r '.[] | select(endswith(".dmg"))' | head -n1)"
+          app="$(find target -maxdepth 6 -name 'Tile.app' -type d | head -n1)"
+
+          # Without these guards a moved bundle path turns into an opaque
+          # `codesign: invalid argument` several lines later, so name the
+          # missing artifact and where it was looked for.
+          if [ -z "$dmg" ]; then
+            echo "::error::No .dmg found in build artifacts: $ARTIFACTS"
+            exit 1
+          fi
+          if [ -z "$app" ]; then
+            echo "::error::No Tile.app found under target/ (searched 6 levels deep). Bundle layout may have changed."
+            find target -maxdepth 6 -name '*.app' -type d || true
+            exit 1
+          fi
+
+          echo "=== .app: $app ==="
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign -dvvv "$app" 2>&1 | grep -q 'flags=.*runtime' \
+            || { echo "::error::Hardened runtime is not enabled on $app"; exit 1; }
+          spctl --assess --type exec --verbose=4 "$app"
+          xcrun stapler validate "$app"
+
+          echo "=== .dmg: $dmg ==="
+          codesign --verify --verbose=2 "$dmg"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg"
+          xcrun stapler validate "$dmg"
+
+      - name: Upload artifacts to the draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.create-release.outputs.tag }}
+          ARTIFACTS: ${{ steps.build.outputs.artifactPaths }}
+        run: |
+          set -euo pipefail
+          # macOS runners still ship bash 3.2, which has no `mapfile`.
+          paths=()
+          while IFS= read -r path; do
+            if [ -n "$path" ]; then
+              paths+=("$path")
+            fi
+          done < <(echo "$ARTIFACTS" | jq -r '.[]')
+
+          if [ ${#paths[@]} -eq 0 ]; then
+            echo "::error::tauri-action produced no artifacts"
+            exit 1
+          fi
+          printf 'Uploading: %s\n' "${paths[@]}"
+          gh release upload "$TAG" "${paths[@]}" --clobber

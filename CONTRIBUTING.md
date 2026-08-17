@@ -63,6 +63,11 @@ cargo build --workspace
 
 Write clear, imperative commit messages (e.g. "Add center-window action").
 
+## Releasing
+
+Maintainers cut releases by pushing a `v*` tag. The signing, notarization and
+publishing steps are documented in [`docs/RELEASING.md`](docs/RELEASING.md).
+
 ## Reporting bugs
 
 Open an issue using the templates in
