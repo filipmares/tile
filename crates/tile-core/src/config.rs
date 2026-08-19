@@ -583,27 +583,29 @@ pub const MAX_GAP: f64 = 200.0;
 /// macOS uses `Control+Option`, matching Rectangle's alternate ("Magnet")
 /// default set, which is also what Tile has always shipped.
 ///
-/// Windows deliberately uses `Win+Alt` rather than `Ctrl+Alt`, even though
-/// `Ctrl+Alt` would mirror macOS exactly. **Windows treats `Ctrl+Alt` as
-/// `AltGr`**: on many international layouts `AltGr`+key produces characters
-/// such as `@ € { } [ ] \ ~`. Because the Windows backend swallows any
-/// keystroke it matches, binding `Ctrl+Alt`+letter would make those characters
-/// impossible to type — a German user could not type `@`.
+/// Windows uses `Win` alone. `Ctrl+Alt` would mirror macOS exactly, but
+/// **Windows treats `Ctrl+Alt` as `AltGr`**: on many international layouts
+/// `AltGr`+key produces characters such as `@ € { } [ ] \ ~`. Because the
+/// Windows backend swallows any keystroke it matches, binding `Ctrl+Alt`+letter
+/// would make those characters impossible to type — a German user could not
+/// type `@`.
 #[cfg(target_os = "macos")]
 const BASE_MODIFIERS: Modifiers = Modifiers(Modifiers::CONTROL.0 | Modifiers::ALT.0);
 #[cfg(not(target_os = "macos"))]
-const BASE_MODIFIERS: Modifiers = Modifiers(Modifiers::META.0 | Modifiers::ALT.0);
+const BASE_MODIFIERS: Modifiers = Modifiers::META;
 
 /// Default key bindings.
 ///
 /// **Every default sits on the same base modifier**, so the two platforms
 /// differ in exactly one thing: what that modifier is. `Control+Option` on
-/// macOS, `Win+Alt` on Windows. Nothing else varies, so a user with a Mac and
-/// a PC learns one set of shortcuts.
+/// macOS, `Win` on Windows. Nothing else varies, so a user with a Mac and a
+/// PC learns one set of shortcuts.
 ///
-/// The defaults are four arrows and nothing else. `Left` and `Right` place the
-/// window and carry the whole size catalogue by cycling; `Up` and `Down` are
-/// the "bigger / undo" axis:
+/// The defaults are the four arrows, plus Shift on Left/Right to throw the
+/// window to the adjacent display. `Left` and `Right` place the window and
+/// carry the whole size catalogue by cycling; `Up` and `Down` are the
+/// "bigger / undo" axis; Shift+Left/Right keep the current slot and walk
+/// screens:
 ///
 /// ```text
 ///   Left   ½ → ⅔ → ⅓ → …   anchored left
@@ -612,11 +614,12 @@ const BASE_MODIFIERS: Modifiers = Modifiers(Modifiers::META.0 | Modifiers::ALT.0
 ///   Down   restore
 /// ```
 ///
-/// **No default sits on a letter**, none needs `Enter` or `Backspace`, and
-/// none adds a second modifier: the whole set is the base modifier plus one
-/// arrow. Center, the corners, maximize-height and the centred column are all
-/// in the catalogue but ship unbound, because every letter within reach is a
-/// left-hand key and the modifier is already a left-hand hold.
+/// **No default sits on a letter**, none needs `Enter` or `Backspace`. The
+/// only extra modifier is `Shift` on the horizontal arrows, which throws
+/// rather than cycling size. Center, the corners, maximize-height and the
+/// centred column are all in the catalogue but ship unbound, because every
+/// letter within reach is a left-hand key and the modifier is already a
+/// left-hand hold.
 ///
 /// # Why the arrows, and not letters
 ///
@@ -642,19 +645,18 @@ const BASE_MODIFIERS: Modifiers = Modifiers(Modifiers::META.0 | Modifiers::ALT.0
 /// its full cycling behaviour — including the backwards step through
 /// [`WindowAction::cycle_anchor`] — for anyone who binds it.
 ///
-/// # Why Windows does not use `Win+Arrow`
+/// # Why Windows uses `Win+Arrow`
 ///
-/// It used to. Moving the halves onto `Win+Alt` with everything else means
-/// Aero Snap keeps working, so users who want the native behaviour still have
-/// it and Tile's richer actions live entirely in its own namespace.
+/// `Win+Arrow` is Aero Snap — the shell combination people already reach for
+/// to tile a window. Tile's hook exists so it can claim those keys; swallowing
+/// them replaces Aero Snap with Tile's cycle (half → two thirds → third) on
+/// the same four arrows. `Win+Shift+Arrow` (move between monitors) and
+/// `Win+Ctrl+Left/Right` (virtual desktops) stay unbound, so those OS
+/// shortcuts keep working.
 ///
-/// It is worth knowing that **no two-modifier arrow combination is unclaimed
-/// on Windows**: `Win+Arrow` is Aero Snap, `Win+Alt+Arrow` is Windows 11's
-/// snap variants, `Win+Shift+Arrow` moves between monitors and
-/// `Win+Ctrl+Left/Right` switches virtual desktop. Tile therefore preempts
-/// *something* whichever it picks. `Win+Alt` is the best of them: it is the
-/// least used, and the keyboard hook takes it cleanly because the owner
-/// registers through `RegisterHotKey`, which the hook runs ahead of.
+/// `Win+Alt+Arrow` is the previous default. It left Aero Snap alone, but it
+/// is also Windows 11's snap variants and costs an extra modifier for no
+/// extra reach: the defaults are still just the four arrows.
 ///
 /// # Keys Xbox Game Bar reserves
 ///
@@ -715,6 +717,18 @@ pub fn default_bindings() -> BTreeMap<WindowAction, Option<Hotkey>> {
         Some(Hotkey::new(base, KeyCode::Down)),
     );
 
+    // Shift on the same arrows throws to the adjacent display, keeping the
+    // current slot. Size cycling stays on the unmodified arrows.
+    let throw = base.union(Modifiers::SHIFT);
+    map.insert(
+        WindowAction::PreviousDisplay,
+        Some(Hotkey::new(throw, KeyCode::Left)),
+    );
+    map.insert(
+        WindowAction::NextDisplay,
+        Some(Hotkey::new(throw, KeyCode::Right)),
+    );
+
     map
 }
 
@@ -724,17 +738,18 @@ mod tests {
 
     /// The actions that ship with a default binding.
     ///
-    /// Four arrows, and nothing else at all. The horizontal pair places the
-    /// window and cycles its width; the vertical pair maximizes and undoes.
+    /// Four arrows for tiling, plus Shift+Left/Right for display throws.
     /// Every other action — center, the corners, maximize-height, the centred
     /// column and the explicitly-sized thirds and two-thirds — ships unbound:
-    /// every letter within reach is a left-hand key, the modifier is already a
-    /// left-hand hold, and a second modifier defeats the point.
-    const CORE_BOUND: [WindowAction; 4] = [
+    /// every letter within reach is a left-hand key and the modifier is
+    /// already a left-hand hold.
+    const CORE_BOUND: [WindowAction; 6] = [
         WindowAction::LeftHalf,
         WindowAction::RightHalf,
         WindowAction::Maximize,
         WindowAction::Restore,
+        WindowAction::PreviousDisplay,
+        WindowAction::NextDisplay,
     ];
 
     /// Both horizontal arrows must cycle, because that is the only way the
@@ -825,6 +840,19 @@ mod tests {
             );
         }
 
+        let throw = BASE_MODIFIERS.union(Modifiers::SHIFT);
+        for (action, key) in [
+            (WindowAction::PreviousDisplay, KeyCode::Left),
+            (WindowAction::NextDisplay, KeyCode::Right),
+        ] {
+            let hotkey = config.binding(action).expect("display throw must be bound");
+            assert_eq!(hotkey.key, key, "{action} lost its throw key");
+            assert_eq!(
+                hotkey.modifiers, throw,
+                "{action} should be the base modifier plus Shift"
+            );
+        }
+
         // Nothing else ships bound: the vertical halves, center, the corners
         // and the centred column are all catalogue-only.
         for action in [
@@ -871,13 +899,59 @@ mod tests {
             );
         }
 
-        // Nothing needs a second modifier: every default is the base modifier
-        // plus one arrow.
+        let throw = BASE_MODIFIERS.union(Modifiers::SHIFT);
+        for (action, key) in [
+            (WindowAction::PreviousDisplay, KeyCode::Left),
+            (WindowAction::NextDisplay, KeyCode::Right),
+        ] {
+            let hotkey = config.binding(action).expect("display throw must be bound");
+            assert_eq!(hotkey.key, key);
+            assert_eq!(hotkey.modifiers, throw);
+        }
+
         for (hotkey, action) in config.active_bindings() {
+            let expected = if action.moves_display() {
+                throw
+            } else {
+                BASE_MODIFIERS
+            };
             assert_eq!(
-                hotkey.modifiers, BASE_MODIFIERS,
-                "{action} adds a modifier beyond the base ({hotkey})"
+                hotkey.modifiers, expected,
+                "{action} has unexpected modifiers ({hotkey})"
             );
+        }
+    }
+
+    /// Windows defaults are `Win` plus an arrow, not `Win+Alt`. Pin that so a
+    /// well-meaning "leave Aero Snap alone" edit cannot silently restore the
+    /// extra modifier.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn windows_defaults_use_win_without_alt() {
+        assert_eq!(BASE_MODIFIERS, Modifiers::META);
+        let config = Config::default();
+        for (hotkey, action) in config.active_bindings() {
+            assert!(
+                hotkey.modifiers.contains(Modifiers::META),
+                "{action} is {hotkey}, expected Win"
+            );
+            assert!(
+                !hotkey.modifiers.contains(Modifiers::ALT),
+                "{action} is {hotkey}, Win+Alt is no longer the default"
+            );
+            if action.moves_display() {
+                assert_eq!(
+                    hotkey.modifiers,
+                    Modifiers::META | Modifiers::SHIFT,
+                    "{action} is {hotkey}, expected Win+Shift"
+                );
+            } else {
+                assert_eq!(
+                    hotkey.modifiers,
+                    Modifiers::META,
+                    "{action} is {hotkey}, expected Win alone"
+                );
+            }
         }
     }
 
@@ -926,9 +1000,8 @@ mod tests {
         ];
 
         let config = Config::default();
-        let win_alt = Modifiers::META | Modifiers::ALT;
         for (hotkey, action) in config.active_bindings() {
-            if hotkey.modifiers != win_alt {
+            if !hotkey.modifiers.contains(Modifiers::META) {
                 continue;
             }
             assert!(

@@ -133,6 +133,40 @@ impl Screen {
             .or_else(|| screens.iter().find(|s| s.is_primary))
             .or_else(|| screens.first())
     }
+
+    /// Screens ordered left-to-right, then top-to-bottom. Display throws walk
+    /// this order rather than the OS enumeration, which is not stable across
+    /// reconnects.
+    pub fn geometrically_ordered(screens: &[Screen]) -> Vec<&Screen> {
+        let mut ordered: Vec<&Screen> = screens.iter().collect();
+        ordered.sort_by(|a, b| {
+            a.frame
+                .x
+                .partial_cmp(&b.frame.x)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(
+                    a.frame
+                        .y
+                        .partial_cmp(&b.frame.y)
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                )
+                .then(a.id.cmp(&b.id))
+        });
+        ordered
+    }
+
+    /// The screen `step` places away from `current` in geometric order,
+    /// wrapping at the ends. `step` of `-1` is previous, `+1` is next.
+    pub fn adjacent<'a>(screens: &'a [Screen], current: &Screen, step: i32) -> Option<&'a Screen> {
+        if screens.is_empty() || step == 0 {
+            return None;
+        }
+        let ordered = Screen::geometrically_ordered(screens);
+        let index = ordered.iter().position(|s| s.id == current.id)?;
+        let len = ordered.len() as i32;
+        let next = (index as i32 + step).rem_euclid(len) as usize;
+        Some(ordered[next])
+    }
 }
 
 #[cfg(test)]
@@ -204,5 +238,38 @@ mod tests {
         }];
         let win = Rect::new(-5000.0, -5000.0, 10.0, 10.0);
         assert_eq!(Screen::best_match(&screens, &win).unwrap().id, "a");
+    }
+
+    fn screen(id: &str, x: f64, y: f64) -> Screen {
+        Screen {
+            id: id.into(),
+            frame: Rect::new(x, y, 100.0, 100.0),
+            work_area: Rect::new(x, y, 100.0, 100.0),
+            scale_factor: 1.0,
+            is_primary: id == "a",
+        }
+    }
+
+    #[test]
+    fn adjacent_walks_left_to_right_and_wraps() {
+        let screens = vec![
+            screen("c", 200.0, 0.0),
+            screen("a", 0.0, 0.0),
+            screen("b", 100.0, 50.0),
+        ];
+        let a = screens.iter().find(|s| s.id == "a").unwrap();
+        assert_eq!(Screen::adjacent(&screens, a, 1).unwrap().id, "b");
+        assert_eq!(Screen::adjacent(&screens, a, -1).unwrap().id, "c");
+        let c = screens.iter().find(|s| s.id == "c").unwrap();
+        assert_eq!(Screen::adjacent(&screens, c, 1).unwrap().id, "a");
+    }
+
+    #[test]
+    fn adjacent_is_identity_on_a_single_screen() {
+        let screens = vec![screen("only", 0.0, 0.0)];
+        assert_eq!(
+            Screen::adjacent(&screens, &screens[0], 1).unwrap().id,
+            "only"
+        );
     }
 }
