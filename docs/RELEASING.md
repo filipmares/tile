@@ -1,16 +1,54 @@
 # Releasing Tile
 
 Releases are cut by pushing a `v*` tag. [`.github/workflows/release.yml`](../.github/workflows/release.yml)
-then creates a **draft** GitHub Release, builds a universal macOS `.dmg` and the
-Windows `.msi`/`.exe`, and uploads them. When the Apple signing secrets are
-configured it also signs, notarizes and verifies the macOS artifacts; when they
-are not, it publishes them unsigned and says so in the release notes. A human
-publishes the draft either way.
+creates a **draft** GitHub Release, builds a universal macOS `.dmg` and a Windows
+NSIS setup `.exe`, verifies both, attaches a build provenance attestation, and —
+once every platform job is green — publishes the release automatically. A tag
+carrying a semver pre-release suffix (`v0.2.0-rc.1`) is published but never
+marked `latest`.
 
-- [One-time macOS signing setup](#one-time-macos-signing-setup)
+Signing is opt-in on both platforms: when the secrets are configured the
+artifacts are signed and the workflow asserts it; when they are not, the build
+still succeeds and the release notes say the artifacts are unsigned.
+
 - [Cutting a release](#cutting-a-release)
+- [One-time macOS signing setup](#one-time-macos-signing-setup)
+- [One-time Windows signing setup](#one-time-windows-signing-setup)
 - [What the workflow verifies](#what-the-workflow-verifies)
 - [Troubleshooting](#troubleshooting)
+
+## Cutting a release
+
+The version lives in three files — `Cargo.toml`, `apps/tile/tauri.conf.json` and
+`apps/tile/ui/package.json` — and all three must equal the tag or the workflow
+stops before publishing anything.
+
+1. **Bump them together** with the
+   [`Bump version`](../.github/workflows/bump.yml) workflow, which edits all
+   three, refreshes `Cargo.lock` and opens a PR:
+
+   ```sh
+   gh workflow run bump.yml -f version=0.2.0
+   ```
+
+2. Review and merge the PR.
+3. Tag `main` and push:
+
+   ```sh
+   git checkout main && git pull
+   git tag v0.2.0
+   git push origin v0.2.0
+   ```
+
+4. Watch the run: `gh run watch --workflow=release.yml`. The macOS job is the
+   slow one — notarization typically takes a few minutes.
+5. The release publishes itself when both platform jobs succeed. If one fails,
+   the release stays a draft: fix the cause and re-run.
+
+To rebuild an existing tag without re-tagging, run the workflow manually:
+`gh workflow run release.yml -f tag=v0.2.0`. Assets are uploaded with
+`--clobber`, so a re-run replaces them, and an already-published release stays
+published.
 
 ## One-time macOS signing setup
 
@@ -94,54 +132,90 @@ with the wrong kind.
 Developer ID certificates expire after five years. Builds notarized before
 expiry keep working, but new builds need a fresh certificate.
 
-## Cutting a release
+## One-time Windows signing setup
 
-1. **Bump the version in all three places** — they must agree with the tag or
-   the workflow stops before publishing anything:
-   - `Cargo.toml` (workspace `version`)
-   - `apps/tile/tauri.conf.json` (`version`)
-   - `apps/tile/ui/package.json` (`version`)
-2. Commit the bump and merge it to `main`.
-3. Tag and push:
+Windows signing uses **Azure Artifact Signing** (previously Azure Trusted
+Signing / Azure Code Signing). It is roughly $10/month at the basic tier, and
+unlike a traditional OV certificate it needs no hardware token, so it works
+unattended in CI.
 
-   ```sh
-   git tag v0.2.0
-   git push origin v0.2.0
-   ```
+Signing does not make SmartScreen warnings disappear immediately: a new
+certificate starts with no reputation and earns it as installs accumulate. What
+signing buys straight away is a named publisher instead of "Unknown publisher".
 
-4. Watch the run: `gh run watch --workflow=release.yml`. The macOS job is the
-   slow one — notarization typically takes a few minutes.
-5. Review the draft release, then publish it:
+> [!IMPORTANT]
+> Do not run this on a Visual Studio subscription's monthly Azure credit. Those
+> credits are licensed for development and testing only, and signing artifacts
+> that are published to the public is production use. Use a pay-as-you-go
+> subscription.
 
-   ```sh
-   gh release view v0.2.0
-   gh release edit v0.2.0 --draft=false --latest
-   ```
+### 1. Create the signing account and certificate profile
 
-To rebuild an existing tag without re-tagging, run the workflow manually:
-`gh workflow run release.yml -f tag=v0.2.0`. Assets are uploaded with
-`--clobber`, so a re-run replaces them.
+Follow Microsoft's
+[quickstart](https://learn.microsoft.com/en-us/azure/trusted-signing/quickstart):
 
-### Verifying the download by hand
+1. Register the `Microsoft.CodeSigning` resource provider on the subscription.
+2. Create an **Artifact Signing account**. Note its **region endpoint** — it
+   looks like `https://wus2.codesigning.azure.net`.
+3. Complete **identity validation**. Both organization and individual identities
+   are supported; organizations validate faster, individuals need a government
+   ID. This is the step with a human in the loop, so start it early.
+4. Create a **certificate profile** of type **Public Trust**. Its name is the
+   `-c` argument the signing CLI takes.
 
-Worth doing at least once, ideally on a Mac that has never run Tile:
+### 2. Create a service principal for GitHub Actions
 
-```sh
-# Simulate a downloaded file — this is the attribute Gatekeeper reacts to.
-xattr -w com.apple.quarantine "0081;00000000;Safari;" Tile_0.2.0_universal.dmg
-open Tile_0.2.0_universal.dmg
-```
+In the Azure portal, **Microsoft Entra ID ▸ App registrations ▸ New
+registration**. From the app's overview page take the **Application (client) ID**
+and **Directory (tenant) ID**, then create a client secret under **Certificates &
+secrets ▸ New client secret**.
 
-It should mount and the app should launch with no security dialog beyond the
-standard "downloaded from the internet" confirmation and the Accessibility
-permission prompt.
+Back on the Artifact Signing account, open **Access control (IAM)** and assign
+the app two roles:
+
+- **Trusted Signing Certificate Profile Signer** (named *Artifact Signing
+  Certificate Profile Signer* in newer portal builds) — scoped to the
+  certificate profile.
+- **Reader** — scoped to the signing account.
+
+> The signing CLI that Tauri documents authenticates with a client secret, not
+> OIDC, which is why a secret is created here rather than a federated
+> credential. Rotate it on the schedule the portal suggests. If the project later
+> moves to a signing tool built on `Azure.Identity` — for example Microsoft's
+> `sign` CLI driving the Trusted Signing dlib — the client secret can be replaced
+> with a federated credential and `azure/login`.
+
+### 3. Add the repository secrets
+
+| Secret | Value |
+| ------ | ----- |
+| `AZURE_CLIENT_ID` | Application (client) ID of the app registration |
+| `AZURE_CLIENT_SECRET` | Client secret value from step 2 |
+| `AZURE_TENANT_ID` | Directory (tenant) ID |
+| `AZURE_ARTIFACT_SIGNING_ENDPOINT` | Region endpoint, e.g. `https://wus2.codesigning.azure.net` |
+| `AZURE_ARTIFACT_SIGNING_ACCOUNT` | Artifact Signing account name |
+| `AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE` | Certificate profile name |
+
+All six are required together. With any of them missing the workflow builds an
+unsigned installer, says so in the release notes, and skips the signature
+assertions — it never silently ships an unsigned build while claiming otherwise.
+
+Signing is wired through Tauri's `bundle > windows > signCommand`, which the
+workflow writes into a generated `apps/tile/tauri.signing.conf.json` overlay and
+passes with `--config`. That indirection is deliberate: a `signCommand` committed
+to `tauri.conf.json` would make every local `tauri build` fail on a missing tool.
+Going through `signCommand` rather than signing the finished `.exe` afterwards
+also means the `tile.exe` *inside* the installer is signed, which is where the
+publisher name in the SmartScreen and Defender prompts comes from.
 
 ## What the workflow verifies
 
 Silent signing failures are the main hazard: an unsigned build looks identical
-to a signed one until a user downloads it. The macOS job therefore asserts the
-end state rather than trusting the bundler, and fails the release if any check
-does not hold:
+to a signed one until a user downloads it. Because the release now publishes
+itself, both platform jobs assert their end state rather than trusting the
+bundler, and a failed assertion leaves the release as a draft.
+
+**macOS:**
 
 - `codesign --verify --deep --strict` on the `.app` and the `.dmg`
 - the hardened runtime flag is present (notarization requires it)
@@ -153,7 +227,61 @@ so the workflow submits the `.dmg` to `notarytool` and staples it separately.
 Without that, mounting a quarantined disk image forces Gatekeeper into an online
 check that fails outright when the user is offline.
 
+**Windows** — the job runs the installer the way a user would:
+
+- silent install (`/S`) exits cleanly
+- an Add/Remove Programs entry named `Tile` exists, carries an
+  `InstallLocation` that exists on disk, and its `DisplayVersion` matches the
+  tag
+- launching `tile.exe` leaves it running after 15 seconds — Tile is tray-only
+  and never exits on its own, so an early exit means a broken bundle or a
+  missing WebView2 runtime
+- silent uninstall exits cleanly
+
+Two further assertions run **only when Windows signing is configured**, since
+there is nothing to assert otherwise:
+
+- the installer's Authenticode signature is `Valid` and timestamped
+- the installed `tile.exe` is itself signed — catching the case where the
+  installer was signed but the binary inside it was not
+
+**Both** — every uploaded artifact gets a
+[build provenance attestation](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations),
+which anyone can check:
+
+```sh
+gh attestation verify Tile_0.2.0_x64-setup.exe --repo filipmares/tile
+```
+
+### Verifying the download by hand
+
+Worth doing at least once per platform, on a machine that has never run Tile.
+
+macOS:
+
+```sh
+# Simulate a downloaded file — this is the attribute Gatekeeper reacts to.
+xattr -w com.apple.quarantine "0081;00000000;Safari;" Tile_0.2.0_universal.dmg
+open Tile_0.2.0_universal.dmg
+```
+
+It should mount and the app should launch with no security dialog beyond the
+standard "downloaded from the internet" confirmation and the Accessibility
+permission prompt.
+
+Windows:
+
+```powershell
+Get-AuthenticodeSignature .\Tile_0.2.0_x64-setup.exe | Format-List Status, SignerCertificate
+```
+
+Then run the installer from Explorer and confirm the publisher name in the
+SmartScreen dialog is the identity from your certificate profile, not "Unknown
+publisher".
+
 ## Troubleshooting
+
+### macOS
 
 **`failed to import keychain certificate`** — `APPLE_CERTIFICATE` is not valid
 base64 of a `.p12`, or `APPLE_CERTIFICATE_PASSWORD` is wrong. Re-export and
@@ -184,3 +312,29 @@ grant to the code signature. Consistent signing across releases keeps it stable;
 moving from unsigned to signed builds invalidates it once, and the user has to
 remove and re-add Tile under **System Settings ▸ Privacy & Security ▸
 Accessibility**.
+
+### Windows
+
+**A 403 or "certificate profile not found" from the signing CLI** — the service
+principal is missing the *Certificate Profile Signer* role, or it was assigned at
+the wrong scope. It must be granted on the certificate profile itself, not only
+on the resource group.
+
+**`AADSTS7000215: Invalid client secret provided`** — `AZURE_CLIENT_SECRET` holds
+the secret's *ID* rather than its *value*, or the secret has expired. The value is
+shown only once, immediately after creation.
+
+**The installer is signed but `tile.exe` inside it is not** — the build ran
+without the generated `tauri.signing.conf.json` overlay, so Tauri never invoked
+`signCommand`. Check that all six Azure secrets are present; the workflow skips
+the whole signing path if any is missing.
+
+**The launch smoke test fails with an immediate exit** — most often a WebView2
+problem. The installer uses `downloadBootstrapper`, so the runtime is fetched at
+install time; a machine without outbound access to Microsoft's CDN installs Tile
+successfully and then fails to start it.
+
+**SmartScreen still warns on a signed build** — expected for a new certificate.
+Reputation accrues with download volume. It cannot be bought, only waited out; an
+EV certificate is the only way to skip the wait, and Azure Artifact Signing does
+not issue those.

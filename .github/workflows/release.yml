@@ -11,9 +11,13 @@ on:
         required: true
         type: string
 
-# Needed so the workflow can create the GitHub Release and upload assets.
 permissions:
+  # contents: write   — create the GitHub Release and upload assets.
+  # id-token: write   — mint the OIDC token that build provenance is signed with.
+  # attestations: write — record the provenance attestation against the repo.
   contents: write
+  id-token: write
+  attestations: write
 
 concurrency:
   group: release-${{ inputs.tag || github.ref_name }}
@@ -26,6 +30,9 @@ jobs:
   # what allows the macOS job to notarize and staple the .dmg *before* it is
   # attached to the release; tauri-action uploads as part of the build step and
   # leaves no window in between.
+  #
+  # It stays a draft until the `publish` job flips it, so a failing platform job
+  # can never leave a half-populated release visible to users.
   # ---------------------------------------------------------------------------
   create-release:
     name: Create draft release
@@ -33,7 +40,9 @@ jobs:
     timeout-minutes: 10
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
       macos-signed: ${{ steps.meta.outputs.macos_signed }}
+      windows-signed: ${{ steps.meta.outputs.windows_signed }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -52,6 +61,12 @@ jobs:
           HAS_APPLE_ID: ${{ secrets.APPLE_ID != '' }}
           HAS_APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD != '' }}
           HAS_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID != '' }}
+          HAS_AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID != '' }}
+          HAS_AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET != '' }}
+          HAS_AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID != '' }}
+          HAS_AZURE_ENDPOINT: ${{ secrets.AZURE_ARTIFACT_SIGNING_ENDPOINT != '' }}
+          HAS_AZURE_ACCOUNT: ${{ secrets.AZURE_ARTIFACT_SIGNING_ACCOUNT != '' }}
+          HAS_AZURE_PROFILE: ${{ secrets.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE != '' }}
         run: |
           set -euo pipefail
           tag="${{ inputs.tag || github.ref_name }}"
@@ -60,7 +75,7 @@ jobs:
           # A mismatch here ships installers whose in-app version disagrees with
           # the release they hang off, which is impossible to diagnose from a bug
           # report. Fail before anything is published. The version lives in three
-          # places and all of them must agree.
+          # places and all of them must agree; `bump.yml` edits them together.
           conf_version="$(jq -r .version apps/tile/tauri.conf.json)"
           cargo_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
           npm_version="$(jq -r .version apps/tile/ui/package.json)"
@@ -73,10 +88,19 @@ jobs:
             fi
           done
 
-          # Signing and notarization are only claimed when *every* secret they
-          # need is present. Deriving this from a subset lets the release notes
-          # promise a notarized build that the bundler then declines to
-          # notarize, which is worse than saying nothing.
+          # A semver pre-release (v0.2.0-rc.1) is published but never marked
+          # `latest`, so the download links on the repo front page keep pointing
+          # at the last stable build.
+          if [[ "$tag" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Signing is only claimed when *every* secret it needs is present.
+          # Deriving this from a subset lets the release notes promise a signed
+          # build that the bundler then declines to sign, which is worse than
+          # saying nothing.
           macos_signed=true
           for flag in "$HAS_APPLE_CERTIFICATE" "$HAS_APPLE_CERTIFICATE_PASSWORD" \
                       "$HAS_APPLE_ID" "$HAS_APPLE_PASSWORD" "$HAS_APPLE_TEAM_ID"; do
@@ -86,11 +110,21 @@ jobs:
           done
           echo "macos_signed=$macos_signed" >> "$GITHUB_OUTPUT"
 
+          windows_signed=true
+          for flag in "$HAS_AZURE_CLIENT_ID" "$HAS_AZURE_CLIENT_SECRET" "$HAS_AZURE_TENANT_ID" \
+                      "$HAS_AZURE_ENDPOINT" "$HAS_AZURE_ACCOUNT" "$HAS_AZURE_PROFILE"; do
+            if [ "$flag" != "true" ]; then
+              windows_signed=false
+            fi
+          done
+          echo "windows_signed=$windows_signed" >> "$GITHUB_OUTPUT"
+
       - name: Compose release notes
         shell: bash
         env:
           TAG: ${{ steps.meta.outputs.tag }}
           MACOS_SIGNED: ${{ steps.meta.outputs.macos_signed }}
+          WINDOWS_SIGNED: ${{ steps.meta.outputs.windows_signed }}
         run: |
           set -euo pipefail
           {
@@ -116,10 +150,28 @@ jobs:
             echo "On first launch macOS asks for the **Accessibility** permission — Tile needs it"
             echo "to move and resize other applications' windows."
             echo
-            echo "**Windows** — download the NSIS setup \`.exe\` or the \`.msi\`. SmartScreen may"
-            echo "warn you; choose **More info ▸ Run anyway**."
+            echo "**Windows** — download \`Tile_*_x64-setup.exe\` and run it. It installs for the"
+            echo "current user only, so no administrator prompt appears, and it fetches the"
+            echo "WebView2 runtime automatically if the machine does not already have it."
+            echo "Tile lives in the system tray."
+            echo
+            if [ "$WINDOWS_SIGNED" = "true" ]; then
+              echo "The Windows installer is Authenticode-signed. SmartScreen may still warn"
+              echo "until the certificate builds reputation — choose **More info ▸ Run anyway**."
+            else
+              echo "> [!WARNING]"
+              echo "> This Windows build is **not signed**, so SmartScreen will warn that the"
+              echo "> publisher is unknown. Choose **More info ▸ Run anyway** to continue."
+            fi
             echo
             echo "---"
+            echo
+            echo "Every installer carries a [build provenance attestation](https://github.com/${{ github.repository }}/attestations)."
+            echo "Verify one with:"
+            echo
+            echo "\`\`\`sh"
+            echo "gh attestation verify <file> --repo ${{ github.repository }}"
+            echo "\`\`\`"
             echo
             echo "**Full changelog**: https://github.com/${{ github.repository }}/commits/$TAG"
           } > release-notes.md
@@ -157,11 +209,14 @@ jobs:
           # both Apple Silicon and Intel Macs — Rectangle users are on both.
           - os: macos-latest
             rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
-            args: --target universal-apple-darwin
-          # Windows produces an NSIS setup .exe and a WiX .msi.
+            args: --target universal-apple-darwin --bundles dmg
+          # Windows ships the NSIS setup .exe only. The WiX .msi is deliberately
+          # not built: it can only install per-machine, so it always raises a UAC
+          # prompt, and offering two installers side by side makes users choose
+          # without any basis for choosing.
           - os: windows-latest
             rust-targets: ''
-            args: ''
+            args: --bundles nsis
     steps:
       - uses: actions/checkout@v7
         with:
@@ -197,7 +252,8 @@ jobs:
       # APPLE_PASSWORD set but no APPLE_TEAM_ID, the Tauri v2 bundler hard-errors
       # rather than skipping notarization, so a partial configuration is
       # rejected here with a comprehensible message instead.
-      - name: Configure code signing (only when secrets are present)
+      - name: Configure macOS code signing (only when secrets are present)
+        if: matrix.os == 'macos-latest'
         shell: bash
         env:
           IN_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -238,6 +294,40 @@ jobs:
             exit 1
           fi
 
+      # Azure Artifact Signing (formerly Trusted Signing) signs both the app
+      # binary and the installer, which is why it is wired through Tauri's
+      # `signCommand` rather than applied to the finished .exe afterwards:
+      # signing only the installer leaves the tile.exe inside it unsigned, so
+      # SmartScreen and the Defender publisher name go wrong on first launch.
+      #
+      # `signCommand` lives in a generated config overlay instead of
+      # tauri.conf.json because a committed signCommand would make every local
+      # `tauri build` — and every unsigned CI build — fail on a missing tool.
+      - name: Configure Windows code signing (only when secrets are present)
+        id: windows-signing
+        if: matrix.os == 'windows-latest' && needs.create-release.outputs.windows-signed == 'true'
+        shell: bash
+        env:
+          AZURE_ARTIFACT_SIGNING_ENDPOINT: ${{ secrets.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          AZURE_ARTIFACT_SIGNING_ACCOUNT: ${{ secrets.AZURE_ARTIFACT_SIGNING_ACCOUNT }}
+          AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE }}
+        run: |
+          set -euo pipefail
+          # Pinned rather than floating: this tool holds the keys to what the
+          # signature says, so an upstream release should be an explicit change
+          # here, not something that arrives silently on the next tag.
+          cargo install artifact-signing-cli --version 0.11.0 --locked
+
+          # -d sets the description shown in the UAC and SmartScreen prompts;
+          # without it Windows displays a random string.
+          jq -n \
+            --arg cmd "artifact-signing-cli -e $AZURE_ARTIFACT_SIGNING_ENDPOINT -a $AZURE_ARTIFACT_SIGNING_ACCOUNT -c $AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE -d Tile %1" \
+            '{bundle: {windows: {signCommand: $cmd}}}' \
+            > apps/tile/tauri.signing.conf.json
+          cat apps/tile/tauri.signing.conf.json
+
+          echo "config-arg=--config tauri.signing.conf.json" >> "$GITHUB_OUTPUT"
+
       # tauri-action is given no tagName, releaseName or releaseId, so it only
       # builds and reports artifactPaths. Uploading happens at the end of the
       # job, once the macOS artifacts have been notarized and stapled.
@@ -246,9 +336,18 @@ jobs:
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # artifact-signing-cli reads these. They are always *defined* here —
+          # a missing secret expands to an empty string, and a partial set could
+          # even leave them non-empty while signing is off — so their presence
+          # does not decide anything. What decides it is whether the configure
+          # step ran and added a signCommand: with no signCommand, the bundler
+          # never invokes the tool and never reads these at all.
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         with:
           projectPath: apps/tile
-          args: ${{ matrix.args }}
+          args: ${{ matrix.args }} ${{ steps.windows-signing.outputs.config-arg }}
 
       # The Tauri bundler notarizes and staples the .app, then packages it into
       # a signed .dmg — but the .dmg itself is never submitted to Apple. An
@@ -311,6 +410,156 @@ jobs:
           spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg"
           xcrun stapler validate "$dmg"
 
+      # The release publishes itself once the platform jobs are green, so this
+      # is the last opportunity to catch an installer that builds but does not
+      # work. It exercises the exact path a user takes: run the setup, launch
+      # the app, then remove it again.
+      - name: Verify the Windows installer
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        env:
+          ARTIFACTS: ${{ steps.build.outputs.artifactPaths }}
+          TAG: ${{ needs.create-release.outputs.tag }}
+          WINDOWS_SIGNED: ${{ needs.create-release.outputs.windows-signed }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $setup = ($env:ARTIFACTS | ConvertFrom-Json) |
+            Where-Object { $_ -like '*-setup.exe' } | Select-Object -First 1
+          if (-not $setup) {
+            throw "No NSIS setup .exe found in build artifacts: $env:ARTIFACTS"
+          }
+          $version = $env:TAG.TrimStart('v')
+          Write-Host "=== installer: $setup ==="
+
+          # Authenticode first: an unsigned installer must never reach the
+          # release once signing is supposed to be on.
+          $signature = Get-AuthenticodeSignature -FilePath $setup
+          Write-Host "Signature status: $($signature.Status)"
+          if ($env:WINDOWS_SIGNED -eq 'true') {
+            if ($signature.Status -ne 'Valid') {
+              throw "Installer signature is $($signature.Status), expected Valid: $($signature.StatusMessage)"
+            }
+            Write-Host "Signed by: $($signature.SignerCertificate.Subject)"
+            if (-not $signature.TimeStamperCertificate) {
+              throw "Installer is signed but not timestamped; the signature will expire with the certificate."
+            }
+          }
+
+          # /S is the NSIS silent switch. A per-user install needs no elevation,
+          # which is precisely why it can be exercised on a CI runner at all.
+          Write-Host "=== silent install ==="
+          $install = Start-Process -FilePath $setup -ArgumentList '/S' -Wait -PassThru
+          if ($install.ExitCode -ne 0) {
+            throw "Installer exited with code $($install.ExitCode)"
+          }
+
+          # The Add/Remove Programs entry is the installer's contract with
+          # Windows: it is how users uninstall Tile and how package managers
+          # detect it. Read the install location from there rather than guessing
+          # a path, so a change to the NSIS layout surfaces here.
+          $arp = Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' |
+            ForEach-Object { Get-ItemProperty $_.PSPath } |
+            Where-Object { $_.DisplayName -eq 'Tile' } | Select-Object -First 1
+          if (-not $arp) {
+            throw "No 'Tile' entry under HKCU Uninstall after installing; the installer did not register itself."
+          }
+
+          # NSIS writes InstallLocation with literal quotes around it, so the
+          # raw value is not a usable path — Join-Path would produce
+          # `"C:\...\Tile"\tile.exe`. Strip them and any trailing separator.
+          # The key is not guaranteed to exist at all, and calling .Trim() on a
+          # missing one yields "you cannot call a method on a null-valued
+          # expression", which says nothing about which registry value is
+          # absent.
+          if (-not $arp.InstallLocation) {
+            throw "The 'Tile' Add/Remove Programs entry has no InstallLocation value; the installer did not record where it installed."
+          }
+          $installLocation = $arp.InstallLocation.Trim('"').TrimEnd('\')
+          if (-not (Test-Path -PathType Container $installLocation)) {
+            throw "InstallLocation '$installLocation' does not exist as a directory."
+          }
+          Write-Host "Install location: $installLocation"
+          Write-Host "Display version:  $($arp.DisplayVersion)"
+          if ($arp.DisplayVersion -ne $version) {
+            throw "Installed version $($arp.DisplayVersion) does not match tag $env:TAG"
+          }
+
+          $exe = Join-Path $installLocation 'tile.exe'
+          if (-not (Test-Path $exe)) {
+            throw "tile.exe not found at $exe"
+          }
+          if ($env:WINDOWS_SIGNED -eq 'true') {
+            $exeSignature = Get-AuthenticodeSignature -FilePath $exe
+            if ($exeSignature.Status -ne 'Valid') {
+              throw "Installed tile.exe signature is $($exeSignature.Status), expected Valid. Only the installer was signed."
+            }
+          }
+
+          # Tile is tray-only and never exits on its own, so "still running
+          # after a grace period" is the success condition. A missing WebView2
+          # runtime or a broken bundle shows up as an immediate exit.
+          Write-Host "=== launch smoke test ==="
+          $app = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 15
+          if ($app.HasExited) {
+            throw "tile.exe exited with code $($app.ExitCode) within 15s of launching."
+          }
+          Write-Host "Still running after 15s (pid $($app.Id))."
+          Stop-Process -Id $app.Id -Force
+          Start-Sleep -Seconds 2
+
+          Write-Host "=== silent uninstall ==="
+          $uninstaller = Join-Path $installLocation 'uninstall.exe'
+          if (-not (Test-Path $uninstaller)) {
+            throw "Uninstaller not found at $uninstaller"
+          }
+          $uninstall = Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) {
+            throw "Uninstaller exited with code $($uninstall.ExitCode)"
+          }
+          Write-Host "Installer verified."
+
+      # Provenance ties each artifact to this workflow, this commit and this
+      # runner, so a user can prove a download was not built somewhere else:
+      #   gh attestation verify <file> --repo <owner>/<repo>
+      - name: Collect artifact paths
+        id: artifacts
+        shell: bash
+        env:
+          ARTIFACTS: ${{ steps.build.outputs.artifactPaths }}
+        run: |
+          set -euo pipefail
+          # The same two hazards the upload step below guards against, for the
+          # same reasons: jq on the Windows runner is a native build that writes
+          # CRLF, so each path arrives with a \r welded to it, and tauri-action
+          # can report directory bundles that are not attestable subjects. A CR
+          # here would be silently baked into the attested subject name.
+          paths=()
+          while IFS= read -r path; do
+            path="${path%$'\r'}"
+            if [ -z "$path" ] || [ -d "$path" ]; then
+              continue
+            fi
+            paths+=("$path")
+          done < <(echo "$ARTIFACTS" | jq -r '.[]')
+
+          if [ ${#paths[@]} -eq 0 ]; then
+            echo "::error::No files to attest in: $ARTIFACTS"
+            exit 1
+          fi
+          printf 'Attesting: %s\n' "${paths[@]}"
+          {
+            echo 'paths<<ARTIFACT_PATHS_EOF'
+            printf '%s\n' "${paths[@]}"
+            echo 'ARTIFACT_PATHS_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: ${{ steps.artifacts.outputs.paths }}
+
       - name: Upload artifacts to the draft release
         shell: bash
         env:
@@ -348,3 +597,37 @@ jobs:
           fi
           printf 'Uploading: %s\n' "${paths[@]}"
           gh release upload "$TAG" "${paths[@]}" --clobber
+
+  # ---------------------------------------------------------------------------
+  # Publishing is a separate job so it can depend on *every* platform build.
+  # `needs` alone is not enough: a job whose dependency failed is skipped, but
+  # `fail-fast: false` means one platform can fail while another succeeds, and a
+  # skipped job would leave the draft sitting there silently. Requiring
+  # `success()` makes the intent explicit — a release is published only when
+  # every platform produced a verified artifact.
+  # ---------------------------------------------------------------------------
+  publish:
+    name: Publish release
+    needs: [create-release, build]
+    if: success()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Publish the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.create-release.outputs.tag }}
+          PRERELEASE: ${{ needs.create-release.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          if [ "$PRERELEASE" = "true" ]; then
+            # `--latest=false` is explicit rather than implied: it keeps the
+            # repo's download links pointing at the last stable build.
+            gh release edit "$TAG" --draft=false --prerelease --latest=false
+            echo "Published $TAG as a pre-release."
+          else
+            gh release edit "$TAG" --draft=false --prerelease=false --latest
+            echo "Published $TAG as the latest release."
+          fi
+          gh release view "$TAG"
