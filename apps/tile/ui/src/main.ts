@@ -100,7 +100,9 @@ function renderBindings(): void {
     dom.assignedBindings.append(empty);
   } else {
     for (const action of assignedActions) {
-      dom.assignedBindings.append(renderBinding(cfg, conflicts, action.id, action.label));
+      dom.assignedBindings.append(
+        renderBinding(cfg, conflicts, action.id, action.label, "assigned"),
+      );
     }
   }
 
@@ -145,7 +147,7 @@ function renderBindings(): void {
     list.className = "binding-group__list";
 
     for (const { id, label } of actions) {
-      list.append(renderBinding(cfg, conflicts, id, label));
+      list.append(renderBinding(cfg, conflicts, id, label, "all"));
     }
 
     disclosure.append(list);
@@ -159,6 +161,7 @@ function renderBinding(
   conflicts: Set<WindowAction>,
   id: WindowAction,
   label: string,
+  scope: "assigned" | "all",
 ): HTMLLIElement {
   const hk = cfg.bindings[id] ?? null;
 
@@ -168,7 +171,7 @@ function renderBinding(
   const name = document.createElement("span");
   name.className = "binding__label";
   name.textContent = label;
-  name.id = `label-${id}`;
+  name.id = `label-${scope}-${id}`;
 
   const controls = document.createElement("div");
   controls.className = "binding__controls";
@@ -176,8 +179,8 @@ function renderBinding(
   const record = document.createElement("button");
   record.type = "button";
   record.className = "binding__key";
-  record.setAttribute("aria-labelledby", `label-${id} key-${id}`);
-  record.id = `key-${id}`;
+  record.setAttribute("aria-labelledby", `label-${scope}-${id} key-${scope}-${id}`);
+  record.id = `key-${scope}-${id}`;
   if (recording === id) {
     record.classList.add("binding__key--recording");
     record.textContent = "Press keys…";
