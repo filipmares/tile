@@ -2,9 +2,9 @@
 
 **Keyboard-driven window management for Windows and macOS.**
 
-Tile is a cross-platform window manager built from scratch in Rust. Snap the
-focused window to halves and thirds of the screen, maximize it, or undo the last
-move — all from the arrow keys.
+Tile is a cross-platform window management app built from scratch in Rust. Snap
+the focused window to halves and thirds of the screen, maximize it, or undo the
+last move — all from the arrow keys.
 
 > **Status: early days.** Tile implements 52 window actions — halves, thirds,
 > two-thirds, fourths, corner thirds, sixths, ninths, corners, maximize,
