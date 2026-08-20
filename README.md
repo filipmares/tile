@@ -2,17 +2,16 @@
 
 **Keyboard-driven window management for Windows and macOS.**
 
-Tile is a cross-platform reimagining of the excellent
-[Rectangle](https://github.com/rxhanson/Rectangle) — the macOS window-snapping
-app — built from scratch in Rust so the same window-tiling ergonomics work on
-both macOS **and** Windows. Snap the focused window to halves and thirds of the
-screen, maximize it, or undo the last move — all from the arrow keys.
+Tile is a cross-platform window management app built from scratch in Rust. Snap
+the focused window to halves and thirds of the screen, maximize it, or undo the
+last move — all from the arrow keys.
 
-> **Status: early days.** Tile implements 52 window actions — halves, thirds,
+> **Status: early days.** Tile implements 76 window actions — halves, thirds,
 > two-thirds, fourths, corner thirds, sixths, ninths, corners, maximize,
-> maximize-height, almost-maximize, center and restore — but only four ship
-> bound to keys, with a settings UI and a tray/menu-bar icon for the rest.
-> Multi-monitor throws, per-app rules and drag-snapping are not built yet. This
+> maximize-height, almost-maximize, center, restore, display throws, and
+> incremental move, resize and halve/double — but only six ship bound to keys,
+> with a settings UI and a tray/menu-bar icon for the rest. Per-app rules and
+> drag-snapping are not built yet. This
 > README documents only what actually works today.
 
 ## Default keyboard shortcuts
@@ -21,20 +20,20 @@ Every shortcut is the same on both platforms. Only the modifier you hold
 differs:
 
 - **macOS** — `Control` + `Option`
-- **Windows** — `Win` + `Alt`
+- **Windows** — `Win`
 
 Hold that, then press:
 
-| Key | Action |
-| --- | ------ |
-| `←` `→` | **Left / right** — half, then two thirds, then a third (see below) |
-| `↑` | Maximize |
-| `↓` | Restore to the window's previous position |
+| Key             | Action                                                             |
+| --------------- | ------------------------------------------------------------------ |
+| `←` `→`         | **Left / right** — half, then two thirds, then a third (see below) |
+| `↑`             | Maximize                                                           |
+| `↓`             | Restore to the window's previous position                          |
+| `Shift`+`←` `→` | **Previous / next display** — same slot, adjacent monitor          |
 
-That is the whole default set — **four arrows and nothing else.** No letters, no
-`Return`, no `Backspace`, and never a second modifier. The arrows sit under your
-right hand while the modifier is held with your left, which matters on a MacBook
-because there is no right `Control` key.
+That is the whole default set — **four arrows, plus Shift to change display.**
+The same layout works on both platforms, with the modifier held in the left
+hand and the arrows in the right.
 
 The horizontal pair places the window and carries every size, because repeating
 an arrow cycles its width:
@@ -44,97 +43,77 @@ an arrow cycles its width:
   →   ½ → ⅔ → ⅓ → …   anchored right
 ```
 
-The vertical pair is the "bigger / undo" axis: `↑` maximizes, `↓` puts the
-window back where it was.
+The vertical pair is the bigger/undo axis: `↑` maximizes and `↓` restores the
+window.
 
 Everything is rebindable, and the rest of the catalogue — the centered column,
 the explicitly-sized thirds and two-thirds, the corners, center, maximize-height,
-almost-maximize, plus fourths, sixths, ninths, corner thirds and the top/bottom
-halves — ships unbound, reachable from the tray menu or a binding of your own.
+almost-maximize, plus fourths, sixths, ninths, corner thirds, the top/bottom
+halves, the incremental move/resize/halve-double families and the
+named-display moves — ships unbound, reachable from the tray menu or a binding
+of your own.
 
 ### Press it again to change the size
 
-Pressing the same shortcut twice does not do nothing. The horizontal arrows and
-the four corners **cycle through sizes**: `←` puts the window in the left half,
-again makes it two thirds wide, again a third, and again back to a half. Corners
-cycle their width the same way, keeping their half height.
+Pressing the same shortcut again changes the size. The horizontal arrows and
+four corners **cycle through sizes**: half, two thirds, third, then back to
+half. Corners cycle their width while keeping their half height.
 
-The sizes are configurable in Settings ▸ Behaviour — ½, ⅔, ¾, ¼ and ⅓, of
-which a half, two thirds and a third are on by default, matching Rectangle. Turn
-on ¼ for a four-step cycle. The same section switches the behaviour off entirely
-if you would rather a repeat did nothing — though with the sizes unbound by
-default, that leaves the arrows at halves only.
+The sizes are configurable in Settings ▸ Behaviour — ½, ⅔, ¾, ¼ and ⅓. A half,
+two thirds and a third are enabled by default; enable ¼ for a four-step cycle,
+or turn cycling off so repeats do nothing.
 
 The cycle restarts whenever you run a different action, switch to another
 window, or move the window yourself, and `↓` always restores the window
 to where it was **before** Tile first touched it, however long you cycled for.
 
-### Windows: why not `Win`+Arrow?
+### Reaching a display by name
 
-Because leaving it alone means **Aero Snap keeps working**. Users who want the
-native snapping still have it, and Tile's richer actions live entirely in their
-own namespace.
+`Shift`+`←`/`→` steps to the adjacent display and wraps around the ends. When
+you would rather name the monitor outright, **First** through **Fourth
+Display** are also available, unbound by default.
 
-Worth knowing: no two-modifier arrow combination is unclaimed on Windows.
-`Win`+Arrow is Aero Snap, `Win`+`Alt`+Arrow is Windows 11's snap variants,
-`Win`+`Shift`+Arrow moves between monitors, and `Win`+`Ctrl`+`←`/`→` switches
-virtual desktop. Tile preempts *something* whichever it picks. `Win`+`Alt` is
-the least-used of them, and Tile's keyboard hook takes it cleanly because the
-owner registers through `RegisterHotKey`, which the hook runs ahead of.
+They count in the same geometric order as the arrows — left to right by
+position, then top to bottom — so "second display" means the same monitor every
+time, whatever order Windows or macOS happened to enumerate them in, and
+whatever the window is doing now. Naming a display that is not plugged in does
+nothing.
 
-### Windows: why not `Ctrl`+`Alt` to match macOS exactly?
+Both kinds of throw keep the window's slot where they can: a left third stays a
+left third on arrival. A window that is not in a recognisable slot keeps its
+**relative** place instead, so something filling the right half of a 4K panel
+fills the right half of a 1080p one rather than hanging off its edge. That holds
+across mixed-DPI desks, because the placement is computed as fractions of each
+display's own work area rather than by scaling pixels.
 
-Because **Windows treats `Ctrl`+`Alt` as `AltGr`**. On many international
-layouts `AltGr`+key is how you type `@ € { } [ ] \ ~`, and Tile's hook swallows
-the keystrokes it matches — so `Ctrl`+`Alt` defaults would make those characters
-impossible to type. On a German layout you could no longer type `@`.
+### Nudging, resizing, halving and doubling
 
-### Keys Xbox Game Bar reserves
+Also available, all unbound by default:
 
-Game Bar owns eight shortcuts, and **Tile cannot win any of them.**
-`Win`+`Alt`+`G` is the clearest case: Game Bar's own hotkey is `Win`+`G` and its
-handler matches *loosely*, ignoring the extra `Alt`, so the overlay appears even
-with Tile shut down. The rest are handled by GameDVR through an input path that
-never reaches the keyboard hook.
+| Family | Actions |
+| ------ | ------- |
+| **Move** | Slide the window one step left, right, up or down, stopping flush against the screen edge |
+| **Resize** | Larger / smaller, or just the width or just the height |
+| **Halve & Double** | Halve or double the width or height, keeping the named edge |
 
-Users cannot disable them either — Game Bar's settings panel only *adds*
-shortcuts, leaving the built-in ones active.
+Resizing anchors to whichever screen edge the window is already flush against,
+so a window in the right half grows leftwards instead of being pushed off the
+screen; a floating window resizes around its centre. Nothing can be nudged off
+the screen, and nothing shrinks below a quarter of the work area.
 
-The authoritative list is the `VK*` values under
-`HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR`:
+The step sizes (`sizeStep`, `widthStep` and `moveStep`, each defaulting to 30)
+and the floor (`minimumWindowWidth`, `minimumWindowHeight`, defaulting to 0.25)
+live in `config.json`; there is no settings UI for them yet.
 
-| Game Bar action | Shortcut |
-| --------------- | -------- |
-| Open Game Bar | `Win` + `G` |
-| Record last 30 seconds | `Win` + `Alt` + `G` |
-| Start/stop recording | `Win` + `Alt` + `R` |
-| Microphone on/off | `Win` + `Alt` + `M` |
-| Start/stop broadcast | `Win` + `Alt` + `B` |
-| Camera on/off in broadcast | `Win` + `Alt` + `W` |
-| Show/hide recording timer | `Win` + `Alt` + `T` |
-| Take a screenshot | `Win` + `Alt` + `PrtScn` |
+### Windows shortcut notes
 
-So `G`, `R`, `M`, `B`, `W` and `T` are unusable as defaults, and a test enforces
-that the defaults stay clear of all six. This used to shape the whole layout —
-it is why the letter block sat at `Q`/`A`, and why **center two thirds shipped
-unbound**, since the key directly above `S` is `W`. The arrow-only defaults
-retire the problem completely: no default sits on a letter, so none of the
-reserved keys can collide.
+Tile's keyboard hook replaces Aero Snap for the bound `Win`+Arrow shortcuts.
+`Win`+`Shift`+Arrow replaces Windows' move-between-monitors shortcut, while
+`Win`+`Ctrl`+`←`/`→` remains available for virtual desktops.
 
-### Why not Rectangle's letters
-
-Rectangle puts the thirds on `D`/`F`/`G` with `E`/`R`/`T` above, and Tile
-shipped that briefly. Four of those six keys are reserved by Game Bar, so it
-moved one column left to `Q`/`A` — the mnemonic is positional rather than
-alphabetic, so sliding it kept the geometry.
-
-That block is now retired altogether. Holding `Control`+`Option` on a MacBook is
-a left-hand job, because there is no right `Control` key, so left-hand letters
-meant one hand doing both. Cycling the arrows reaches the same sizes with the
-hands split, and the explicitly-sized actions remain in the catalogue for anyone
-who prefers one press per size. Tile is its own app rather than a Rectangle
-port, and one consistent set of shortcuts across your machines is worth more
-than compatibility with a different app on one of them.
+Windows treats `Ctrl`+`Alt` as `AltGr` on many international layouts, so Tile
+does not use that modifier by default; doing so could interfere with characters
+such as `@`, `€`, `{` and `}`.
 
 <sub>This table is generated from `crates/tile-core/src/config.rs`
 (`default_bindings`) — the single source of truth for Tile's defaults.</sub>
@@ -145,16 +124,14 @@ than compatibility with a different app on one of them.
 
 On Windows, Tile installs a **low-level keyboard hook** (`WH_KEYBOARD_LL`)
 rather than registering its shortcuts with the OS. That is what lets it claim
-combinations the shell already owns — `Win`+`Alt`+Arrow belongs to Windows 11's
-snap variants, for instance. This means:
+combinations the shell already owns — `Win`+Arrow is Aero Snap, for instance.
+This means:
 
 - Tile's shortcuts take precedence over the OS's for the combinations it binds.
-  `Win`+Arrow is deliberately left alone, so **Aero Snap keeps working**.
+  The default `Win`+Arrow set **replaces Aero Snap**.
 - The hook **cannot see input directed at windows owned by elevated
   (administrator) processes** unless Tile itself is running as administrator. If
   a shortcut seems to do nothing over an elevated app, that's why.
-- Xbox Game Bar is the one exception it cannot beat — see
-  [Keys Xbox Game Bar reserves](#keys-xbox-game-bar-reserves) above.
 - Some corporate security software is suspicious of global keyboard hooks and
   may flag or block them.
 
@@ -194,8 +171,11 @@ page:
   it and drag **Tile** into Applications. Signed and notarized builds open
   without a Gatekeeper workaround; follow the release notes if a build is
   marked unsigned.
-- **Windows:** the `.msi` or the NSIS setup `.exe`. These are **unsigned**, so
-  SmartScreen may warn you — choose **More info ▸ Run anyway**.
+- **Windows:** `Tile_<version>_x64-setup.exe`. It installs for the current user
+  only, so there is no administrator prompt, and it pulls in the WebView2
+  runtime automatically if the machine lacks it. Unsigned builds make
+  SmartScreen warn that the publisher is unknown — choose **More info ▸ Run
+  anyway**.
 
 Tile has no main window: after launching, look for its icon in the menu bar
 (macOS) or the system tray (Windows).
@@ -233,7 +213,8 @@ cd apps/tile
 # Development: hot-reloading settings UI
 ./ui/node_modules/.bin/tauri dev
 
-# Release installers (.msi + .exe on Windows, .dmg on macOS)
+# Release installers. Add `--bundles nsis` on Windows to build only the NSIS
+# setup .exe, which is what releases ship; the default also builds an .msi.
 ./ui/node_modules/.bin/tauri build
 ```
 
@@ -270,7 +251,7 @@ cargo run --example live_hotkey -p tile-platform
 ```
 
 To test the shortcuts end to end, build and start the app, open a window you
-do not mind moving, and press <kbd>Win</kbd>+<kbd>Alt</kbd>+<kbd>←</kbd>. Note
+do not mind moving, and press <kbd>Win</kbd>+<kbd>←</kbd>. Note
 that the keyboard hook cannot see input aimed at windows owned by elevated
 processes unless Tile is itself running as administrator.
 
@@ -317,13 +298,8 @@ the project layout, prerequisites, and the checks CI expects.
 
 ## Acknowledgements
 
-Tile is **inspired by** [Rectangle](https://github.com/rxhanson/Rectangle) by
-Ryan Hanson (MIT-licensed, © Ryan Hanson). Tile is an **independent Rust
-implementation** — no Rectangle source code is used or copied. Its defaults
-started from Rectangle's alternate set but have since diverged: Tile's ship on
-the arrow keys alone, for the reasons above. This acknowledgement is offered as
-attribution and courtesy, not as a licence obligation, and does **not** imply
-that the Rectangle project endorses Tile.
+Tile is inspired by [Rectangle](https://github.com/rxhanson/Rectangle) by Ryan
+Hanson. Tile is an independent Rust implementation.
 
 ## License
 

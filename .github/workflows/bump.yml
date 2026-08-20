@@ -1,0 +1,170 @@
+name: Bump version
+
+# Cutting a release means changing the version in three files that must agree
+# with each other and with the tag, or release.yml refuses to publish. Doing it
+# by hand is a two-minute job that fails silently in one place and is only
+# discovered after the tag has already been pushed — at which point the tag has
+# to be deleted and recreated. This workflow edits all three together and opens
+# a PR, so review happens before the tag exists.
+#
+# Two repository-level facts about the PR this opens, both documented in
+# docs/RELEASING.md: "Allow GitHub Actions to create and approve pull requests"
+# must be enabled for `gh pr create` to succeed, and GitHub raises no workflow
+# events for a PR opened by GITHUB_TOKEN, so CI has to be kicked off by closing
+# and reopening the PR before the required checks can pass.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'New version, without the leading v (e.g. 0.2.0 or 0.2.0-rc.1)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    name: Bump to ${{ inputs.version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Validate the requested version
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          # Anchored semver, without a leading v: Cargo, npm and the Tauri
+          # bundler all reject anything else, but they reject it much later —
+          # after a branch and a PR already exist.
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::'$VERSION' is not a valid semver version. Give it without the leading v, e.g. 0.2.0 or 0.2.0-rc.1."
+            exit 1
+          fi
+
+          current="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
+          if [ "$VERSION" = "$current" ]; then
+            echo "::error::The workspace is already at $VERSION."
+            exit 1
+          fi
+          echo "Bumping $current -> $VERSION"
+
+          # Asked of the remote, not the local clone: actions/checkout fetches
+          # no tags by default, so `git rev-parse refs/tags/...` would report
+          # every tag as absent and this guard would never fire.
+          if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null 2>&1; then
+            echo "::error::Tag v$VERSION already exists."
+            exit 1
+          fi
+
+      - name: Apply the bump
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          # The workspace version is edited in place with a scoped regex rather
+          # than a whole-file replace: `version = "..."` also appears under
+          # [workspace.dependencies] and would be clobbered. `(?m)` plus `\r?$`
+          # keeps this working whichever line endings the checkout has — an
+          # anchored `$` alone silently matches nothing on a CRLF checkout, and
+          # a bump that edits nothing is the failure mode hardest to notice.
+          python3 - "$VERSION" <<'PY'
+          import re, sys
+
+          version = sys.argv[1]
+          path = "Cargo.toml"
+          # newline="" on both ends: text mode would otherwise translate CRLF to
+          # LF on read and write the whole file back changed, turning a one-line
+          # bump into a diff touching every line.
+          source = open(path, encoding="utf-8", newline="").read()
+
+          section = re.search(r"(?ms)^\[workspace\.package\]\r?$.*?(?=^\[|\Z)", source)
+          if not section:
+              sys.exit("::error::No [workspace.package] section in Cargo.toml")
+
+          updated, count = re.subn(
+              r'(?m)^version = "[^"]*"(\r?)$',
+              lambda m: 'version = "%s"%s' % (version, m.group(1)),
+              section.group(0),
+              count=1,
+          )
+          if count != 1:
+              sys.exit("::error::No version key in [workspace.package]")
+
+          open(path, "w", encoding="utf-8", newline="").write(
+              source[: section.start()] + updated + source[section.end() :]
+          )
+          PY
+
+          jq --arg v "$VERSION" '.version = $v' apps/tile/tauri.conf.json > tauri.conf.json.tmp
+          mv tauri.conf.json.tmp apps/tile/tauri.conf.json
+
+          jq --arg v "$VERSION" '.version = $v' apps/tile/ui/package.json > package.json.tmp
+          mv package.json.tmp apps/tile/ui/package.json
+
+          # Cargo.lock records the workspace members' own versions, so it goes
+          # stale on a bump. `--workspace` refreshes only those entries and
+          # leaves third-party dependencies pinned where they are.
+          cargo update --workspace
+
+          # The same three-way check release.yml performs, run here so a
+          # malformed edit fails now instead of at tag time.
+          conf_version="$(jq -r .version apps/tile/tauri.conf.json)"
+          cargo_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
+          npm_version="$(jq -r .version apps/tile/ui/package.json)"
+          for pair in "apps/tile/tauri.conf.json:$conf_version" "Cargo.toml:$cargo_version" "apps/tile/ui/package.json:$npm_version"; do
+            file="${pair%%:*}"
+            found="${pair#*:}"
+            if [ "$found" != "$VERSION" ]; then
+              echo "::error::$file is at $found after the bump, expected $VERSION"
+              exit 1
+            fi
+          done
+
+          git --no-pager diff --stat
+
+      - name: Open the pull request
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          branch="bump-v$VERSION"
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -b "$branch"
+          git add Cargo.toml Cargo.lock apps/tile/tauri.conf.json apps/tile/ui/package.json
+          git commit -m "Bump version to $VERSION"
+          git push --force origin "$branch"
+
+          # A heredoc cannot be used for the body: its terminator has to sit in
+          # column 0, which is impossible inside an indented YAML block scalar.
+          {
+            printf 'Bumps the workspace, Tauri and UI package versions to `%s`.\n\n' "$VERSION"
+            printf 'After merging, cut the release by tagging `main`:\n\n'
+            printf '```sh\n'
+            printf 'git checkout main && git pull\n'
+            printf 'git tag v%s\n' "$VERSION"
+            printf 'git push origin v%s\n' "$VERSION"
+            printf '```\n\n'
+            printf '`release.yml` builds, verifies and publishes from there.\n'
+          } > pr-body.md
+
+          if gh pr view "$branch" --json state --jq .state 2>/dev/null | grep -q OPEN; then
+            gh pr edit "$branch" --title "Bump version to $VERSION" --body-file pr-body.md
+            echo "Updated the existing pull request for $branch."
+          else
+            gh pr create --head "$branch" --title "Bump version to $VERSION" --body-file pr-body.md
+          fi
+

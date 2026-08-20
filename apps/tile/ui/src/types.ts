@@ -7,6 +7,8 @@ export type WindowAction =
   | "right-half"
   | "top-half"
   | "bottom-half"
+  | "previous-display"
+  | "next-display"
   | "top-left"
   | "top-right"
   | "bottom-left"
@@ -53,11 +55,34 @@ export type WindowAction =
   | "maximize-height"
   | "center-half"
   | "center"
-  | "restore";
+  | "restore"
+  | "move-left"
+  | "move-right"
+  | "move-up"
+  | "move-down"
+  | "larger"
+  | "smaller"
+  | "larger-width"
+  | "smaller-width"
+  | "larger-height"
+  | "smaller-height"
+  | "double-width-left"
+  | "double-width-right"
+  | "double-height-up"
+  | "double-height-down"
+  | "halve-width-left"
+  | "halve-width-right"
+  | "halve-height-up"
+  | "halve-height-down"
+  | "first-display"
+  | "second-display"
+  | "third-display"
+  | "fourth-display";
 
 /** Presentation families, mirroring `WindowFamily::ALL` and its labels. */
 export const FAMILIES: { id: string; label: string }[] = [
   { id: "halves", label: "Halves" },
+  { id: "displays", label: "Displays" },
   { id: "corners", label: "Corners" },
   { id: "horizontal-thirds", label: "Horizontal Thirds" },
   { id: "vertical-thirds", label: "Vertical Thirds" },
@@ -66,6 +91,9 @@ export const FAMILIES: { id: string; label: string }[] = [
   { id: "sixths", label: "Sixths" },
   { id: "ninths", label: "Ninths" },
   { id: "sizing", label: "Size & Position" },
+  { id: "move", label: "Move" },
+  { id: "resize", label: "Resize" },
+  { id: "halve-double", label: "Halve & Double" },
 ];
 
 /**
@@ -77,6 +105,12 @@ export const ACTIONS: { id: WindowAction; label: string; family: string }[] = [
   { id: "right-half", label: "Right Half", family: "halves" },
   { id: "top-half", label: "Top Half", family: "halves" },
   { id: "bottom-half", label: "Bottom Half", family: "halves" },
+  { id: "previous-display", label: "Previous Display", family: "displays" },
+  { id: "next-display", label: "Next Display", family: "displays" },
+  { id: "first-display", label: "First Display", family: "displays" },
+  { id: "second-display", label: "Second Display", family: "displays" },
+  { id: "third-display", label: "Third Display", family: "displays" },
+  { id: "fourth-display", label: "Fourth Display", family: "displays" },
   { id: "top-left", label: "Top Left", family: "corners" },
   { id: "top-right", label: "Top Right", family: "corners" },
   { id: "bottom-left", label: "Bottom Left", family: "corners" },
@@ -200,6 +234,53 @@ export const ACTIONS: { id: WindowAction; label: string; family: string }[] = [
   { id: "center-half", label: "Center Half", family: "sizing" },
   { id: "center", label: "Center", family: "sizing" },
   { id: "restore", label: "Restore", family: "sizing" },
+  { id: "move-left", label: "Move Left", family: "move" },
+  { id: "move-right", label: "Move Right", family: "move" },
+  { id: "move-up", label: "Move Up", family: "move" },
+  { id: "move-down", label: "Move Down", family: "move" },
+  { id: "larger", label: "Larger", family: "resize" },
+  { id: "smaller", label: "Smaller", family: "resize" },
+  { id: "larger-width", label: "Larger Width", family: "resize" },
+  { id: "smaller-width", label: "Smaller Width", family: "resize" },
+  { id: "larger-height", label: "Larger Height", family: "resize" },
+  { id: "smaller-height", label: "Smaller Height", family: "resize" },
+  {
+    id: "double-width-left",
+    label: "Double Width Left",
+    family: "halve-double",
+  },
+  {
+    id: "double-width-right",
+    label: "Double Width Right",
+    family: "halve-double",
+  },
+  {
+    id: "double-height-up",
+    label: "Double Height Up",
+    family: "halve-double",
+  },
+  {
+    id: "double-height-down",
+    label: "Double Height Down",
+    family: "halve-double",
+  },
+  {
+    id: "halve-width-left",
+    label: "Halve Width Left",
+    family: "halve-double",
+  },
+  {
+    id: "halve-width-right",
+    label: "Halve Width Right",
+    family: "halve-double",
+  },
+  { id: "halve-height-up", label: "Halve Height Up", family: "halve-double" },
+  {
+    id: "halve-height-down",
+    label: "Halve Height Down",
+    family: "halve-double",
+  },
+
 ];
 
 /** `KeyCode` — serde `rename_all = "kebab-case"`. Mirrors `KeyCode::ALL`. */
@@ -366,6 +447,11 @@ export interface Config {
   showTrayIcon: boolean;
   almostMaximizeWidth: number;
   almostMaximizeHeight: number;
+  sizeStep: number;
+  widthStep: number;
+  moveStep: number;
+  minimumWindowWidth: number;
+  minimumWindowHeight: number;
   subsequentExecutionMode: SubsequentExecutionMode;
   cycleSizes: CycleSize[];
 }
