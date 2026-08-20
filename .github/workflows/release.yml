@@ -322,9 +322,24 @@ jobs:
           # macOS runners still ship bash 3.2, which has no `mapfile`.
           paths=()
           while IFS= read -r path; do
-            if [ -n "$path" ]; then
-              paths+=("$path")
+            # jq on the Windows runner is a native build that writes CRLF, so
+            # `read` strips the \n and leaves a \r welded to the path. gh runs
+            # every argument through filepath.Glob, so that stray byte turns
+            # into an opaque "no matches found for `...msi`" rather than a
+            # missing-file error.
+            path="${path%$'\r'}"
+            if [ -z "$path" ]; then
+              continue
             fi
+            # tauri-action reports the .app bundle next to the .dmg. It is a
+            # directory, which the upload API rejects outright, and the .dmg is
+            # what users actually download. Skipping directories rather than
+            # matching on ".app" keeps this correct for any future bundle type.
+            if [ -d "$path" ]; then
+              echo "Skipping directory artifact: $path"
+              continue
+            fi
+            paths+=("$path")
           done < <(echo "$ARTIFACTS" | jq -r '.[]')
 
           if [ ${#paths[@]} -eq 0 ]; then
