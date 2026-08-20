@@ -7,6 +7,8 @@ export type WindowAction =
   | "right-half"
   | "top-half"
   | "bottom-half"
+  | "previous-display"
+  | "next-display"
   | "top-left"
   | "top-right"
   | "bottom-left"
@@ -58,6 +60,7 @@ export type WindowAction =
 /** Presentation families, mirroring `WindowFamily::ALL` and its labels. */
 export const FAMILIES: { id: string; label: string }[] = [
   { id: "halves", label: "Halves" },
+  { id: "displays", label: "Displays" },
   { id: "corners", label: "Corners" },
   { id: "horizontal-thirds", label: "Horizontal Thirds" },
   { id: "vertical-thirds", label: "Vertical Thirds" },
@@ -77,6 +80,8 @@ export const ACTIONS: { id: WindowAction; label: string; family: string }[] = [
   { id: "right-half", label: "Right Half", family: "halves" },
   { id: "top-half", label: "Top Half", family: "halves" },
   { id: "bottom-half", label: "Bottom Half", family: "halves" },
+  { id: "previous-display", label: "Previous Display", family: "displays" },
+  { id: "next-display", label: "Next Display", family: "displays" },
   { id: "top-left", label: "Top Left", family: "corners" },
   { id: "top-right", label: "Top Right", family: "corners" },
   { id: "bottom-left", label: "Bottom Left", family: "corners" },

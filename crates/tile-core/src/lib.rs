@@ -119,6 +119,10 @@ impl Engine {
     /// has actually moved the window, so a failed move does not corrupt the
     /// restore point.
     pub fn plan(&self, action: WindowAction, window: &WindowSnapshot, screens: &[Screen]) -> Plan {
+        if action.moves_display() {
+            return self.plan_display_move(action, window, screens);
+        }
+
         if action.uses_history() {
             return match self.history.peek(window.id) {
                 Some(target) => Plan::Move {
@@ -179,6 +183,34 @@ impl Engine {
                 target: next,
             },
             None => Plan::NoOp(NoOpReason::AlreadyInPosition),
+        }
+    }
+
+    /// Throws `window` to the adjacent display, keeping its current tile slot
+    /// when the frame matches one, otherwise mapping it proportionally.
+    fn plan_display_move(
+        &self,
+        action: WindowAction,
+        window: &WindowSnapshot,
+        screens: &[Screen],
+    ) -> Plan {
+        let Some(from) = Screen::best_match(screens, &window.frame) else {
+            return Plan::NoOp(NoOpReason::NoScreen);
+        };
+        let Some(dest) = Screen::adjacent(screens, from, action.display_step()) else {
+            return Plan::NoOp(NoOpReason::AlreadyInPosition);
+        };
+        if dest.id == from.id {
+            return Plan::NoOp(NoOpReason::AlreadyInPosition);
+        }
+        let target = remap_slot(&self.config, window.frame, from, dest);
+        if target.approx_eq(&window.frame, POSITION_TOLERANCE) {
+            Plan::NoOp(NoOpReason::AlreadyInPosition)
+        } else {
+            Plan::Move {
+                id: window.id,
+                target,
+            }
         }
     }
 
@@ -260,6 +292,9 @@ impl Engine {
         if action.uses_history() {
             self.history.forget(window.id);
             self.cycle = None;
+        } else if action.moves_display() {
+            self.history.record(window.id, window.frame, target);
+            self.cycle = None;
         } else {
             self.history.record(window.id, window.frame, target);
             self.cycle = if action.cycles() {
@@ -282,6 +317,71 @@ impl Engine {
             .find(|(hk, _)| *hk == hotkey)
             .map(|(_, action)| action)
     }
+}
+
+/// Rebuilds `frame` on `dest`, preferring a recognised tile slot so a left
+/// third stays a left third when the two work areas differ.
+fn remap_slot(config: &Config, frame: Rect, from: &Screen, dest: &Screen) -> Rect {
+    let sizes = config.size_options();
+    for action in WindowAction::ALL {
+        if !action.cycles() {
+            continue;
+        }
+        for size in config.cycle_sizes() {
+            let Some(src) = action.cycle_rect(
+                from.work_area,
+                &config.gaps,
+                from.is_primary,
+                size.fraction(),
+            ) else {
+                continue;
+            };
+            if !src.approx_eq(&frame, POSITION_TOLERANCE) {
+                continue;
+            }
+            if let Some(dst) = action.cycle_rect(
+                dest.work_area,
+                &config.gaps,
+                dest.is_primary,
+                size.fraction(),
+            ) {
+                return dst;
+            }
+        }
+    }
+    for action in WindowAction::ALL {
+        if action.uses_history()
+            || action.moves_display()
+            || matches!(action, WindowAction::Center | WindowAction::MaximizeHeight)
+        {
+            continue;
+        }
+        let Some(src) =
+            action.target_rect(from.work_area, &config.gaps, frame, from.is_primary, sizes)
+        else {
+            continue;
+        };
+        if !src.approx_eq(&frame, POSITION_TOLERANCE) {
+            continue;
+        }
+        if let Some(dst) =
+            action.target_rect(dest.work_area, &config.gaps, frame, dest.is_primary, sizes)
+        {
+            return dst;
+        }
+    }
+    map_proportionally(frame, from.work_area, dest.work_area)
+}
+
+fn map_proportionally(frame: Rect, from: Rect, to: Rect) -> Rect {
+    if from.width <= 0.0 || from.height <= 0.0 {
+        return to;
+    }
+    let x = to.x + (frame.x - from.x) / from.width * to.width;
+    let y = to.y + (frame.y - from.y) / from.height * to.height;
+    let width = (frame.width / from.width * to.width).max(0.0);
+    let height = (frame.height / from.height * to.height).max(0.0);
+    Rect::new(x, y, width, height).rounded()
 }
 
 #[cfg(test)]
@@ -776,6 +876,108 @@ mod tests {
         assert_eq!(
             engine.action_for(Hotkey::new(Modifiers::SHIFT, KeyCode::Escape)),
             None
+        );
+    }
+
+    fn dual_screens() -> [Screen; 2] {
+        [
+            screen(),
+            Screen {
+                id: "secondary".into(),
+                frame: Rect::new(1920.0, 0.0, 1280.0, 800.0),
+                work_area: Rect::new(1920.0, 0.0, 1280.0, 760.0),
+                scale_factor: 1.0,
+                is_primary: false,
+            },
+        ]
+    }
+
+    #[test]
+    fn next_display_preserves_a_left_half_slot() {
+        let engine = Engine::default();
+        let win = WindowSnapshot {
+            id: 1,
+            frame: Rect::new(0.0, 0.0, 960.0, 1040.0),
+        };
+        assert_eq!(
+            engine.plan(WindowAction::NextDisplay, &win, &dual_screens()),
+            Plan::Move {
+                id: 1,
+                target: Rect::new(1920.0, 0.0, 640.0, 760.0)
+            }
+        );
+    }
+
+    #[test]
+    fn next_display_preserves_a_cycled_left_third() {
+        let engine = Engine::default();
+        let win = WindowSnapshot {
+            id: 1,
+            frame: Rect::new(0.0, 0.0, 640.0, 1040.0),
+        };
+        assert_eq!(
+            engine.plan(WindowAction::NextDisplay, &win, &dual_screens()),
+            Plan::Move {
+                id: 1,
+                target: Rect::new(1920.0, 0.0, 427.0, 760.0)
+            }
+        );
+    }
+
+    #[test]
+    fn previous_display_wraps_from_the_leftmost_screen() {
+        let engine = Engine::default();
+        let win = WindowSnapshot {
+            id: 1,
+            frame: Rect::new(0.0, 0.0, 960.0, 1040.0),
+        };
+        assert_eq!(
+            engine.plan(WindowAction::PreviousDisplay, &win, &dual_screens()),
+            Plan::Move {
+                id: 1,
+                target: Rect::new(1920.0, 0.0, 640.0, 760.0)
+            }
+        );
+    }
+
+    #[test]
+    fn display_throw_is_a_no_op_on_a_single_screen() {
+        let engine = Engine::default();
+        assert_eq!(
+            engine.plan(WindowAction::NextDisplay, &window(), &[screen()]),
+            Plan::NoOp(NoOpReason::AlreadyInPosition)
+        );
+    }
+
+    #[test]
+    fn a_floating_window_maps_proportionally_across_displays() {
+        let engine = Engine::default();
+        let win = WindowSnapshot {
+            id: 1,
+            frame: Rect::new(192.0, 104.0, 384.0, 208.0),
+        };
+        let Plan::Move { target, .. } =
+            engine.plan(WindowAction::NextDisplay, &win, &dual_screens())
+        else {
+            panic!("expected a move");
+        };
+        assert_eq!(target, Rect::new(2048.0, 76.0, 256.0, 152.0));
+    }
+
+    #[test]
+    fn display_throw_resets_size_cycle() {
+        let mut engine = Engine::default();
+        let screens = dual_screens();
+        let mut win = apply_on(&mut engine, WindowAction::LeftHalf, window(), &screens);
+        win = apply_on(&mut engine, WindowAction::LeftHalf, win, &screens);
+        assert_eq!(win.frame, Rect::new(0.0, 0.0, 1280.0, 1040.0));
+
+        win = apply_on(&mut engine, WindowAction::NextDisplay, win, &screens);
+        win = apply_on(&mut engine, WindowAction::LeftHalf, win, &screens);
+        assert_eq!(
+            win.frame,
+            Rect::new(1920.0, 0.0, 640.0, 760.0),
+            "Left after a throw must start a fresh cycle, not continue two-thirds"
         );
     }
 }

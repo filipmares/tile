@@ -21,7 +21,7 @@ Every shortcut is the same on both platforms. Only the modifier you hold
 differs:
 
 - **macOS** — `Control` + `Option`
-- **Windows** — `Win` + `Alt`
+- **Windows** — `Win`
 
 Hold that, then press:
 
@@ -30,11 +30,12 @@ Hold that, then press:
 | `←` `→` | **Left / right** — half, then two thirds, then a third (see below) |
 | `↑` | Maximize |
 | `↓` | Restore to the window's previous position |
+| `Shift`+`←` `→` | **Previous / next display** — same slot, adjacent monitor |
 
-That is the whole default set — **four arrows and nothing else.** No letters, no
-`Return`, no `Backspace`, and never a second modifier. The arrows sit under your
-right hand while the modifier is held with your left, which matters on a MacBook
-because there is no right `Control` key.
+That is the whole default set — **four arrows, plus Shift to change display.**
+No letters, no `Return`, no `Backspace`. The arrows sit under your right hand
+while the modifier is held with your left, which matters on a MacBook because
+there is no right `Control` key.
 
 The horizontal pair places the window and carries every size, because repeating
 an arrow cycles its width:
@@ -69,18 +70,17 @@ The cycle restarts whenever you run a different action, switch to another
 window, or move the window yourself, and `↓` always restores the window
 to where it was **before** Tile first touched it, however long you cycled for.
 
-### Windows: why not `Win`+Arrow?
+### Windows: why `Win`+Arrow?
 
-Because leaving it alone means **Aero Snap keeps working**. Users who want the
-native snapping still have it, and Tile's richer actions live entirely in their
-own namespace.
+Because that is Aero Snap — the keys people already use to tile a window. Tile's
+keyboard hook claims them and replaces Aero Snap with Tile's cycle (half → two
+thirds → third) on the same four arrows. `Win`+`Shift`+Arrow is Tile's display throw
+(same slot, next/previous monitor), which **replaces** Windows' own
+move-between-monitors shortcut. `Win`+`Ctrl`+`←`/`→` (virtual desktops) stays
+unbound, so those OS shortcuts keep working.
 
-Worth knowing: no two-modifier arrow combination is unclaimed on Windows.
-`Win`+Arrow is Aero Snap, `Win`+`Alt`+Arrow is Windows 11's snap variants,
-`Win`+`Shift`+Arrow moves between monitors, and `Win`+`Ctrl`+`←`/`→` switches
-virtual desktop. Tile preempts *something* whichever it picks. `Win`+`Alt` is
-the least-used of them, and Tile's keyboard hook takes it cleanly because the
-owner registers through `RegisterHotKey`, which the hook runs ahead of.
+`Win`+`Alt`+Arrow was the previous default. It left Aero Snap alone, but it is
+also Windows 11's snap variants and costs an extra modifier for no extra reach.
 
 ### Windows: why not `Ctrl`+`Alt` to match macOS exactly?
 
@@ -145,11 +145,11 @@ than compatibility with a different app on one of them.
 
 On Windows, Tile installs a **low-level keyboard hook** (`WH_KEYBOARD_LL`)
 rather than registering its shortcuts with the OS. That is what lets it claim
-combinations the shell already owns — `Win`+`Alt`+Arrow belongs to Windows 11's
-snap variants, for instance. This means:
+combinations the shell already owns — `Win`+Arrow is Aero Snap, for instance.
+This means:
 
 - Tile's shortcuts take precedence over the OS's for the combinations it binds.
-  `Win`+Arrow is deliberately left alone, so **Aero Snap keeps working**.
+  The default `Win`+Arrow set **replaces Aero Snap**.
 - The hook **cannot see input directed at windows owned by elevated
   (administrator) processes** unless Tile itself is running as administrator. If
   a shortcut seems to do nothing over an elevated app, that's why.
@@ -270,7 +270,7 @@ cargo run --example live_hotkey -p tile-platform
 ```
 
 To test the shortcuts end to end, build and start the app, open a window you
-do not mind moving, and press <kbd>Win</kbd>+<kbd>Alt</kbd>+<kbd>←</kbd>. Note
+do not mind moving, and press <kbd>Win</kbd>+<kbd>←</kbd>. Note
 that the keyboard hook cannot see input aimed at windows owned by elevated
 processes unless Tile is itself running as administrator.
 

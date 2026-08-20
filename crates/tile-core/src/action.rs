@@ -16,6 +16,7 @@ use crate::geometry::Rect;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum WindowFamily {
     Halves,
+    Displays,
     Corners,
     HorizontalThirds,
     VerticalThirds,
@@ -28,8 +29,9 @@ pub enum WindowFamily {
 
 impl WindowFamily {
     /// Families in the order they should appear in the UI.
-    pub const ALL: [WindowFamily; 9] = [
+    pub const ALL: [WindowFamily; 10] = [
         WindowFamily::Halves,
+        WindowFamily::Displays,
         WindowFamily::Corners,
         WindowFamily::HorizontalThirds,
         WindowFamily::VerticalThirds,
@@ -44,6 +46,7 @@ impl WindowFamily {
     pub const fn label(self) -> &'static str {
         match self {
             WindowFamily::Halves => "Halves",
+            WindowFamily::Displays => "Displays",
             WindowFamily::Corners => "Corners",
             WindowFamily::HorizontalThirds => "Horizontal Thirds",
             WindowFamily::VerticalThirds => "Vertical Thirds",
@@ -77,6 +80,8 @@ pub enum WindowAction {
     RightHalf,
     TopHalf,
     BottomHalf,
+    PreviousDisplay,
+    NextDisplay,
     TopLeft,
     TopRight,
     BottomLeft,
@@ -130,12 +135,15 @@ pub enum WindowAction {
 impl WindowAction {
     /// All actions, grouped by [`WindowFamily`] in the order they appear in
     /// the UI.
-    pub const ALL: [WindowAction; 52] = [
+    pub const ALL: [WindowAction; 54] = [
         // Halves
         WindowAction::LeftHalf,
         WindowAction::RightHalf,
         WindowAction::TopHalf,
         WindowAction::BottomHalf,
+        // Displays
+        WindowAction::PreviousDisplay,
+        WindowAction::NextDisplay,
         // Corners
         WindowAction::TopLeft,
         WindowAction::TopRight,
@@ -204,6 +212,8 @@ impl WindowAction {
             WindowAction::RightHalf => "right-half",
             WindowAction::TopHalf => "top-half",
             WindowAction::BottomHalf => "bottom-half",
+            WindowAction::PreviousDisplay => "previous-display",
+            WindowAction::NextDisplay => "next-display",
             WindowAction::TopLeft => "top-left",
             WindowAction::TopRight => "top-right",
             WindowAction::BottomLeft => "bottom-left",
@@ -262,6 +272,8 @@ impl WindowAction {
             WindowAction::RightHalf => "Right Half",
             WindowAction::TopHalf => "Top Half",
             WindowAction::BottomHalf => "Bottom Half",
+            WindowAction::PreviousDisplay => "Previous Display",
+            WindowAction::NextDisplay => "Next Display",
             WindowAction::TopLeft => "Top Left",
             WindowAction::TopRight => "Top Right",
             WindowAction::BottomLeft => "Bottom Left",
@@ -320,6 +332,7 @@ impl WindowAction {
             | WindowAction::RightHalf
             | WindowAction::TopHalf
             | WindowAction::BottomHalf => WindowFamily::Halves,
+            WindowAction::PreviousDisplay | WindowAction::NextDisplay => WindowFamily::Displays,
             WindowAction::TopLeft
             | WindowAction::TopRight
             | WindowAction::BottomLeft
@@ -375,6 +388,23 @@ impl WindowAction {
     /// geometry, so it has no computable target rectangle.
     pub const fn uses_history(self) -> bool {
         matches!(self, WindowAction::Restore)
+    }
+
+    /// Throws that pick another display rather than a rectangle on this one.
+    pub const fn moves_display(self) -> bool {
+        matches!(
+            self,
+            WindowAction::PreviousDisplay | WindowAction::NextDisplay
+        )
+    }
+
+    /// Step through geometrically ordered screens: `-1` previous, `+1` next.
+    pub const fn display_step(self) -> i32 {
+        match self {
+            WindowAction::PreviousDisplay => -1,
+            WindowAction::NextDisplay => 1,
+            _ => 0,
+        }
     }
 
     /// Whether repeatedly pressing this action's shortcut cycles it through
@@ -659,7 +689,9 @@ impl WindowAction {
                         .rounded(),
                 );
             }
-            WindowAction::Restore => return None,
+            WindowAction::Restore | WindowAction::PreviousDisplay | WindowAction::NextDisplay => {
+                return None
+            }
         };
 
         Some(rect.rounded())
