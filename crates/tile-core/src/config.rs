@@ -695,18 +695,36 @@ const BASE_MODIFIERS: Modifiers = Modifiers(Modifiers::CONTROL.0 | Modifiers::AL
 #[cfg(not(target_os = "macos"))]
 const BASE_MODIFIERS: Modifiers = Modifiers::META;
 
+/// The modifier carrying the display throws ([`WindowAction::PreviousDisplay`]
+/// and [`WindowAction::NextDisplay`]).
+///
+/// The base modifier plus whichever of `Alt`/`Option` and `Win`/`Command` it
+/// does not already hold, which lands on the platform-conventional
+/// move-window-to-display combination on both:
+///
+/// * **Windows** — `Win+Alt+Arrow`, matching the shell's own snap variants.
+/// * **macOS** — `Control+Command+Option+Arrow`.
+///
+/// `Shift` deliberately plays no part. It used to carry these throws, but it
+/// is not the platform convention on either OS, and it is not kept as an
+/// alias: `Shift`+arrow does nothing by default.
+const DISPLAY_MODIFIERS: Modifiers =
+    Modifiers(BASE_MODIFIERS.0 | Modifiers::ALT.0 | Modifiers::META.0);
+
 /// Default key bindings.
 ///
 /// **Every default sits on the same base modifier**, so the two platforms
 /// differ in exactly one thing: what that modifier is. `Control+Option` on
 /// macOS, `Win` on Windows. Nothing else varies, so a user with a Mac and a
-/// PC learns one set of shortcuts.
+/// PC learns one set of shortcuts. The only exception is the pair of display
+/// throws, which follow each platform's own move-window-to-display convention
+/// — see [`DISPLAY_MODIFIERS`].
 ///
-/// The defaults are the four arrows, plus Shift on Left/Right to throw the
-/// window to the adjacent display. `Left` and `Right` place the window and
-/// carry the whole size catalogue by cycling; `Up` and `Down` are the
-/// "bigger / undo" axis; Shift+Left/Right keep the current slot and walk
-/// screens:
+/// The defaults are the four arrows, plus the platform's own
+/// move-window-to-display combination on Left/Right to throw the window to the
+/// adjacent display. `Left` and `Right` place the window and carry the whole
+/// size catalogue by cycling; `Up` and `Down` are the "bigger / undo" axis;
+/// the throws keep the current slot and walk screens:
 ///
 /// ```text
 ///   Left   ½ → ⅔ → ⅓ → …   anchored left
@@ -716,11 +734,11 @@ const BASE_MODIFIERS: Modifiers = Modifiers::META;
 /// ```
 ///
 /// **No default sits on a letter**, none needs `Enter` or `Backspace`. The
-/// only extra modifier is `Shift` on the horizontal arrows, which throws
-/// rather than cycling size. Center, the corners, maximize-height and the
-/// centred column are all in the catalogue but ship unbound, because every
-/// letter within reach is a left-hand key and the modifier is already a
-/// left-hand hold.
+/// only extra modifiers are the ones [`DISPLAY_MODIFIERS`] adds on the
+/// horizontal arrows, which throws rather than cycling size. Center, the
+/// corners, maximize-height and the centred column are all in the catalogue
+/// but ship unbound, because every letter within reach is a left-hand key and
+/// the modifier is already a left-hand hold.
 ///
 /// # Why the arrows, and not letters
 ///
@@ -751,13 +769,14 @@ const BASE_MODIFIERS: Modifiers = Modifiers::META;
 /// `Win+Arrow` is Aero Snap — the shell combination people already reach for
 /// to tile a window. Tile's hook exists so it can claim those keys; swallowing
 /// them replaces Aero Snap with Tile's cycle (half → two thirds → third) on
-/// the same four arrows. `Win+Shift+Arrow` (move between monitors) and
-/// `Win+Ctrl+Left/Right` (virtual desktops) stay unbound, so those OS
-/// shortcuts keep working.
+/// the same four arrows. `Win+Alt+Arrow` — Windows 11's snap variants — is
+/// claimed too, for the display throws. `Win+Shift+Arrow` (move between
+/// monitors) and `Win+Ctrl+Left/Right` (virtual desktops) stay unbound, so
+/// those OS shortcuts keep working.
 ///
-/// `Win+Alt+Arrow` is the previous default. It left Aero Snap alone, but it
-/// is also Windows 11's snap variants and costs an extra modifier for no
-/// extra reach: the defaults are still just the four arrows.
+/// `Win+Alt+Arrow` used to be the default for *every* action. It left Aero
+/// Snap alone, but it cost an extra modifier for no extra reach, so the tiling
+/// arrows moved down to `Win` alone and only the throws kept it.
 ///
 /// # Keys Xbox Game Bar reserves
 ///
@@ -818,9 +837,10 @@ pub fn default_bindings() -> BTreeMap<WindowAction, Option<Hotkey>> {
         Some(Hotkey::new(base, KeyCode::Down)),
     );
 
-    // Shift on the same arrows throws to the adjacent display, keeping the
-    // current slot. Size cycling stays on the unmodified arrows.
-    let throw = base.union(Modifiers::SHIFT);
+    // The display throws sit on the platform's own move-window-to-display
+    // combination (`Win+Alt` / `Control+Command+Option`), keeping the current
+    // slot. Size cycling stays on the unmodified arrows.
+    let throw = DISPLAY_MODIFIERS;
     map.insert(
         WindowAction::PreviousDisplay,
         Some(Hotkey::new(throw, KeyCode::Left)),
@@ -839,7 +859,7 @@ mod tests {
 
     /// The actions that ship with a default binding.
     ///
-    /// Four arrows for tiling, plus Shift+Left/Right for display throws.
+    /// Four arrows for tiling, plus the display throws on Left/Right.
     /// Every other action — center, the corners, maximize-height, the centred
     /// column and the explicitly-sized thirds and two-thirds — ships unbound:
     /// every letter within reach is a left-hand key and the modifier is
@@ -941,7 +961,7 @@ mod tests {
             );
         }
 
-        let throw = BASE_MODIFIERS.union(Modifiers::SHIFT);
+        let throw = DISPLAY_MODIFIERS;
         for (action, key) in [
             (WindowAction::PreviousDisplay, KeyCode::Left),
             (WindowAction::NextDisplay, KeyCode::Right),
@@ -950,7 +970,7 @@ mod tests {
             assert_eq!(hotkey.key, key, "{action} lost its throw key");
             assert_eq!(
                 hotkey.modifiers, throw,
-                "{action} should be the base modifier plus Shift"
+                "{action} should use the platform display-throw modifiers"
             );
         }
 
@@ -976,9 +996,11 @@ mod tests {
     }
 
     /// Every default must be identical across platforms apart from the base
-    /// modifier, so someone with a Mac and a PC learns one set of shortcuts.
-    /// Hard-coded rather than derived, so a platform-specific edit to
-    /// `default_bindings` fails here instead of drifting silently.
+    /// modifier — the display throws excepted, which follow each platform's own
+    /// move-window-to-display convention — so someone with a Mac and a PC
+    /// learns one set of shortcuts. Hard-coded rather than derived, so a
+    /// platform-specific edit to `default_bindings` fails here instead of
+    /// drifting silently.
     #[test]
     fn defaults_differ_only_by_the_base_modifier() {
         let config = Config::default();
@@ -1000,13 +1022,16 @@ mod tests {
             );
         }
 
-        let throw = BASE_MODIFIERS.union(Modifiers::SHIFT);
+        let throw = DISPLAY_MODIFIERS;
         for (action, key) in [
             (WindowAction::PreviousDisplay, KeyCode::Left),
             (WindowAction::NextDisplay, KeyCode::Right),
         ] {
             let hotkey = config.binding(action).expect("display throw must be bound");
-            assert_eq!(hotkey.key, key);
+            assert_eq!(
+                hotkey.key, key,
+                "{action} must use the same key on every platform"
+            );
             assert_eq!(hotkey.modifiers, throw);
         }
 
@@ -1023,9 +1048,79 @@ mod tests {
         }
     }
 
-    /// Windows defaults are `Win` plus an arrow, not `Win+Alt`. Pin that so a
-    /// well-meaning "leave Aero Snap alone" edit cannot silently restore the
-    /// extra modifier.
+    /// The display throws follow each platform's own move-window-to-display
+    /// convention, so they are the one place the two platforms differ by more
+    /// than the base modifier. Both rows are pinned here — including the one
+    /// for the platform the test is not running on — so a change to either
+    /// mapping fails on any host.
+    #[test]
+    fn display_throws_use_the_platform_move_to_display_modifiers() {
+        // The rule is "the base modifier plus whichever of Alt and Meta it
+        // does not already hold", which lands on the conventional combination
+        // on both platforms.
+        let throw_for = |base: Modifiers| base.union(Modifiers::ALT).union(Modifiers::META);
+
+        // macOS: Control+Option base → Control+Command+Option.
+        let macos_base = Modifiers::CONTROL.union(Modifiers::ALT);
+        assert_eq!(
+            throw_for(macos_base),
+            Modifiers::CONTROL
+                .union(Modifiers::META)
+                .union(Modifiers::ALT),
+            "macOS display throws must be Control+Command+Option+Arrow"
+        );
+
+        // Windows: Win base → Win+Alt.
+        let windows_base = Modifiers::META;
+        assert_eq!(
+            throw_for(windows_base),
+            Modifiers::META.union(Modifiers::ALT),
+            "Windows display throws must be Win+Alt+Arrow"
+        );
+
+        // Neither carries Shift any more, on either platform.
+        for base in [macos_base, windows_base] {
+            assert!(!throw_for(base).contains(Modifiers::SHIFT));
+        }
+
+        #[cfg(target_os = "macos")]
+        let expected = throw_for(macos_base);
+        #[cfg(not(target_os = "macos"))]
+        let expected = throw_for(windows_base);
+
+        assert_eq!(DISPLAY_MODIFIERS, expected);
+
+        let config = Config::default();
+        for (action, key) in [
+            (WindowAction::PreviousDisplay, KeyCode::Left),
+            (WindowAction::NextDisplay, KeyCode::Right),
+        ] {
+            let hotkey = config.binding(action).expect("display throw must be bound");
+            assert_eq!(hotkey.key, key);
+            assert_eq!(
+                hotkey.modifiers, expected,
+                "{action} is {hotkey}, expected the platform move-to-display modifiers"
+            );
+        }
+    }
+
+    /// `Shift` used to carry the display throws and was deliberately dropped
+    /// without a compatibility alias, so nothing may ship on it.
+    #[test]
+    fn no_default_binding_uses_shift() {
+        let config = Config::default();
+        for (hotkey, action) in config.active_bindings() {
+            assert!(
+                !hotkey.modifiers.contains(Modifiers::SHIFT),
+                "{action} is {hotkey}; Shift is no longer a default modifier"
+            );
+        }
+    }
+
+    /// Windows tiling defaults are `Win` plus an arrow, not `Win+Alt`. Pin that
+    /// so a well-meaning "leave Aero Snap alone" edit cannot silently restore
+    /// the extra modifier on the arrows. The display throws are the deliberate
+    /// exception: they sit on `Win+Alt`, Windows' own snap-variant combination.
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn windows_defaults_use_win_without_alt() {
@@ -1036,21 +1131,45 @@ mod tests {
                 hotkey.modifiers.contains(Modifiers::META),
                 "{action} is {hotkey}, expected Win"
             );
-            assert!(
-                !hotkey.modifiers.contains(Modifiers::ALT),
-                "{action} is {hotkey}, Win+Alt is no longer the default"
-            );
             if action.moves_display() {
                 assert_eq!(
                     hotkey.modifiers,
-                    Modifiers::META | Modifiers::SHIFT,
-                    "{action} is {hotkey}, expected Win+Shift"
+                    Modifiers::META | Modifiers::ALT,
+                    "{action} is {hotkey}, expected Win+Alt"
                 );
             } else {
+                assert!(
+                    !hotkey.modifiers.contains(Modifiers::ALT),
+                    "{action} is {hotkey}, Win+Alt is no longer the tiling default"
+                );
                 assert_eq!(
                     hotkey.modifiers,
                     Modifiers::META,
                     "{action} is {hotkey}, expected Win alone"
+                );
+            }
+        }
+    }
+
+    /// macOS keeps `Control+Option` for tiling, and throws windows between
+    /// displays with `Control+Command+Option` — the platform convention.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_defaults_use_control_option_and_add_command_for_throws() {
+        assert_eq!(BASE_MODIFIERS, Modifiers::CONTROL | Modifiers::ALT);
+        let config = Config::default();
+        for (hotkey, action) in config.active_bindings() {
+            if action.moves_display() {
+                assert_eq!(
+                    hotkey.modifiers,
+                    Modifiers::CONTROL | Modifiers::META | Modifiers::ALT,
+                    "{action} is {hotkey}, expected Control+Command+Option"
+                );
+            } else {
+                assert_eq!(
+                    hotkey.modifiers,
+                    Modifiers::CONTROL | Modifiers::ALT,
+                    "{action} is {hotkey}, expected Control+Option"
                 );
             }
         }

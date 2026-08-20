@@ -29,9 +29,16 @@ Hold that, then press:
 | `←` `→`         | **Left / right** — half, then two thirds, then a third (see below) |
 | `↑`             | Maximize                                                           |
 | `↓`             | Restore to the window's previous position                          |
-| `Shift`+`←` `→` | **Previous / next display** — same slot, adjacent monitor          |
 
-That is the whole default set — **four arrows, plus Shift to change display.**
+Moving a window to the adjacent display keeps its slot and uses each platform's
+own move-window-to-display combination instead of the base modifier:
+
+| Shortcut                            | Action                                       |
+| ----------------------------------- | -------------------------------------------- |
+| **macOS** `Control`+`Command`+`Option`+`←` `→` | **Previous / next display** — same slot, adjacent monitor |
+| **Windows** `Win`+`Alt`+`←` `→`     | **Previous / next display** — same slot, adjacent monitor |
+
+That is the whole default set — **four arrows, plus the display throws.**
 The same layout works on both platforms, with the modifier held in the left
 hand and the arrows in the right.
 
@@ -69,9 +76,10 @@ to where it was **before** Tile first touched it, however long you cycled for.
 
 ### Reaching a display by name
 
-`Shift`+`←`/`→` steps to the adjacent display and wraps around the ends. When
-you would rather name the monitor outright, **First** through **Fourth
-Display** are also available, unbound by default.
+The display throw (`Control`+`Command`+`Option`+`←`/`→` on macOS,
+`Win`+`Alt`+`←`/`→` on Windows) steps to the adjacent display and wraps around
+the ends. When you would rather name the monitor outright, **First** through
+**Fourth Display** are also available, unbound by default.
 
 They count in the same geometric order as the arrows — left to right by
 position, then top to bottom — so "second display" means the same monitor every
@@ -107,9 +115,10 @@ live in `config.json`; there is no settings UI for them yet.
 
 ### Windows shortcut notes
 
-Tile's keyboard hook replaces Aero Snap for the bound `Win`+Arrow shortcuts.
-`Win`+`Shift`+Arrow replaces Windows' move-between-monitors shortcut, while
-`Win`+`Ctrl`+`←`/`→` remains available for virtual desktops.
+Tile's keyboard hook replaces Aero Snap for the bound `Win`+Arrow shortcuts,
+and claims `Win`+`Alt`+`←`/`→` — Windows 11's snap variants — for the display
+throws. `Win`+`Shift`+Arrow (Windows' own move-between-monitors shortcut) and
+`Win`+`Ctrl`+`←`/`→` (virtual desktops) both remain available.
 
 Windows treats `Ctrl`+`Alt` as `AltGr` on many international layouts, so Tile
 does not use that modifier by default; doing so could interfere with characters
