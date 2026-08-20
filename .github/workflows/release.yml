@@ -632,10 +632,10 @@ jobs:
           if [ "$PRERELEASE" = "true" ]; then
             # `--latest=false` is explicit rather than implied: it keeps the
             # repo's download links pointing at the last stable build.
-            gh release edit "$TAG" --draft=false --prerelease --latest=false
+            gh release edit "$TAG" --repo "${{ github.repository }}" --draft=false --prerelease --latest=false
             echo "Published $TAG as a pre-release."
           else
-            gh release edit "$TAG" --draft=false --prerelease=false --latest
+            gh release edit "$TAG" --repo "${{ github.repository }}" --draft=false --prerelease=false --latest
             echo "Published $TAG as the latest release."
           fi
-          gh release view "$TAG"
+          gh release view "$TAG" --repo "${{ github.repository }}"
