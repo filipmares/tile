@@ -158,13 +158,9 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
-      # Keep PR CI fast: a full release build only runs for tag pushes, where
-      # release.yml does the real bundling anyway. On PRs we just prove it
-      # compiles in debug.
+      # Keep PR CI fast: a debug build is enough to prove it compiles. Release
+      # bundling belongs to release.yml, which builds every tag from scratch —
+      # repeating it here would double the wall-clock time of every tag push for
+      # an artifact nothing consumes.
       - name: Build (debug)
-        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         run: cargo build --workspace
-
-      - name: Build (release)
-        if: ${{ startsWith(github.ref, 'refs/tags/') }}
-        run: cargo build --workspace --release

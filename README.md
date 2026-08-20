@@ -194,8 +194,11 @@ page:
   it and drag **Tile** into Applications. Signed and notarized builds open
   without a Gatekeeper workaround; follow the release notes if a build is
   marked unsigned.
-- **Windows:** the `.msi` or the NSIS setup `.exe`. These are **unsigned**, so
-  SmartScreen may warn you — choose **More info ▸ Run anyway**.
+- **Windows:** `Tile_<version>_x64-setup.exe`. It installs for the current user
+  only, so there is no administrator prompt, and it pulls in the WebView2
+  runtime automatically if the machine lacks it. Unsigned builds make
+  SmartScreen warn that the publisher is unknown — choose **More info ▸ Run
+  anyway**.
 
 Tile has no main window: after launching, look for its icon in the menu bar
 (macOS) or the system tray (Windows).
@@ -233,7 +236,8 @@ cd apps/tile
 # Development: hot-reloading settings UI
 ./ui/node_modules/.bin/tauri dev
 
-# Release installers (.msi + .exe on Windows, .dmg on macOS)
+# Release installers. Add `--bundles nsis` on Windows to build only the NSIS
+# setup .exe, which is what releases ship; the default also builds an .msi.
 ./ui/node_modules/.bin/tauri build
 ```
 
