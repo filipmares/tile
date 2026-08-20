@@ -464,7 +464,17 @@ jobs:
           # NSIS writes InstallLocation with literal quotes around it, so the
           # raw value is not a usable path — Join-Path would produce
           # `"C:\...\Tile"\tile.exe`. Strip them and any trailing separator.
+          # The key is not guaranteed to exist at all, and calling .Trim() on a
+          # missing one yields "you cannot call a method on a null-valued
+          # expression", which says nothing about which registry value is
+          # absent.
+          if (-not $arp.InstallLocation) {
+            throw "The 'Tile' Add/Remove Programs entry has no InstallLocation value; the installer did not record where it installed."
+          }
           $installLocation = $arp.InstallLocation.Trim('"').TrimEnd('\')
+          if (-not (Test-Path -PathType Container $installLocation)) {
+            throw "InstallLocation '$installLocation' does not exist as a directory."
+          }
           Write-Host "Install location: $installLocation"
           Write-Host "Display version:  $($arp.DisplayVersion)"
           if ($arp.DisplayVersion -ne $version) {
