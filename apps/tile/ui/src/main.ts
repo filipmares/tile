@@ -1,6 +1,5 @@
 // Settings UI controller. No framework: plain DOM.
 
-import "./styles.css";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   getConfig,
@@ -38,6 +37,8 @@ function el<T extends HTMLElement>(selector: string): T {
 
 const dom = {
   bindings: el<HTMLUListElement>("#bindings"),
+  assignedBindings: el<HTMLUListElement>("#assigned-bindings"),
+  allShortcutsCount: el<HTMLSpanElement>("#all-shortcuts-count"),
   recordingStatus: el<HTMLParagraphElement>("#recording-status"),
   gapWindow: el<HTMLInputElement>("#gap-window"),
   gapWindowNumber: el<HTMLInputElement>("#gap-window-number"),
@@ -88,6 +89,27 @@ function renderBindings(): void {
   if (!config) return;
   const cfg = config;
   const conflicts = conflictingActions(cfg);
+  const assignedActions = ACTIONS.filter(({ id }) => cfg.bindings[id]);
+  dom.assignedBindings.replaceChildren();
+  dom.allShortcutsCount.textContent = `${ACTIONS.length} shortcuts · ${assignedActions.length} assigned`;
+
+  if (assignedActions.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "shortcut-empty";
+    empty.textContent = "No shortcuts assigned yet.";
+    dom.assignedBindings.append(empty);
+  } else {
+    for (const action of assignedActions) {
+      dom.assignedBindings.append(renderBinding(cfg, conflicts, action.id, action.label));
+    }
+  }
+
+  const hasRendered = dom.bindings.childElementCount > 0;
+  const openFamilies = new Set(
+    [...dom.bindings.querySelectorAll<HTMLDetailsElement>("details[open]")]
+      .map((details) => details.dataset.family)
+      .filter((family): family is string => family !== undefined),
+  );
   dom.bindings.replaceChildren();
 
   for (const family of FAMILIES) {
@@ -97,10 +119,27 @@ function renderBindings(): void {
     const group = document.createElement("li");
     group.className = "binding-group";
 
-    const heading = document.createElement("h3");
+    const disclosure = document.createElement("details");
+    disclosure.className = "binding-group__disclosure";
+    disclosure.dataset.family = family.id;
+    disclosure.open = hasRendered
+      ? openFamilies.has(family.id)
+      : family.id === "halves" || actions.some(({ id }) => cfg.bindings[id]);
+
+    const summary = document.createElement("summary");
+    summary.className = "binding-group__summary";
+
+    const heading = document.createElement("span");
     heading.className = "binding-group__title";
     heading.textContent = family.label;
-    group.append(heading);
+
+    const assignedCount = actions.filter(({ id }) => cfg.bindings[id]).length;
+    const count = document.createElement("span");
+    count.className = "binding-group__count";
+    count.textContent = `${actions.length} shortcuts · ${assignedCount} assigned`;
+
+    summary.append(heading, count);
+    disclosure.append(summary);
 
     const list = document.createElement("ul");
     list.className = "binding-group__list";
@@ -109,7 +148,8 @@ function renderBindings(): void {
       list.append(renderBinding(cfg, conflicts, id, label));
     }
 
-    group.append(list);
+    disclosure.append(list);
+    group.append(disclosure);
     dom.bindings.append(group);
   }
 }
