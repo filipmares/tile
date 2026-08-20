@@ -6,11 +6,12 @@ Tile is a cross-platform window management app built from scratch in Rust. Snap
 the focused window to halves and thirds of the screen, maximize it, or undo the
 last move — all from the arrow keys.
 
-> **Status: early days.** Tile implements 52 window actions — halves, thirds,
+> **Status: early days.** Tile implements 76 window actions — halves, thirds,
 > two-thirds, fourths, corner thirds, sixths, ninths, corners, maximize,
-> maximize-height, almost-maximize, center and restore — but only four ship
-> bound to keys, with a settings UI and a tray/menu-bar icon for the rest.
-> Multi-monitor throws, per-app rules and drag-snapping are not built yet. This
+> maximize-height, almost-maximize, center, restore, display throws, and
+> incremental move, resize and halve/double — but only six ship bound to keys,
+> with a settings UI and a tray/menu-bar icon for the rest. Per-app rules and
+> drag-snapping are not built yet. This
 > README documents only what actually works today.
 
 ## Default keyboard shortcuts
@@ -45,10 +46,12 @@ an arrow cycles its width:
 The vertical pair is the bigger/undo axis: `↑` maximizes and `↓` restores the
 window.
 
-Everything is rebindable. The rest of the catalogue — centered and explicitly
-sized layouts, corners, center, maximize-height, almost-maximize, fourths,
-sixths, ninths, and corner thirds — is available from the tray menu or a
-binding of your own.
+Everything is rebindable, and the rest of the catalogue — the centered column,
+the explicitly-sized thirds and two-thirds, the corners, center, maximize-height,
+almost-maximize, plus fourths, sixths, ninths, corner thirds, the top/bottom
+halves, the incremental move/resize/halve-double families and the
+named-display moves — ships unbound, reachable from the tray menu or a binding
+of your own.
 
 ### Press it again to change the size
 
@@ -63,6 +66,44 @@ or turn cycling off so repeats do nothing.
 The cycle restarts whenever you run a different action, switch to another
 window, or move the window yourself, and `↓` always restores the window
 to where it was **before** Tile first touched it, however long you cycled for.
+
+### Reaching a display by name
+
+`Shift`+`←`/`→` steps to the adjacent display and wraps around the ends. When
+you would rather name the monitor outright, **First** through **Fourth
+Display** are also available, unbound by default.
+
+They count in the same geometric order as the arrows — left to right by
+position, then top to bottom — so "second display" means the same monitor every
+time, whatever order Windows or macOS happened to enumerate them in, and
+whatever the window is doing now. Naming a display that is not plugged in does
+nothing.
+
+Both kinds of throw keep the window's slot where they can: a left third stays a
+left third on arrival. A window that is not in a recognisable slot keeps its
+**relative** place instead, so something filling the right half of a 4K panel
+fills the right half of a 1080p one rather than hanging off its edge. That holds
+across mixed-DPI desks, because the placement is computed as fractions of each
+display's own work area rather than by scaling pixels.
+
+### Nudging, resizing, halving and doubling
+
+Also available, all unbound by default:
+
+| Family | Actions |
+| ------ | ------- |
+| **Move** | Slide the window one step left, right, up or down, stopping flush against the screen edge |
+| **Resize** | Larger / smaller, or just the width or just the height |
+| **Halve & Double** | Halve or double the width or height, keeping the named edge |
+
+Resizing anchors to whichever screen edge the window is already flush against,
+so a window in the right half grows leftwards instead of being pushed off the
+screen; a floating window resizes around its centre. Nothing can be nudged off
+the screen, and nothing shrinks below a quarter of the work area.
+
+The step sizes (`sizeStep`, `widthStep` and `moveStep`, each defaulting to 30)
+and the floor (`minimumWindowWidth`, `minimumWindowHeight`, defaulting to 0.25)
+live in `config.json`; there is no settings UI for them yet.
 
 ### Windows shortcut notes
 
@@ -130,8 +171,11 @@ page:
   it and drag **Tile** into Applications. Signed and notarized builds open
   without a Gatekeeper workaround; follow the release notes if a build is
   marked unsigned.
-- **Windows:** the `.msi` or the NSIS setup `.exe`. These are **unsigned**, so
-  SmartScreen may warn you — choose **More info ▸ Run anyway**.
+- **Windows:** `Tile_<version>_x64-setup.exe`. It installs for the current user
+  only, so there is no administrator prompt, and it pulls in the WebView2
+  runtime automatically if the machine lacks it. Unsigned builds make
+  SmartScreen warn that the publisher is unknown — choose **More info ▸ Run
+  anyway**.
 
 Tile has no main window: after launching, look for its icon in the menu bar
 (macOS) or the system tray (Windows).
@@ -169,7 +213,8 @@ cd apps/tile
 # Development: hot-reloading settings UI
 ./ui/node_modules/.bin/tauri dev
 
-# Release installers (.msi + .exe on Windows, .dmg on macOS)
+# Release installers. Add `--bundles nsis` on Windows to build only the NSIS
+# setup .exe, which is what releases ship; the default also builds an .msi.
 ./ui/node_modules/.bin/tauri build
 ```
 

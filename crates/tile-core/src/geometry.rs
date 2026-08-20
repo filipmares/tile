@@ -102,6 +102,25 @@ impl Rect {
         let h = (self.max_y().min(other.max_y()) - self.y.max(other.y)).max(0.0);
         w * h
     }
+
+    /// Moves and shrinks the rectangle as little as necessary to fit inside
+    /// `bounds`: first capped to the bounds' size, then slid back inside them.
+    ///
+    /// This is what stops an incremental move or resize from pushing a window
+    /// off the edge of its display, and what keeps a proportional cross-display
+    /// map inside its destination when the source frame overhung its own screen.
+    pub fn clamped_within(&self, bounds: Rect) -> Rect {
+        let width = self.width.min(bounds.width).max(0.0);
+        let height = self.height.min(bounds.height).max(0.0);
+        let x = self.x.min(bounds.max_x() - width).max(bounds.x);
+        let y = self.y.min(bounds.max_y() - height).max(bounds.y);
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
 }
 
 /// A display, as reported by the platform backend.
@@ -250,6 +269,18 @@ mod tests {
         }
     }
 
+    /// A display of a given size and backing scale, for the mixed-DPI cases
+    /// where the 100x100 squares [`screen`] produces are not enough.
+    fn sized_screen(id: &str, frame: Rect, scale: f64) -> Screen {
+        Screen {
+            id: id.into(),
+            frame,
+            work_area: frame,
+            scale_factor: scale,
+            is_primary: false,
+        }
+    }
+
     #[test]
     fn adjacent_walks_left_to_right_and_wraps() {
         let screens = vec![
@@ -271,5 +302,68 @@ mod tests {
             Screen::adjacent(&screens, &screens[0], 1).unwrap().id,
             "only"
         );
+    }
+
+    #[test]
+    fn clamped_within_slides_a_window_back_onto_the_screen() {
+        let bounds = Rect::new(0.0, 0.0, 1000.0, 800.0);
+        let off_right = Rect::new(950.0, 100.0, 400.0, 200.0).clamped_within(bounds);
+        assert_eq!(off_right, Rect::new(600.0, 100.0, 400.0, 200.0));
+        let off_top_left = Rect::new(-50.0, -50.0, 100.0, 100.0).clamped_within(bounds);
+        assert_eq!(off_top_left, Rect::new(0.0, 0.0, 100.0, 100.0));
+    }
+
+    #[test]
+    fn clamped_within_caps_an_oversized_window_to_the_bounds() {
+        let bounds = Rect::new(10.0, 20.0, 100.0, 100.0);
+        let huge = Rect::new(-500.0, -500.0, 5000.0, 5000.0).clamped_within(bounds);
+        assert_eq!(huge, bounds);
+    }
+
+    /// The three-monitor layout the issue asks for by name, including a
+    /// vertically stacked display.
+    #[test]
+    fn ordering_sorts_left_to_right_then_top_to_bottom() {
+        let screens = vec![
+            sized_screen(
+                "stacked-lower",
+                Rect::new(1920.0, 1080.0, 1920.0, 1080.0),
+                1.0,
+            ),
+            sized_screen("stacked-upper", Rect::new(1920.0, 0.0, 1920.0, 1080.0), 1.0),
+            sized_screen("laptop", Rect::new(0.0, 0.0, 1920.0, 1080.0), 1.0),
+        ];
+        let ordered = Screen::geometrically_ordered(&screens);
+        let ids: Vec<&str> = ordered.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["laptop", "stacked-upper", "stacked-lower"]);
+    }
+
+    /// The reason the order is geometric rather than the OS enumeration: the
+    /// same desk must produce the same order however the backend lists it.
+    #[test]
+    fn ordering_is_stable_regardless_of_enumeration_order() {
+        let a = sized_screen("a", Rect::new(0.0, 0.0, 100.0, 100.0), 1.0);
+        let b = sized_screen("b", Rect::new(100.0, 0.0, 100.0, 100.0), 1.0);
+        let ascending = [a.clone(), b.clone()];
+        let descending = [b, a];
+        let forwards = Screen::geometrically_ordered(&ascending);
+        let backwards = Screen::geometrically_ordered(&descending);
+        assert_eq!(
+            forwards.iter().map(|s| &s.id).collect::<Vec<_>>(),
+            backwards.iter().map(|s| &s.id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn ordering_breaks_origin_ties_by_id() {
+        // Mirrored displays share an origin; the id keeps the order total,
+        // which is what makes next and previous exact inverses.
+        let screens = vec![
+            sized_screen("z", Rect::new(0.0, 0.0, 100.0, 100.0), 1.0),
+            sized_screen("a", Rect::new(0.0, 0.0, 100.0, 100.0), 1.0),
+        ];
+        let ordered = Screen::geometrically_ordered(&screens);
+        assert_eq!(ordered[0].id, "a");
+        assert_eq!(ordered[1].id, "z");
     }
 }
