@@ -207,9 +207,17 @@ jobs:
         include:
           # macOS is built as a single **universal** binary so one .dmg runs on
           # both Apple Silicon and Intel Macs — Rectangle users are on both.
+          #
+          # `app` is listed alongside `dmg` even though only the .dmg is
+          # published: with `--bundles dmg` alone the bundler deletes
+          # `Tile.app` as soon as the disk image is built ("Clean up .app if
+          # only building dmg or updater"), and the verification step below —
+          # hardened runtime, spctl, stapling — has nothing left to inspect.
+          # The .app is a directory, so the attest and upload steps skip it and
+          # it never reaches the release.
           - os: macos-latest
             rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
-            args: --target universal-apple-darwin --bundles dmg
+            args: --target universal-apple-darwin --bundles app,dmg
           # Windows ships the NSIS setup .exe only. The WiX .msi is deliberately
           # not built: it can only install per-machine, so it always raises a UAC
           # prompt, and offering two installers side by side makes users choose

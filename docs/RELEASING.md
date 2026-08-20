@@ -32,6 +32,16 @@ stops before publishing anything.
    ```
 
 2. Review and merge the PR.
+
+   > [!NOTE]
+   > The PR is opened by `GITHUB_TOKEN`, and GitHub deliberately does not start
+   > workflow runs for events raised by that token — so CI does not run on the
+   > bump PR on its own and the required checks sit there unfilled. Close and
+   > reopen the PR (or push an empty commit to its branch) to start them. The
+   > repository setting **Settings ▸ Actions ▸ General ▸ Allow GitHub Actions to
+   > create and approve pull requests** must also be enabled, or the workflow
+   > pushes the branch and then fails to open the PR at all.
+
 3. Tag `main` and push:
 
    ```sh
