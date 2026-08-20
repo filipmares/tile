@@ -234,8 +234,51 @@ fn normalize_fraction(value: f64) -> f64 {
     }
 }
 
+/// The default step, in the backend's own unit, for one press of an
+/// incremental resize or move. Mirrors Rectangle's `sizeOffset` and
+/// `widthStepSize`, both of which behave as 30 out of the box.
+///
+/// The unit is deliberately whatever the backend reports — physical pixels on
+/// Windows, points on macOS — for the same reason the rest of the crate never
+/// converts between the two. A 30-unit nudge is therefore physically smaller
+/// on a high-DPI Windows display than on a Retina Mac, which is the same
+/// trade-off Rectangle makes and is easily retuned in the config.
+fn default_step() -> f64 {
+    30.0
+}
+
+/// The smallest fraction of the work area an incremental resize may shrink a
+/// window to. Matches Rectangle's `minimumWindowWidth`/`minimumWindowHeight`.
+fn default_minimum_fraction() -> f64 {
+    0.25
+}
+
+/// Upper bound for a resize or move step, so a typo cannot make every press
+/// throw the window across the screen.
+pub const MAX_STEP: f64 = 1000.0;
+
+/// Clamps a step into `[1, MAX_STEP]`, mapping non-finite or non-positive
+/// values to the default. A zero step would make the action a silent no-op.
+fn normalize_step(value: f64) -> f64 {
+    if !value.is_finite() || value < 1.0 {
+        default_step()
+    } else {
+        value.min(MAX_STEP)
+    }
+}
+
+/// Clamps a minimum-size fraction into `(0, 1]`, falling back to the default.
+fn normalize_minimum_fraction(value: f64) -> f64 {
+    if value.is_finite() && value > 0.0 && value <= 1.0 {
+        value
+    } else {
+        default_minimum_fraction()
+    }
+}
+
 /// Fractions controlling the size-variant actions that resize a window rather
-/// than tile it into the grid.
+/// than tile it into the grid, plus the step sizes and floor used by the
+/// incremental resize and move actions.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SizeOptions {
     /// [`WindowAction::AlmostMaximize`] width as a fraction of the work area,
@@ -244,6 +287,21 @@ pub struct SizeOptions {
     /// [`WindowAction::AlmostMaximize`] height as a fraction of the work area,
     /// in `(0, 1]`.
     pub almost_maximize_height: f64,
+    /// How much one `Larger`/`Smaller` press changes a window by, in the
+    /// backend's own unit. Rectangle's `sizeOffset`.
+    pub size_step: f64,
+    /// How much one `LargerWidth`/`SmallerWidth` press changes a window's
+    /// width by. Rectangle's `widthStepSize`.
+    pub width_step: f64,
+    /// How far one `MoveLeft`/`MoveRight`/`MoveUp`/`MoveDown` press slides a
+    /// window. Tile-specific; see [`WindowAction::MoveLeft`].
+    pub move_step: f64,
+    /// Smallest width an incremental resize may leave, as a fraction of the
+    /// work area.
+    pub minimum_width: f64,
+    /// Smallest height an incremental resize may leave, as a fraction of the
+    /// work area.
+    pub minimum_height: f64,
 }
 
 impl Default for SizeOptions {
@@ -251,6 +309,11 @@ impl Default for SizeOptions {
         Self {
             almost_maximize_width: default_almost_maximize_fraction(),
             almost_maximize_height: default_almost_maximize_fraction(),
+            size_step: default_step(),
+            width_step: default_step(),
+            move_step: default_step(),
+            minimum_width: default_minimum_fraction(),
+            minimum_height: default_minimum_fraction(),
         }
     }
 }
@@ -258,18 +321,21 @@ impl Default for SizeOptions {
 /// What a *repeated* press of an already-satisfied action does.
 ///
 /// This mirrors Rectangle's `subsequentExecutionMode`. Rectangle offers six
-/// values; Tile ships the two that need no multi-display support:
+/// values; Tile ships the two that keep a repeat on the current display:
 ///
 /// * [`SubsequentExecutionMode::CycleSizes`] — Rectangle's `resize`, the
 ///   default there and here: the window cycles through [`Config::cycle_sizes`].
 /// * [`SubsequentExecutionMode::DoNothing`] — Rectangle's `none`: a repeat is
 ///   a no-op, which is what Tile did before cycling existed.
 ///
-/// Rectangle's remaining values (`acrossMonitor`, `acrossAndResize`,
-/// `cycleMonitor`) all move the window to another display. This enum is the
-/// seam where they will land once multi-display support arrives; nothing else
-/// needs to change to add them, because [`crate::Engine::plan`] already
-/// branches on this value before it computes any geometry.
+/// Rectangle's remaining values all move the window to another display on a
+/// repeat. Tile deliberately does not: moving between displays is bound to
+/// [`WindowAction::NextDisplay`] and [`WindowAction::PreviousDisplay`] on
+/// their own shortcut instead, which leaves the unmodified arrows free to
+/// cycle. That matters because the thirds and two-thirds ship unbound, so
+/// cycling is the only way to reach them — a repeat that wandered off to
+/// another display would strand every size except the half for anyone with
+/// more than one monitor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SubsequentExecutionMode {
@@ -445,6 +511,26 @@ pub struct Config {
     /// [`WindowAction::AlmostMaximize`] height as a fraction of the work area.
     #[serde(default = "default_almost_maximize_fraction")]
     pub almost_maximize_height: f64,
+    /// How much one [`WindowAction::Larger`] or [`WindowAction::Smaller`]
+    /// press changes a window by. Rectangle's `sizeOffset`.
+    #[serde(default = "default_step")]
+    pub size_step: f64,
+    /// How much one [`WindowAction::LargerWidth`] or
+    /// [`WindowAction::SmallerWidth`] press changes a window's width by.
+    /// Rectangle's `widthStepSize`.
+    #[serde(default = "default_step")]
+    pub width_step: f64,
+    /// How far one [`WindowAction::MoveLeft`] and friends slide a window.
+    #[serde(default = "default_step")]
+    pub move_step: f64,
+    /// Smallest width an incremental resize may leave, as a fraction of the
+    /// work area. Rectangle's `minimumWindowWidth`.
+    #[serde(default = "default_minimum_fraction")]
+    pub minimum_window_width: f64,
+    /// Smallest height an incremental resize may leave, as a fraction of the
+    /// work area. Rectangle's `minimumWindowHeight`.
+    #[serde(default = "default_minimum_fraction")]
+    pub minimum_window_height: f64,
     /// What a repeated press of an already-satisfied action does.
     #[serde(default)]
     pub subsequent_execution_mode: SubsequentExecutionMode,
@@ -467,6 +553,11 @@ impl Default for Config {
             show_tray_icon: default_true(),
             almost_maximize_width: default_almost_maximize_fraction(),
             almost_maximize_height: default_almost_maximize_fraction(),
+            size_step: default_step(),
+            width_step: default_step(),
+            move_step: default_step(),
+            minimum_window_width: default_minimum_fraction(),
+            minimum_window_height: default_minimum_fraction(),
             subsequent_execution_mode: SubsequentExecutionMode::default(),
             cycle_sizes: default_cycle_sizes(),
         }
@@ -495,6 +586,11 @@ impl Config {
         self.gaps.normalize();
         self.almost_maximize_width = normalize_fraction(self.almost_maximize_width);
         self.almost_maximize_height = normalize_fraction(self.almost_maximize_height);
+        self.size_step = normalize_step(self.size_step);
+        self.width_step = normalize_step(self.width_step);
+        self.move_step = normalize_step(self.move_step);
+        self.minimum_window_width = normalize_minimum_fraction(self.minimum_window_width);
+        self.minimum_window_height = normalize_minimum_fraction(self.minimum_window_height);
         self.normalize_cycle_sizes();
     }
 
@@ -523,6 +619,11 @@ impl Config {
         SizeOptions {
             almost_maximize_width: self.almost_maximize_width,
             almost_maximize_height: self.almost_maximize_height,
+            size_step: self.size_step,
+            width_step: self.width_step,
+            move_step: self.move_step,
+            minimum_width: self.minimum_window_width,
+            minimum_height: self.minimum_window_height,
         }
     }
 
@@ -1186,6 +1287,12 @@ mod tests {
             SubsequentExecutionMode::CycleSizes
         );
         assert_eq!(config.cycle_sizes(), Config::default().cycle_sizes());
+        // The incremental resize and move steps arrive at their defaults too.
+        assert_eq!(config.size_step, 30.0);
+        assert_eq!(config.width_step, 30.0);
+        assert_eq!(config.move_step, 30.0);
+        assert_eq!(config.minimum_window_width, 0.25);
+        assert_eq!(config.minimum_window_height, 0.25);
     }
 
     #[test]
@@ -1203,21 +1310,80 @@ mod tests {
 
     #[test]
     fn unknown_cycling_values_fall_back_instead_of_failing_the_load() {
-        // A config written by a future build that grew a "next-display" mode
+        // A config written by a future build that grew a "cycle-monitor" mode
         // and a size this build does not know about.
         let json = r#"{
-            "subsequentExecutionMode": "next-display",
+            "subsequentExecutionMode": "cycle-monitor",
             "cycleSizes": ["one-half", "one-fifth", "two-thirds"]
         }"#;
         let config = Config::from_json(json).unwrap();
         assert_eq!(
             config.subsequent_execution_mode,
-            SubsequentExecutionMode::CycleSizes
+            SubsequentExecutionMode::default()
         );
         assert_eq!(
             config.cycle_sizes(),
             [CycleSize::OneHalf, CycleSize::TwoThirds]
         );
+    }
+
+    #[test]
+    fn step_settings_round_trip_and_normalize() {
+        let config = Config {
+            size_step: 45.0,
+            width_step: 90.0,
+            move_step: 12.0,
+            minimum_window_width: 0.1,
+            minimum_window_height: 0.4,
+            ..Default::default()
+        };
+        let json = config.to_json().unwrap();
+        assert!(json.contains(r#""sizeStep": 45.0"#));
+        assert_eq!(Config::from_json(&json).unwrap(), config);
+
+        // Nonsense values fall back to the defaults rather than making an
+        // action a silent no-op or shrinking a window away.
+        let json = r#"{
+            "sizeStep": 0,
+            "widthStep": -5,
+            "moveStep": 100000,
+            "minimumWindowWidth": 2,
+            "minimumWindowHeight": -1
+        }"#;
+        let config = Config::from_json(json).unwrap();
+        assert_eq!(config.size_step, 30.0);
+        assert_eq!(config.width_step, 30.0);
+        assert_eq!(config.move_step, MAX_STEP);
+        assert_eq!(config.minimum_window_width, 0.25);
+        assert_eq!(config.minimum_window_height, 0.25);
+    }
+
+    #[test]
+    fn size_options_carry_the_persisted_steps() {
+        let config = Config {
+            size_step: 15.0,
+            move_step: 25.0,
+            ..Default::default()
+        };
+        let options = config.size_options();
+        assert_eq!(options.size_step, 15.0);
+        assert_eq!(options.move_step, 25.0);
+        assert_eq!(options.minimum_width, 0.25);
+    }
+
+    #[test]
+    fn every_subsequent_execution_mode_round_trips() {
+        for mode in [
+            SubsequentExecutionMode::CycleSizes,
+            SubsequentExecutionMode::DoNothing,
+        ] {
+            let config = Config {
+                subsequent_execution_mode: mode,
+                ..Default::default()
+            };
+            let parsed = Config::from_json(&config.to_json().unwrap()).unwrap();
+            assert_eq!(parsed.subsequent_execution_mode, mode, "{}", mode.id());
+        }
     }
 
     #[test]
