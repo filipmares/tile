@@ -25,3 +25,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Copilot workflow artifacts
+.copilot-tracking/
