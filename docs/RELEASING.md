@@ -229,15 +229,21 @@ check that fails outright when the user is offline.
 
 **Windows** — the job runs the installer the way a user would:
 
-- the installer's Authenticode signature is `Valid` and timestamped
 - silent install (`/S`) exits cleanly
-- an Add/Remove Programs entry named `Tile` exists and its `DisplayVersion`
-  matches the tag
-- the installed `tile.exe` is itself signed
+- an Add/Remove Programs entry named `Tile` exists, carries an
+  `InstallLocation` that exists on disk, and its `DisplayVersion` matches the
+  tag
 - launching `tile.exe` leaves it running after 15 seconds — Tile is tray-only
   and never exits on its own, so an early exit means a broken bundle or a
   missing WebView2 runtime
 - silent uninstall exits cleanly
+
+Two further assertions run **only when Windows signing is configured**, since
+there is nothing to assert otherwise:
+
+- the installer's Authenticode signature is `Valid` and timestamped
+- the installed `tile.exe` is itself signed — catching the case where the
+  installer was signed but the binary inside it was not
 
 **Both** — every uploaded artifact gets a
 [build provenance attestation](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations),

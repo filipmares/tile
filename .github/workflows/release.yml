@@ -336,8 +336,12 @@ jobs:
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # artifact-signing-cli reads these; they are undefined, and signing is
-          # therefore off, whenever the configure step above did not run.
+          # artifact-signing-cli reads these. They are always *defined* here —
+          # a missing secret expands to an empty string, and a partial set could
+          # even leave them non-empty while signing is off — so their presence
+          # does not decide anything. What decides it is whether the configure
+          # step ran and added a signCommand: with no signCommand, the bundler
+          # never invokes the tool and never reads these at all.
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
