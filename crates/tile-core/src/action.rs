@@ -1074,7 +1074,8 @@ fn guard_minimum(current: Rect, target: Rect, area: Rect, sizes: SizeOptions) ->
     }
 }
 
-/// Builds a grid cell spanning the given column and row fractions of/// `work_area`, applying the gap model. An edge whose fraction is exactly 0 or
+/// Builds a grid cell spanning the given column and row fractions of
+/// `work_area`, applying the gap model. An edge whose fraction is exactly 0 or
 /// 1 lies against the screen and receives a screen-edge gap; any other edge is
 /// shared with a neighbour and receives half the window gap, so two adjacent
 /// cells are separated by exactly one window gap.
