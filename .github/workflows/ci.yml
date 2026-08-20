@@ -158,9 +158,10 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
-      # Keep PR CI fast: a debug build is enough to prove it compiles. Release
-      # bundling belongs to release.yml, which builds every tag from scratch —
-      # repeating it here would double the wall-clock time of every tag push for
-      # an artifact nothing consumes.
+      # A debug build is enough to prove the workspace compiles. There used to
+      # be a release build here guarded on `refs/tags/`, but this workflow only
+      # triggers on pushes to main, pull requests and manual dispatch — a tag
+      # push matches none of those, so that step could never run. Release
+      # bundling belongs to release.yml, which builds every tag from scratch.
       - name: Build (debug)
         run: cargo build --workspace
