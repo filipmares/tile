@@ -516,9 +516,28 @@ jobs:
           ARTIFACTS: ${{ steps.build.outputs.artifactPaths }}
         run: |
           set -euo pipefail
+          # The same two hazards the upload step below guards against, for the
+          # same reasons: jq on the Windows runner is a native build that writes
+          # CRLF, so each path arrives with a \r welded to it, and tauri-action
+          # can report directory bundles that are not attestable subjects. A CR
+          # here would be silently baked into the attested subject name.
+          paths=()
+          while IFS= read -r path; do
+            path="${path%$'\r'}"
+            if [ -z "$path" ] || [ -d "$path" ]; then
+              continue
+            fi
+            paths+=("$path")
+          done < <(echo "$ARTIFACTS" | jq -r '.[]')
+
+          if [ ${#paths[@]} -eq 0 ]; then
+            echo "::error::No files to attest in: $ARTIFACTS"
+            exit 1
+          fi
+          printf 'Attesting: %s\n' "${paths[@]}"
           {
             echo 'paths<<ARTIFACT_PATHS_EOF'
-            echo "$ARTIFACTS" | jq -r '.[]'
+            printf '%s\n' "${paths[@]}"
             echo 'ARTIFACT_PATHS_EOF'
           } >> "$GITHUB_OUTPUT"
 
