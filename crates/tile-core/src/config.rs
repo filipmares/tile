@@ -234,8 +234,51 @@ fn normalize_fraction(value: f64) -> f64 {
     }
 }
 
+/// The default step, in the backend's own unit, for one press of an
+/// incremental resize or move. Mirrors Rectangle's `sizeOffset` and
+/// `widthStepSize`, both of which behave as 30 out of the box.
+///
+/// The unit is deliberately whatever the backend reports — physical pixels on
+/// Windows, points on macOS — for the same reason the rest of the crate never
+/// converts between the two. A 30-unit nudge is therefore physically smaller
+/// on a high-DPI Windows display than on a Retina Mac, which is the same
+/// trade-off Rectangle makes and is easily retuned in the config.
+fn default_step() -> f64 {
+    30.0
+}
+
+/// The smallest fraction of the work area an incremental resize may shrink a
+/// window to. Matches Rectangle's `minimumWindowWidth`/`minimumWindowHeight`.
+fn default_minimum_fraction() -> f64 {
+    0.25
+}
+
+/// Upper bound for a resize or move step, so a typo cannot make every press
+/// throw the window across the screen.
+pub const MAX_STEP: f64 = 1000.0;
+
+/// Clamps a step into `[1, MAX_STEP]`, mapping non-finite or non-positive
+/// values to the default. A zero step would make the action a silent no-op.
+fn normalize_step(value: f64) -> f64 {
+    if !value.is_finite() || value < 1.0 {
+        default_step()
+    } else {
+        value.min(MAX_STEP)
+    }
+}
+
+/// Clamps a minimum-size fraction into `(0, 1]`, falling back to the default.
+fn normalize_minimum_fraction(value: f64) -> f64 {
+    if value.is_finite() && value > 0.0 && value <= 1.0 {
+        value
+    } else {
+        default_minimum_fraction()
+    }
+}
+
 /// Fractions controlling the size-variant actions that resize a window rather
-/// than tile it into the grid.
+/// than tile it into the grid, plus the step sizes and floor used by the
+/// incremental resize and move actions.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SizeOptions {
     /// [`WindowAction::AlmostMaximize`] width as a fraction of the work area,
@@ -244,6 +287,21 @@ pub struct SizeOptions {
     /// [`WindowAction::AlmostMaximize`] height as a fraction of the work area,
     /// in `(0, 1]`.
     pub almost_maximize_height: f64,
+    /// How much one `Larger`/`Smaller` press changes a window by, in the
+    /// backend's own unit. Rectangle's `sizeOffset`.
+    pub size_step: f64,
+    /// How much one `LargerWidth`/`SmallerWidth` press changes a window's
+    /// width by. Rectangle's `widthStepSize`.
+    pub width_step: f64,
+    /// How far one `MoveLeft`/`MoveRight`/`MoveUp`/`MoveDown` press slides a
+    /// window. Tile-specific; see [`WindowAction::MoveLeft`].
+    pub move_step: f64,
+    /// Smallest width an incremental resize may leave, as a fraction of the
+    /// work area.
+    pub minimum_width: f64,
+    /// Smallest height an incremental resize may leave, as a fraction of the
+    /// work area.
+    pub minimum_height: f64,
 }
 
 impl Default for SizeOptions {
@@ -251,6 +309,11 @@ impl Default for SizeOptions {
         Self {
             almost_maximize_width: default_almost_maximize_fraction(),
             almost_maximize_height: default_almost_maximize_fraction(),
+            size_step: default_step(),
+            width_step: default_step(),
+            move_step: default_step(),
+            minimum_width: default_minimum_fraction(),
+            minimum_height: default_minimum_fraction(),
         }
     }
 }
@@ -258,18 +321,21 @@ impl Default for SizeOptions {
 /// What a *repeated* press of an already-satisfied action does.
 ///
 /// This mirrors Rectangle's `subsequentExecutionMode`. Rectangle offers six
-/// values; Tile ships the two that need no multi-display support:
+/// values; Tile ships the two that keep a repeat on the current display:
 ///
 /// * [`SubsequentExecutionMode::CycleSizes`] — Rectangle's `resize`, the
 ///   default there and here: the window cycles through [`Config::cycle_sizes`].
 /// * [`SubsequentExecutionMode::DoNothing`] — Rectangle's `none`: a repeat is
 ///   a no-op, which is what Tile did before cycling existed.
 ///
-/// Rectangle's remaining values (`acrossMonitor`, `acrossAndResize`,
-/// `cycleMonitor`) all move the window to another display. This enum is the
-/// seam where they will land once multi-display support arrives; nothing else
-/// needs to change to add them, because [`crate::Engine::plan`] already
-/// branches on this value before it computes any geometry.
+/// Rectangle's remaining values all move the window to another display on a
+/// repeat. Tile deliberately does not: moving between displays is bound to
+/// [`WindowAction::NextDisplay`] and [`WindowAction::PreviousDisplay`] on
+/// their own shortcut instead, which leaves the unmodified arrows free to
+/// cycle. That matters because the thirds and two-thirds ship unbound, so
+/// cycling is the only way to reach them — a repeat that wandered off to
+/// another display would strand every size except the half for anyone with
+/// more than one monitor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SubsequentExecutionMode {
@@ -445,6 +511,26 @@ pub struct Config {
     /// [`WindowAction::AlmostMaximize`] height as a fraction of the work area.
     #[serde(default = "default_almost_maximize_fraction")]
     pub almost_maximize_height: f64,
+    /// How much one [`WindowAction::Larger`] or [`WindowAction::Smaller`]
+    /// press changes a window by. Rectangle's `sizeOffset`.
+    #[serde(default = "default_step")]
+    pub size_step: f64,
+    /// How much one [`WindowAction::LargerWidth`] or
+    /// [`WindowAction::SmallerWidth`] press changes a window's width by.
+    /// Rectangle's `widthStepSize`.
+    #[serde(default = "default_step")]
+    pub width_step: f64,
+    /// How far one [`WindowAction::MoveLeft`] and friends slide a window.
+    #[serde(default = "default_step")]
+    pub move_step: f64,
+    /// Smallest width an incremental resize may leave, as a fraction of the
+    /// work area. Rectangle's `minimumWindowWidth`.
+    #[serde(default = "default_minimum_fraction")]
+    pub minimum_window_width: f64,
+    /// Smallest height an incremental resize may leave, as a fraction of the
+    /// work area. Rectangle's `minimumWindowHeight`.
+    #[serde(default = "default_minimum_fraction")]
+    pub minimum_window_height: f64,
     /// What a repeated press of an already-satisfied action does.
     #[serde(default)]
     pub subsequent_execution_mode: SubsequentExecutionMode,
@@ -467,6 +553,11 @@ impl Default for Config {
             show_tray_icon: default_true(),
             almost_maximize_width: default_almost_maximize_fraction(),
             almost_maximize_height: default_almost_maximize_fraction(),
+            size_step: default_step(),
+            width_step: default_step(),
+            move_step: default_step(),
+            minimum_window_width: default_minimum_fraction(),
+            minimum_window_height: default_minimum_fraction(),
             subsequent_execution_mode: SubsequentExecutionMode::default(),
             cycle_sizes: default_cycle_sizes(),
         }
@@ -495,6 +586,11 @@ impl Config {
         self.gaps.normalize();
         self.almost_maximize_width = normalize_fraction(self.almost_maximize_width);
         self.almost_maximize_height = normalize_fraction(self.almost_maximize_height);
+        self.size_step = normalize_step(self.size_step);
+        self.width_step = normalize_step(self.width_step);
+        self.move_step = normalize_step(self.move_step);
+        self.minimum_window_width = normalize_minimum_fraction(self.minimum_window_width);
+        self.minimum_window_height = normalize_minimum_fraction(self.minimum_window_height);
         self.normalize_cycle_sizes();
     }
 
@@ -523,6 +619,11 @@ impl Config {
         SizeOptions {
             almost_maximize_width: self.almost_maximize_width,
             almost_maximize_height: self.almost_maximize_height,
+            size_step: self.size_step,
+            width_step: self.width_step,
+            move_step: self.move_step,
+            minimum_width: self.minimum_window_width,
+            minimum_height: self.minimum_window_height,
         }
     }
 
@@ -583,27 +684,29 @@ pub const MAX_GAP: f64 = 200.0;
 /// macOS uses `Control+Option`, matching Rectangle's alternate ("Magnet")
 /// default set, which is also what Tile has always shipped.
 ///
-/// Windows deliberately uses `Win+Alt` rather than `Ctrl+Alt`, even though
-/// `Ctrl+Alt` would mirror macOS exactly. **Windows treats `Ctrl+Alt` as
-/// `AltGr`**: on many international layouts `AltGr`+key produces characters
-/// such as `@ € { } [ ] \ ~`. Because the Windows backend swallows any
-/// keystroke it matches, binding `Ctrl+Alt`+letter would make those characters
-/// impossible to type — a German user could not type `@`.
+/// Windows uses `Win` alone. `Ctrl+Alt` would mirror macOS exactly, but
+/// **Windows treats `Ctrl+Alt` as `AltGr`**: on many international layouts
+/// `AltGr`+key produces characters such as `@ € { } [ ] \ ~`. Because the
+/// Windows backend swallows any keystroke it matches, binding `Ctrl+Alt`+letter
+/// would make those characters impossible to type — a German user could not
+/// type `@`.
 #[cfg(target_os = "macos")]
 const BASE_MODIFIERS: Modifiers = Modifiers(Modifiers::CONTROL.0 | Modifiers::ALT.0);
 #[cfg(not(target_os = "macos"))]
-const BASE_MODIFIERS: Modifiers = Modifiers(Modifiers::META.0 | Modifiers::ALT.0);
+const BASE_MODIFIERS: Modifiers = Modifiers::META;
 
 /// Default key bindings.
 ///
 /// **Every default sits on the same base modifier**, so the two platforms
 /// differ in exactly one thing: what that modifier is. `Control+Option` on
-/// macOS, `Win+Alt` on Windows. Nothing else varies, so a user with a Mac and
-/// a PC learns one set of shortcuts.
+/// macOS, `Win` on Windows. Nothing else varies, so a user with a Mac and a
+/// PC learns one set of shortcuts.
 ///
-/// The defaults are four arrows and nothing else. `Left` and `Right` place the
-/// window and carry the whole size catalogue by cycling; `Up` and `Down` are
-/// the "bigger / undo" axis:
+/// The defaults are the four arrows, plus Shift on Left/Right to throw the
+/// window to the adjacent display. `Left` and `Right` place the window and
+/// carry the whole size catalogue by cycling; `Up` and `Down` are the
+/// "bigger / undo" axis; Shift+Left/Right keep the current slot and walk
+/// screens:
 ///
 /// ```text
 ///   Left   ½ → ⅔ → ⅓ → …   anchored left
@@ -612,11 +715,12 @@ const BASE_MODIFIERS: Modifiers = Modifiers(Modifiers::META.0 | Modifiers::ALT.0
 ///   Down   restore
 /// ```
 ///
-/// **No default sits on a letter**, none needs `Enter` or `Backspace`, and
-/// none adds a second modifier: the whole set is the base modifier plus one
-/// arrow. Center, the corners, maximize-height and the centred column are all
-/// in the catalogue but ship unbound, because every letter within reach is a
-/// left-hand key and the modifier is already a left-hand hold.
+/// **No default sits on a letter**, none needs `Enter` or `Backspace`. The
+/// only extra modifier is `Shift` on the horizontal arrows, which throws
+/// rather than cycling size. Center, the corners, maximize-height and the
+/// centred column are all in the catalogue but ship unbound, because every
+/// letter within reach is a left-hand key and the modifier is already a
+/// left-hand hold.
 ///
 /// # Why the arrows, and not letters
 ///
@@ -642,19 +746,18 @@ const BASE_MODIFIERS: Modifiers = Modifiers(Modifiers::META.0 | Modifiers::ALT.0
 /// its full cycling behaviour — including the backwards step through
 /// [`WindowAction::cycle_anchor`] — for anyone who binds it.
 ///
-/// # Why Windows does not use `Win+Arrow`
+/// # Why Windows uses `Win+Arrow`
 ///
-/// It used to. Moving the halves onto `Win+Alt` with everything else means
-/// Aero Snap keeps working, so users who want the native behaviour still have
-/// it and Tile's richer actions live entirely in its own namespace.
+/// `Win+Arrow` is Aero Snap — the shell combination people already reach for
+/// to tile a window. Tile's hook exists so it can claim those keys; swallowing
+/// them replaces Aero Snap with Tile's cycle (half → two thirds → third) on
+/// the same four arrows. `Win+Shift+Arrow` (move between monitors) and
+/// `Win+Ctrl+Left/Right` (virtual desktops) stay unbound, so those OS
+/// shortcuts keep working.
 ///
-/// It is worth knowing that **no two-modifier arrow combination is unclaimed
-/// on Windows**: `Win+Arrow` is Aero Snap, `Win+Alt+Arrow` is Windows 11's
-/// snap variants, `Win+Shift+Arrow` moves between monitors and
-/// `Win+Ctrl+Left/Right` switches virtual desktop. Tile therefore preempts
-/// *something* whichever it picks. `Win+Alt` is the best of them: it is the
-/// least used, and the keyboard hook takes it cleanly because the owner
-/// registers through `RegisterHotKey`, which the hook runs ahead of.
+/// `Win+Alt+Arrow` is the previous default. It left Aero Snap alone, but it
+/// is also Windows 11's snap variants and costs an extra modifier for no
+/// extra reach: the defaults are still just the four arrows.
 ///
 /// # Keys Xbox Game Bar reserves
 ///
@@ -715,6 +818,18 @@ pub fn default_bindings() -> BTreeMap<WindowAction, Option<Hotkey>> {
         Some(Hotkey::new(base, KeyCode::Down)),
     );
 
+    // Shift on the same arrows throws to the adjacent display, keeping the
+    // current slot. Size cycling stays on the unmodified arrows.
+    let throw = base.union(Modifiers::SHIFT);
+    map.insert(
+        WindowAction::PreviousDisplay,
+        Some(Hotkey::new(throw, KeyCode::Left)),
+    );
+    map.insert(
+        WindowAction::NextDisplay,
+        Some(Hotkey::new(throw, KeyCode::Right)),
+    );
+
     map
 }
 
@@ -724,17 +839,18 @@ mod tests {
 
     /// The actions that ship with a default binding.
     ///
-    /// Four arrows, and nothing else at all. The horizontal pair places the
-    /// window and cycles its width; the vertical pair maximizes and undoes.
+    /// Four arrows for tiling, plus Shift+Left/Right for display throws.
     /// Every other action — center, the corners, maximize-height, the centred
     /// column and the explicitly-sized thirds and two-thirds — ships unbound:
-    /// every letter within reach is a left-hand key, the modifier is already a
-    /// left-hand hold, and a second modifier defeats the point.
-    const CORE_BOUND: [WindowAction; 4] = [
+    /// every letter within reach is a left-hand key and the modifier is
+    /// already a left-hand hold.
+    const CORE_BOUND: [WindowAction; 6] = [
         WindowAction::LeftHalf,
         WindowAction::RightHalf,
         WindowAction::Maximize,
         WindowAction::Restore,
+        WindowAction::PreviousDisplay,
+        WindowAction::NextDisplay,
     ];
 
     /// Both horizontal arrows must cycle, because that is the only way the
@@ -825,6 +941,19 @@ mod tests {
             );
         }
 
+        let throw = BASE_MODIFIERS.union(Modifiers::SHIFT);
+        for (action, key) in [
+            (WindowAction::PreviousDisplay, KeyCode::Left),
+            (WindowAction::NextDisplay, KeyCode::Right),
+        ] {
+            let hotkey = config.binding(action).expect("display throw must be bound");
+            assert_eq!(hotkey.key, key, "{action} lost its throw key");
+            assert_eq!(
+                hotkey.modifiers, throw,
+                "{action} should be the base modifier plus Shift"
+            );
+        }
+
         // Nothing else ships bound: the vertical halves, center, the corners
         // and the centred column are all catalogue-only.
         for action in [
@@ -871,13 +1000,59 @@ mod tests {
             );
         }
 
-        // Nothing needs a second modifier: every default is the base modifier
-        // plus one arrow.
+        let throw = BASE_MODIFIERS.union(Modifiers::SHIFT);
+        for (action, key) in [
+            (WindowAction::PreviousDisplay, KeyCode::Left),
+            (WindowAction::NextDisplay, KeyCode::Right),
+        ] {
+            let hotkey = config.binding(action).expect("display throw must be bound");
+            assert_eq!(hotkey.key, key);
+            assert_eq!(hotkey.modifiers, throw);
+        }
+
         for (hotkey, action) in config.active_bindings() {
+            let expected = if action.moves_display() {
+                throw
+            } else {
+                BASE_MODIFIERS
+            };
             assert_eq!(
-                hotkey.modifiers, BASE_MODIFIERS,
-                "{action} adds a modifier beyond the base ({hotkey})"
+                hotkey.modifiers, expected,
+                "{action} has unexpected modifiers ({hotkey})"
             );
+        }
+    }
+
+    /// Windows defaults are `Win` plus an arrow, not `Win+Alt`. Pin that so a
+    /// well-meaning "leave Aero Snap alone" edit cannot silently restore the
+    /// extra modifier.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn windows_defaults_use_win_without_alt() {
+        assert_eq!(BASE_MODIFIERS, Modifiers::META);
+        let config = Config::default();
+        for (hotkey, action) in config.active_bindings() {
+            assert!(
+                hotkey.modifiers.contains(Modifiers::META),
+                "{action} is {hotkey}, expected Win"
+            );
+            assert!(
+                !hotkey.modifiers.contains(Modifiers::ALT),
+                "{action} is {hotkey}, Win+Alt is no longer the default"
+            );
+            if action.moves_display() {
+                assert_eq!(
+                    hotkey.modifiers,
+                    Modifiers::META | Modifiers::SHIFT,
+                    "{action} is {hotkey}, expected Win+Shift"
+                );
+            } else {
+                assert_eq!(
+                    hotkey.modifiers,
+                    Modifiers::META,
+                    "{action} is {hotkey}, expected Win alone"
+                );
+            }
         }
     }
 
@@ -926,9 +1101,8 @@ mod tests {
         ];
 
         let config = Config::default();
-        let win_alt = Modifiers::META | Modifiers::ALT;
         for (hotkey, action) in config.active_bindings() {
-            if hotkey.modifiers != win_alt {
+            if !hotkey.modifiers.contains(Modifiers::META) {
                 continue;
             }
             assert!(
@@ -1113,6 +1287,12 @@ mod tests {
             SubsequentExecutionMode::CycleSizes
         );
         assert_eq!(config.cycle_sizes(), Config::default().cycle_sizes());
+        // The incremental resize and move steps arrive at their defaults too.
+        assert_eq!(config.size_step, 30.0);
+        assert_eq!(config.width_step, 30.0);
+        assert_eq!(config.move_step, 30.0);
+        assert_eq!(config.minimum_window_width, 0.25);
+        assert_eq!(config.minimum_window_height, 0.25);
     }
 
     #[test]
@@ -1130,21 +1310,80 @@ mod tests {
 
     #[test]
     fn unknown_cycling_values_fall_back_instead_of_failing_the_load() {
-        // A config written by a future build that grew a "next-display" mode
+        // A config written by a future build that grew a "cycle-monitor" mode
         // and a size this build does not know about.
         let json = r#"{
-            "subsequentExecutionMode": "next-display",
+            "subsequentExecutionMode": "cycle-monitor",
             "cycleSizes": ["one-half", "one-fifth", "two-thirds"]
         }"#;
         let config = Config::from_json(json).unwrap();
         assert_eq!(
             config.subsequent_execution_mode,
-            SubsequentExecutionMode::CycleSizes
+            SubsequentExecutionMode::default()
         );
         assert_eq!(
             config.cycle_sizes(),
             [CycleSize::OneHalf, CycleSize::TwoThirds]
         );
+    }
+
+    #[test]
+    fn step_settings_round_trip_and_normalize() {
+        let config = Config {
+            size_step: 45.0,
+            width_step: 90.0,
+            move_step: 12.0,
+            minimum_window_width: 0.1,
+            minimum_window_height: 0.4,
+            ..Default::default()
+        };
+        let json = config.to_json().unwrap();
+        assert!(json.contains(r#""sizeStep": 45.0"#));
+        assert_eq!(Config::from_json(&json).unwrap(), config);
+
+        // Nonsense values fall back to the defaults rather than making an
+        // action a silent no-op or shrinking a window away.
+        let json = r#"{
+            "sizeStep": 0,
+            "widthStep": -5,
+            "moveStep": 100000,
+            "minimumWindowWidth": 2,
+            "minimumWindowHeight": -1
+        }"#;
+        let config = Config::from_json(json).unwrap();
+        assert_eq!(config.size_step, 30.0);
+        assert_eq!(config.width_step, 30.0);
+        assert_eq!(config.move_step, MAX_STEP);
+        assert_eq!(config.minimum_window_width, 0.25);
+        assert_eq!(config.minimum_window_height, 0.25);
+    }
+
+    #[test]
+    fn size_options_carry_the_persisted_steps() {
+        let config = Config {
+            size_step: 15.0,
+            move_step: 25.0,
+            ..Default::default()
+        };
+        let options = config.size_options();
+        assert_eq!(options.size_step, 15.0);
+        assert_eq!(options.move_step, 25.0);
+        assert_eq!(options.minimum_width, 0.25);
+    }
+
+    #[test]
+    fn every_subsequent_execution_mode_round_trips() {
+        for mode in [
+            SubsequentExecutionMode::CycleSizes,
+            SubsequentExecutionMode::DoNothing,
+        ] {
+            let config = Config {
+                subsequent_execution_mode: mode,
+                ..Default::default()
+            };
+            let parsed = Config::from_json(&config.to_json().unwrap()).unwrap();
+            assert_eq!(parsed.subsequent_execution_mode, mode, "{}", mode.id());
+        }
     }
 
     #[test]

@@ -8,11 +8,12 @@ app — built from scratch in Rust so the same window-tiling ergonomics work on
 both macOS **and** Windows. Snap the focused window to halves and thirds of the
 screen, maximize it, or undo the last move — all from the arrow keys.
 
-> **Status: early days.** Tile implements 52 window actions — halves, thirds,
+> **Status: early days.** Tile implements 76 window actions — halves, thirds,
 > two-thirds, fourths, corner thirds, sixths, ninths, corners, maximize,
-> maximize-height, almost-maximize, center and restore — but only four ship
-> bound to keys, with a settings UI and a tray/menu-bar icon for the rest.
-> Multi-monitor throws, per-app rules and drag-snapping are not built yet. This
+> maximize-height, almost-maximize, center, restore, display throws, and
+> incremental move, resize and halve/double — but only six ship bound to keys,
+> with a settings UI and a tray/menu-bar icon for the rest. Per-app rules and
+> drag-snapping are not built yet. This
 > README documents only what actually works today.
 
 ## Default keyboard shortcuts
@@ -21,7 +22,7 @@ Every shortcut is the same on both platforms. Only the modifier you hold
 differs:
 
 - **macOS** — `Control` + `Option`
-- **Windows** — `Win` + `Alt`
+- **Windows** — `Win`
 
 Hold that, then press:
 
@@ -30,11 +31,12 @@ Hold that, then press:
 | `←` `→` | **Left / right** — half, then two thirds, then a third (see below) |
 | `↑` | Maximize |
 | `↓` | Restore to the window's previous position |
+| `Shift`+`←` `→` | **Previous / next display** — same slot, adjacent monitor |
 
-That is the whole default set — **four arrows and nothing else.** No letters, no
-`Return`, no `Backspace`, and never a second modifier. The arrows sit under your
-right hand while the modifier is held with your left, which matters on a MacBook
-because there is no right `Control` key.
+That is the whole default set — **four arrows, plus Shift to change display.**
+No letters, no `Return`, no `Backspace`. The arrows sit under your right hand
+while the modifier is held with your left, which matters on a MacBook because
+there is no right `Control` key.
 
 The horizontal pair places the window and carries every size, because repeating
 an arrow cycles its width:
@@ -49,8 +51,10 @@ window back where it was.
 
 Everything is rebindable, and the rest of the catalogue — the centered column,
 the explicitly-sized thirds and two-thirds, the corners, center, maximize-height,
-almost-maximize, plus fourths, sixths, ninths, corner thirds and the top/bottom
-halves — ships unbound, reachable from the tray menu or a binding of your own.
+almost-maximize, plus fourths, sixths, ninths, corner thirds, the top/bottom
+halves, the incremental move/resize/halve-double families and the
+named-display moves — ships unbound, reachable from the tray menu or a binding
+of your own.
 
 ### Press it again to change the size
 
@@ -69,18 +73,55 @@ The cycle restarts whenever you run a different action, switch to another
 window, or move the window yourself, and `↓` always restores the window
 to where it was **before** Tile first touched it, however long you cycled for.
 
-### Windows: why not `Win`+Arrow?
+### Reaching a display by name
 
-Because leaving it alone means **Aero Snap keeps working**. Users who want the
-native snapping still have it, and Tile's richer actions live entirely in their
-own namespace.
+`Shift`+`←`/`→` steps to the adjacent display and wraps around the ends. When
+you would rather name the monitor outright, **First** through **Fourth
+Display** are also available, unbound by default.
 
-Worth knowing: no two-modifier arrow combination is unclaimed on Windows.
-`Win`+Arrow is Aero Snap, `Win`+`Alt`+Arrow is Windows 11's snap variants,
-`Win`+`Shift`+Arrow moves between monitors, and `Win`+`Ctrl`+`←`/`→` switches
-virtual desktop. Tile preempts *something* whichever it picks. `Win`+`Alt` is
-the least-used of them, and Tile's keyboard hook takes it cleanly because the
-owner registers through `RegisterHotKey`, which the hook runs ahead of.
+They count in the same geometric order as the arrows — left to right by
+position, then top to bottom — so "second display" means the same monitor every
+time, whatever order Windows or macOS happened to enumerate them in, and
+whatever the window is doing now. Naming a display that is not plugged in does
+nothing.
+
+Both kinds of throw keep the window's slot where they can: a left third stays a
+left third on arrival. A window that is not in a recognisable slot keeps its
+**relative** place instead, so something filling the right half of a 4K panel
+fills the right half of a 1080p one rather than hanging off its edge. That holds
+across mixed-DPI desks, because the placement is computed as fractions of each
+display's own work area rather than by scaling pixels.
+
+### Nudging, resizing, halving and doubling
+
+Also available, all unbound by default:
+
+| Family | Actions |
+| ------ | ------- |
+| **Move** | Slide the window one step left, right, up or down, stopping flush against the screen edge |
+| **Resize** | Larger / smaller, or just the width or just the height |
+| **Halve & Double** | Halve or double the width or height, keeping the named edge |
+
+Resizing anchors to whichever screen edge the window is already flush against,
+so a window in the right half grows leftwards instead of being pushed off the
+screen; a floating window resizes around its centre. Nothing can be nudged off
+the screen, and nothing shrinks below a quarter of the work area.
+
+The step sizes (`sizeStep`, `widthStep` and `moveStep`, each defaulting to 30)
+and the floor (`minimumWindowWidth`, `minimumWindowHeight`, defaulting to 0.25)
+live in `config.json`; there is no settings UI for them yet.
+
+### Windows: why `Win`+Arrow?
+
+Because that is Aero Snap — the keys people already use to tile a window. Tile's
+keyboard hook claims them and replaces Aero Snap with Tile's cycle (half → two
+thirds → third) on the same four arrows. `Win`+`Shift`+Arrow is Tile's display throw
+(same slot, next/previous monitor), which **replaces** Windows' own
+move-between-monitors shortcut. `Win`+`Ctrl`+`←`/`→` (virtual desktops) stays
+unbound, so those OS shortcuts keep working.
+
+`Win`+`Alt`+Arrow was the previous default. It left Aero Snap alone, but it is
+also Windows 11's snap variants and costs an extra modifier for no extra reach.
 
 ### Windows: why not `Ctrl`+`Alt` to match macOS exactly?
 
@@ -145,11 +186,11 @@ than compatibility with a different app on one of them.
 
 On Windows, Tile installs a **low-level keyboard hook** (`WH_KEYBOARD_LL`)
 rather than registering its shortcuts with the OS. That is what lets it claim
-combinations the shell already owns — `Win`+`Alt`+Arrow belongs to Windows 11's
-snap variants, for instance. This means:
+combinations the shell already owns — `Win`+Arrow is Aero Snap, for instance.
+This means:
 
 - Tile's shortcuts take precedence over the OS's for the combinations it binds.
-  `Win`+Arrow is deliberately left alone, so **Aero Snap keeps working**.
+  The default `Win`+Arrow set **replaces Aero Snap**.
 - The hook **cannot see input directed at windows owned by elevated
   (administrator) processes** unless Tile itself is running as administrator. If
   a shortcut seems to do nothing over an elevated app, that's why.
@@ -274,7 +315,7 @@ cargo run --example live_hotkey -p tile-platform
 ```
 
 To test the shortcuts end to end, build and start the app, open a window you
-do not mind moving, and press <kbd>Win</kbd>+<kbd>Alt</kbd>+<kbd>←</kbd>. Note
+do not mind moving, and press <kbd>Win</kbd>+<kbd>←</kbd>. Note
 that the keyboard hook cannot see input aimed at windows owned by elevated
 processes unless Tile is itself running as administrator.
 
