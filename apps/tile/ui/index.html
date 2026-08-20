@@ -4,14 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Tile Settings</title>
+    <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
     <main class="app" id="app">
-      <header class="app__header">
-        <h1>Tile</h1>
-        <p class="app__subtitle">Keyboard-driven window management</p>
-      </header>
-
       <section
         id="permission-panel"
         class="panel panel--warning"
@@ -36,114 +32,150 @@
         </p>
       </section>
 
-      <section class="section" aria-labelledby="bindings-heading">
-        <h2 id="bindings-heading">Shortcuts</h2>
-        <p class="section__hint" id="recording-status" aria-live="assertive"></p>
-        <ul class="bindings" id="bindings"></ul>
+      <section class="section" aria-labelledby="behaviour-heading">
+        <div class="section__header">
+          <div>
+            <h2 id="behaviour-heading">Behaviour</h2>
+            <p class="section__description">
+              Fine-tune spacing and what happens when you repeat a shortcut.
+            </p>
+          </div>
+        </div>
+
+        <details class="settings-group">
+          <summary class="settings-group__summary">Window spacing</summary>
+          <div class="settings-group__content">
+          <div class="field">
+            <label class="field__label" for="gap-window">Gap between windows</label>
+            <div class="field__control">
+              <input type="range" id="gap-window" min="0" max="200" step="1" />
+              <input
+                type="number"
+                id="gap-window-number"
+                min="0"
+                max="200"
+                step="1"
+                aria-label="Gap between windows in pixels"
+              />
+              <span class="field__unit">px</span>
+            </div>
+          </div>
+
+          <fieldset class="field field--group">
+            <legend class="field__label">Screen-edge gaps</legend>
+            <div class="field__grid">
+              <label class="field__sub" for="gap-edge-top">Top</label>
+              <input
+                type="number"
+                id="gap-edge-top"
+                class="field__num"
+                min="0"
+                max="200"
+                step="1"
+                aria-label="Top screen-edge gap in pixels"
+              />
+              <label class="field__sub" for="gap-edge-bottom">Bottom</label>
+              <input
+                type="number"
+                id="gap-edge-bottom"
+                class="field__num"
+                min="0"
+                max="200"
+                step="1"
+                aria-label="Bottom screen-edge gap in pixels"
+              />
+              <label class="field__sub" for="gap-edge-left">Left</label>
+              <input
+                type="number"
+                id="gap-edge-left"
+                class="field__num"
+                min="0"
+                max="200"
+                step="1"
+                aria-label="Left screen-edge gap in pixels"
+              />
+              <label class="field__sub" for="gap-edge-right">Right</label>
+              <input
+                type="number"
+                id="gap-edge-right"
+                class="field__num"
+                min="0"
+                max="200"
+                step="1"
+                aria-label="Right screen-edge gap in pixels"
+              />
+            </div>
+          </fieldset>
+
+          <label class="field field--inline">
+            <input type="checkbox" id="gap-skip-top" name="gap-skip-top" />
+            <span class="field__label">Remove gap on the top screen edge</span>
+          </label>
+
+          <label class="field field--inline">
+            <input type="checkbox" id="gap-main-only" name="gap-main-only" />
+            <span class="field__label">Apply screen-edge gaps on the main display only</span>
+          </label>
+          </div>
+        </details>
+
+        <details class="settings-group">
+          <summary class="settings-group__summary">Repeating shortcuts</summary>
+          <div class="settings-group__content">
+          <div class="field">
+            <label class="field__label" for="subsequent-mode">
+              Repeating a shortcut
+            </label>
+            <div class="field__control">
+              <select id="subsequent-mode">
+                <option value="cycle-sizes">Cycles through sizes</option>
+                <option value="do-nothing">Does nothing</option>
+              </select>
+            </div>
+          </div>
+
+          <fieldset class="field field--group" id="cycle-sizes">
+            <legend class="field__label">Sizes to cycle through</legend>
+            <div class="field__grid" id="cycle-sizes-grid"></div>
+          </fieldset>
+          </div>
+        </details>
+
+        <div class="settings-group settings-group--last">
+          <h3 class="settings-group__title">Startup</h3>
+          <label class="field field--inline">
+            <input type="checkbox" id="launch-on-login" name="launch-on-login" />
+            <span class="field__label">Launch Tile at login</span>
+          </label>
+        </div>
       </section>
 
-      <section class="section" aria-labelledby="behaviour-heading">
-        <h2 id="behaviour-heading">Behaviour</h2>
-
-        <div class="field">
-          <label class="field__label" for="gap-window">Gap between windows</label>
-          <div class="field__control">
-            <input type="range" id="gap-window" min="0" max="200" step="1" />
-            <input
-              type="number"
-              id="gap-window-number"
-              min="0"
-              max="200"
-              step="1"
-              aria-label="Gap between windows in pixels"
-            />
-            <span class="field__unit">px</span>
+      <section class="section" aria-labelledby="bindings-heading">
+        <div class="section__header">
+          <div>
+            <h2 id="bindings-heading">Shortcuts</h2>
+            <p class="section__description">
+              Customize the keys Tile uses to move and resize windows.
+            </p>
           </div>
         </div>
+        <p class="section__hint" id="recording-status" aria-live="assertive"></p>
 
-        <fieldset class="field field--group">
-          <legend class="field__label">Screen-edge gaps</legend>
-          <div class="field__grid">
-            <label class="field__sub" for="gap-edge-top">Top</label>
-            <input
-              type="number"
-              id="gap-edge-top"
-              class="field__num"
-              min="0"
-              max="200"
-              step="1"
-              aria-label="Top screen-edge gap in pixels"
-            />
-            <label class="field__sub" for="gap-edge-bottom">Bottom</label>
-            <input
-              type="number"
-              id="gap-edge-bottom"
-              class="field__num"
-              min="0"
-              max="200"
-              step="1"
-              aria-label="Bottom screen-edge gap in pixels"
-            />
-            <label class="field__sub" for="gap-edge-left">Left</label>
-            <input
-              type="number"
-              id="gap-edge-left"
-              class="field__num"
-              min="0"
-              max="200"
-              step="1"
-              aria-label="Left screen-edge gap in pixels"
-            />
-            <label class="field__sub" for="gap-edge-right">Right</label>
-            <input
-              type="number"
-              id="gap-edge-right"
-              class="field__num"
-              min="0"
-              max="200"
-              step="1"
-              aria-label="Right screen-edge gap in pixels"
-            />
-          </div>
-        </fieldset>
-
-        <div class="field field--inline">
-          <input type="checkbox" id="gap-skip-top" name="gap-skip-top" />
-          <label class="field__label" for="gap-skip-top">
-            Remove gap on the top screen edge
-          </label>
+        <div class="shortcut-subsection">
+          <h3 class="shortcut-subsection__title">Active shortcuts</h3>
+          <p class="shortcut-subsection__description">
+            Your currently assigned shortcuts.
+          </p>
+          <ul class="bindings bindings--active" id="assigned-bindings"></ul>
         </div>
 
-        <div class="field field--inline">
-          <input type="checkbox" id="gap-main-only" name="gap-main-only" />
-          <label class="field__label" for="gap-main-only">
-            Apply screen-edge gaps on the main display only
-          </label>
-        </div>
-
-        <div class="field">
-          <label class="field__label" for="subsequent-mode">
-            Repeating a shortcut
-          </label>
-          <div class="field__control">
-            <select id="subsequent-mode">
-              <option value="cycle-sizes">Cycles through sizes</option>
-              <option value="do-nothing">Does nothing</option>
-            </select>
-          </div>
-        </div>
-
-        <fieldset class="field field--group" id="cycle-sizes">
-          <legend class="field__label">Sizes to cycle through</legend>
-          <div class="field__grid" id="cycle-sizes-grid"></div>
-        </fieldset>
-
-        <div class="field field--inline">
-          <input type="checkbox" id="launch-on-login" name="launch-on-login" />
-          <label class="field__label" for="launch-on-login">
-            Launch Tile at login
-          </label>
-        </div>
+        <details class="all-shortcuts" id="all-shortcuts">
+          <summary class="all-shortcuts__summary">
+            <span>All available shortcuts</span>
+            <span class="all-shortcuts__count" id="all-shortcuts-count"></span>
+          </summary>
+          <ul class="bindings" id="bindings"></ul>
+        </details>
       </section>
 
       <footer class="app__footer">
