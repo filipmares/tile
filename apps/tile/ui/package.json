@@ -1,6 +1,6 @@
 {
   "name": "tile-ui",
-  "version": "0.1.1-rc.1",
+  "version": "0.1.1",
   "description": "Settings UI for Tile.",
   "private": true,
   "type": "module",
