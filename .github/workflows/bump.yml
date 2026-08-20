@@ -6,6 +6,12 @@ name: Bump version
 # discovered after the tag has already been pushed — at which point the tag has
 # to be deleted and recreated. This workflow edits all three together and opens
 # a PR, so review happens before the tag exists.
+#
+# Two repository-level facts about the PR this opens, both documented in
+# docs/RELEASING.md: "Allow GitHub Actions to create and approve pull requests"
+# must be enabled for `gh pr create` to succeed, and GitHub raises no workflow
+# events for a PR opened by GITHUB_TOKEN, so CI has to be kicked off by closing
+# and reopening the PR before the required checks can pass.
 on:
   workflow_dispatch:
     inputs:
