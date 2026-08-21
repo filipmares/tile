@@ -6,6 +6,7 @@ import {
   getHotkeyFailures,
   getPermissionStatus,
   resetToDefaults,
+  setAnimation,
   setBinding,
   setCycling,
   setGaps,
@@ -51,6 +52,7 @@ const dom = {
   subsequentMode: el<HTMLSelectElement>("#subsequent-mode"),
   cycleSizes: el<HTMLFieldSetElement>("#cycle-sizes"),
   cycleSizesGrid: el<HTMLDivElement>("#cycle-sizes-grid"),
+  animate: el<HTMLInputElement>("#animate-moves"),
   launch: el<HTMLInputElement>("#launch-on-login"),
   reset: el<HTMLButtonElement>("#reset"),
   permissionPanel: el<HTMLElement>("#permission-panel"),
@@ -299,6 +301,7 @@ function renderBehaviour(): void {
   dom.gapMainOnly.checked = g.mainScreenOnly;
   dom.subsequentMode.value = config.subsequentExecutionMode;
   renderCycleSizes(config);
+  dom.animate.checked = config.animation.enabled;
   dom.launch.checked = config.launchOnLogin;
 }
 
@@ -425,6 +428,17 @@ function wireEvents(): void {
   dom.gapSkipTop.addEventListener("change", () => void commitGaps());
   dom.gapMainOnly.addEventListener("change", () => void commitGaps());
   dom.subsequentMode.addEventListener("change", () => void commitCycling());
+
+  dom.animate.addEventListener("change", async () => {
+    try {
+      config = await setAnimation(dom.animate.checked);
+    } catch (err) {
+      setRecordingStatus(`Could not update animation: ${String(err)}`);
+      // Put the checkbox back where the saved config says it is, so it never
+      // shows a state the app is not actually in.
+      dom.animate.checked = config?.animation.enabled ?? true;
+    }
+  });
 
   dom.launch.addEventListener("change", async () => {
     try {

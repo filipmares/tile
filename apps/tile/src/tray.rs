@@ -13,7 +13,6 @@ use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, Runtime};
 use tile_core::{WindowAction, WindowFamily};
 
-use crate::feedback;
 use crate::state::AppState;
 use crate::window;
 
@@ -83,7 +82,10 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str) {
             app.exit(0);
         }
         other => match WindowAction::from_str(other) {
-            Ok(action) => feedback::run_action(app, action),
+            // Queue rather than run: this callback is on Tauri's main event
+            // loop, and an animated action would hold it for the whole
+            // animation, freezing the tray and the settings window.
+            Ok(action) => app.state::<Arc<AppState>>().enqueue_action(action),
             Err(_) => log::warn!("unknown tray menu id: {other}"),
         },
     }

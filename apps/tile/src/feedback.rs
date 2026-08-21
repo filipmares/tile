@@ -16,9 +16,24 @@ use crate::window;
 
 /// Performs `action`, showing a (rate-limited) dialog only when the OS denies
 /// permission. NoOps and other errors are logged, never surfaced.
-pub fn run_action<R: Runtime>(app: &AppHandle<R>, action: WindowAction) {
+///
+/// `next` is polled once per animation frame and must not block; the hotkey
+/// worker passes a non-blocking receive on its channel, which is what lets a
+/// second press steer a movement already under way instead of queueing behind
+/// it. Callers with no source of further actions pass a closure returning
+/// `None`.
+///
+/// This is the only entry point: the tray no longer calls in directly, because
+/// its callback runs on Tauri's main event loop and an animated action would
+/// hold it for the whole animation. Tray items go through
+/// [`AppState::enqueue_action`] and arrive here on the worker thread.
+pub fn run_action_preemptible<R: Runtime>(
+    app: &AppHandle<R>,
+    action: WindowAction,
+    next: &mut dyn FnMut() -> Option<WindowAction>,
+) {
     let state = app.state::<Arc<AppState>>();
-    match state.perform_action(action) {
+    match state.perform_action_preemptible(action, next) {
         Ok(()) => {}
         Err(err) => {
             log::error!("action {action} failed: {err}");

@@ -13,15 +13,15 @@ use windows::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW,
 };
 use windows::Win32::System::Threading::GetCurrentProcessId;
-use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+use windows::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetClassNameW, GetForegroundWindow, GetShellWindow, GetWindowLongW, GetWindowRect,
     GetWindowThreadProcessId, IsIconic, IsWindowVisible, IsZoomed, SetWindowPos, ShowWindow,
-    GWL_EXSTYLE, GWL_STYLE, MONITORINFOF_PRIMARY, SWP_NOACTIVATE, SWP_NOZORDER, SW_RESTORE,
-    WS_CAPTION, WS_EX_TOOLWINDOW,
+    GWL_EXSTYLE, GWL_STYLE, MONITORINFOF_PRIMARY, SET_WINDOW_POS_FLAGS, SWP_NOACTIVATE,
+    SWP_NOSENDCHANGING, SWP_NOZORDER, SW_RESTORE, WS_CAPTION, WS_EX_TOOLWINDOW,
 };
 
-use crate::{PermissionStatus, PlatformError, Result, WindowBackend};
+use crate::{AnimationSession, PermissionStatus, PlatformError, Result, WindowBackend};
 
 use super::{ensure_dpi_awareness, hwnd_from_id, id_from_hwnd, rect_from_win};
 
@@ -147,38 +147,13 @@ impl WindowBackend for WindowsWindowBackend {
         // SAFETY: `hwnd` came from `id_from_hwnd`; every call below is a plain
         // Win32 query/command on that handle. Individual reasoning inline.
         unsafe {
-            // `SetWindowPos` is a silent no-op on a maximized window and cannot
-            // move a minimized one, so restore to a normal state first. A
-            // minimized window may take a beat to finish restoring, but we read
-            // the true resulting frame back at the end, so we do not depend on
-            // the restore having completed synchronously.
-            if IsZoomed(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
-                let _ = ShowWindow(hwnd, SW_RESTORE);
-            }
+            restore_if_tiled_away(hwnd);
+            let delta = measure_frame_delta(hwnd)?;
 
-            // Compute this window's invisible-border delta fresh: it varies with
-            // window style, and reusing another window's delta lands ~7px off.
-            let outer = window_rect(hwnd)?;
-            let visible = extended_frame(hwnd).unwrap_or(outer);
-            let delta = FrameDelta::between(visible, outer);
-
-            let outer_target = apply_frame_delta(target, delta).rounded();
-
-            // Synchronous (no `SWP_ASYNCWINDOWPOS`) on purpose: we must read the
-            // resulting frame back immediately below, and the async flag would
-            // let `SetWindowPos` return before the move is applied, so the
-            // read-back could observe the old frame. `SWP_NOZORDER` keeps the
-            // stacking order; `SWP_NOACTIVATE` avoids stealing focus.
-            SetWindowPos(
-                hwnd,
-                Some(HWND(std::ptr::null_mut())),
-                outer_target.x as i32,
-                outer_target.y as i32,
-                outer_target.width as i32,
-                outer_target.height as i32,
-                SWP_NOZORDER | SWP_NOACTIVATE,
-            )
-            .map_err(|e| classify_setpos_error(&e))?;
+            // No `SWP_NOSENDCHANGING`: this is the frame that has to stick, so
+            // the app must get its `WM_WINDOWPOSCHANGING` and be allowed to
+            // clamp the result to its minimum size or size increments.
+            move_window(hwnd, target, delta, SET_WINDOW_POS_FLAGS(0))?;
 
             // Return the ACTUAL visible frame: apps that enforce a minimum size
             // or size increments (terminals, for instance) will not honour the
@@ -189,12 +164,180 @@ impl WindowBackend for WindowsWindowBackend {
         }
     }
 
+    fn begin_animation(&self, id: WindowId) -> Result<Option<Box<dyn AnimationSession>>> {
+        let hwnd = hwnd_from_id(id);
+
+        // SAFETY: `hwnd` came from `id_from_hwnd`. Both calls are the same
+        // ones `set_window_frame` makes, hoisted out of the frame loop.
+        let (delta, dpi) = unsafe {
+            restore_if_tiled_away(hwnd);
+            (measure_frame_delta(hwnd)?, GetDpiForWindow(hwnd))
+        };
+
+        Ok(Some(Box::new(WindowsAnimationSession { hwnd, delta, dpi })))
+    }
+
     fn permission_status(&self, _prompt: bool) -> Result<PermissionStatus> {
         // Windows needs no up-front grant to move ordinary windows. Elevation is
         // handled per-window: moving an admin-owned window fails with
         // `PermissionDenied` from `set_window_frame`.
         Ok(PermissionStatus::NotRequired)
     }
+}
+
+/// An in-progress animation on one window.
+///
+/// Holds the two things [`WindowsWindowBackend::set_window_frame`] otherwise
+/// recomputes on every call: the restore has already happened, and the
+/// invisible-border delta has already been measured.
+///
+/// The delta is a function of the window's style *and* of its monitor's DPI —
+/// the invisible resize border is physical pixels, so it grows on a higher-DPI
+/// display. A cross-display throw can therefore invalidate it mid-animation,
+/// which is what `dpi` guards: it is re-measured when the window's DPI changes,
+/// rather than letting the animation run on a stale translation and jump by the
+/// border difference when the final frame re-measures.
+struct WindowsAnimationSession {
+    hwnd: HWND,
+    delta: FrameDelta,
+    dpi: u32,
+}
+
+impl AnimationSession for WindowsAnimationSession {
+    fn set_intermediate_frame(&mut self, target: Rect) -> Result<()> {
+        // SAFETY: `self.hwnd` was validated when the session was opened; if the
+        // window has since been destroyed `SetWindowPos` fails cleanly with an
+        // error, which aborts the animation.
+        unsafe {
+            // One cheap query per frame to notice a DPI change. `GetDpiForWindow`
+            // is a lookup on the window's monitor, far cheaper than the pair of
+            // calls re-measuring the border would cost, so the common
+            // same-display animation pays almost nothing.
+            let dpi = GetDpiForWindow(self.hwnd);
+            if dpi != 0 && dpi != self.dpi {
+                self.delta = measure_frame_delta(self.hwnd)?;
+                self.dpi = dpi;
+            }
+
+            // One call, no DWM read-back: the frame after this one is already
+            // on its way, so nothing needs to know exactly where the window
+            // landed. That takes an intermediate frame from four system calls
+            // to two.
+            //
+            // `SWP_NOSENDCHANGING` is deliberately *only* used here. It stops
+            // the app's `WM_WINDOWPOSCHANGING` handler from clamping each
+            // in-between rectangle — welcome for a frame nobody is meant to
+            // inspect, and it avoids a window with size increments juddering
+            // as it snaps to a cell on every frame. It would be wrong on the
+            // final frame, where the app's clamp is exactly the truth
+            // `finish` has to report back.
+            move_window(self.hwnd, target, self.delta, SWP_NOSENDCHANGING)
+        }
+    }
+
+    fn finish(&mut self, target: Rect) -> Result<Rect> {
+        // SAFETY: `self.hwnd` was validated when the session was opened.
+        unsafe {
+            // Re-check the native state. The restore ran when the session was
+            // opened, but a window can be maximized or minimized *during* the
+            // animation — by the app itself, or by a shell shortcut Tile does
+            // not swallow — and `SetWindowPos` is a silent no-op on a maximized
+            // window. Without this the final move would do nothing and the
+            // read-back would cheerfully commit the unchanged frame.
+            restore_if_tiled_away(self.hwnd);
+
+            // Re-measure rather than trusting the cached delta. This is the
+            // frame that has to be exact, and a cross-display throw or the
+            // restore above may have just changed the window's DPI and with it
+            // the invisible border.
+            let delta = measure_frame_delta(self.hwnd)?;
+
+            // No `SWP_NOSENDCHANGING` here, deliberately: this is the frame
+            // that has to stick, so the app must get its
+            // `WM_WINDOWPOSCHANGING` and be allowed to clamp the result to its
+            // minimum size or size increments.
+            move_window(self.hwnd, target, delta, SET_WINDOW_POS_FLAGS(0))?;
+
+            // Report the ACTUAL visible frame. A failed read is an error
+            // rather than an optimistic echo of `target`: the contract on
+            // `finish` requires the result to be verified, and reporting an
+            // unread rectangle would put a frame in history that may never
+            // have been applied — and would hide a dead window handle.
+            match extended_frame(self.hwnd) {
+                Some(frame) => Ok(frame),
+                None => window_rect(self.hwnd),
+            }
+        }
+    }
+
+    fn current_frame(&self) -> Result<Rect> {
+        // SAFETY: `self.hwnd` was validated when the session was opened; both
+        // calls are read-only queries that fail cleanly on a dead handle.
+        unsafe {
+            match extended_frame(self.hwnd) {
+                Some(frame) => Ok(frame),
+                None => window_rect(self.hwnd),
+            }
+        }
+    }
+}
+
+/// Leaves a maximized or minimized state, which `SetWindowPos` cannot move out
+/// of on its own.
+///
+/// A minimized window may take a beat to finish restoring, but the caller
+/// reads the true resulting frame back afterwards, so nothing depends on the
+/// restore having completed synchronously.
+///
+/// # Safety
+/// `hwnd` must be a valid window handle.
+unsafe fn restore_if_tiled_away(hwnd: HWND) {
+    if IsZoomed(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
+        let _ = ShowWindow(hwnd, SW_RESTORE);
+    }
+}
+
+/// Measures this window's invisible-border delta.
+///
+/// It varies with window style, so it must be measured per window — reusing
+/// another window's delta lands ~7px off.
+///
+/// # Safety
+/// `hwnd` must be a valid window handle.
+unsafe fn measure_frame_delta(hwnd: HWND) -> Result<FrameDelta> {
+    let outer = window_rect(hwnd)?;
+    let visible = extended_frame(hwnd).unwrap_or(outer);
+    Ok(FrameDelta::between(visible, outer))
+}
+
+/// Places the window's *visible* frame on `target`, translating through the
+/// invisible-border `delta` that `SetWindowPos` works in.
+///
+/// # Safety
+/// `hwnd` must be a valid window handle.
+unsafe fn move_window(
+    hwnd: HWND,
+    target: Rect,
+    delta: FrameDelta,
+    extra_flags: SET_WINDOW_POS_FLAGS,
+) -> Result<()> {
+    let outer_target = apply_frame_delta(target, delta).rounded();
+
+    // Synchronous (no `SWP_ASYNCWINDOWPOS`) on purpose: callers read the
+    // resulting frame back immediately, and the async flag would let
+    // `SetWindowPos` return before the move is applied, so the read-back could
+    // observe the old frame. `SWP_NOZORDER` keeps the stacking order;
+    // `SWP_NOACTIVATE` avoids stealing focus.
+    SetWindowPos(
+        hwnd,
+        Some(HWND(std::ptr::null_mut())),
+        outer_target.x as i32,
+        outer_target.y as i32,
+        outer_target.width as i32,
+        outer_target.height as i32,
+        SWP_NOZORDER | SWP_NOACTIVATE | extra_flags,
+    )
+    .map_err(|e| classify_setpos_error(&e))
 }
 
 /// Reads the visible frame, falling back to the outer frame if DWM is
