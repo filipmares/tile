@@ -16,8 +16,8 @@ last move — all from the arrow keys.
 
 ## Default keyboard shortcuts
 
-Every shortcut is the same on both platforms. Only the modifier you hold
-differs:
+The four tiling shortcuts are the same on both platforms — only the modifier you
+hold differs:
 
 - **macOS** — `Control` + `Option`
 - **Windows** — `Win`
@@ -30,17 +30,18 @@ Hold that, then press:
 | `↑`             | Maximize                                                           |
 | `↓`             | Restore to the window's previous position                          |
 
-Moving a window to the adjacent display keeps its slot and uses each platform's
-own move-window-to-display combination instead of the base modifier:
+Moving a window to the adjacent display keeps its slot. This is the one place
+the two platforms differ by more than the base modifier, because each follows
+its own move-window-to-display convention:
 
 | Shortcut                            | Action                                       |
 | ----------------------------------- | -------------------------------------------- |
 | **macOS** `Control`+`Command`+`Option`+`←` `→` | **Previous / next display** — same slot, adjacent monitor |
 | **Windows** `Win`+`Alt`+`←` `→`     | **Previous / next display** — same slot, adjacent monitor |
 
-That is the whole default set — **four arrows, plus the display throws.**
-The same layout works on both platforms, with the modifier held in the left
-hand and the arrows in the right.
+That is the whole default set — **four arrows, plus the display throws.** Both
+platforms keep the same shape, with the modifier held in the left hand and the
+arrows in the right.
 
 The horizontal pair places the window and carries every size, because repeating
 an arrow cycles its width:
