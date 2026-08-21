@@ -123,15 +123,18 @@ impl Pacer for SleepPacer {
 
 /// Runs `animator` until it settles or `next` produces an action.
 ///
-/// `session` is the backend's optional fast path for intermediate frames; it
-/// is opened lazily on the first frame and left in place across a retarget, so
-/// a burst of hotkeys pays for the per-animation setup once. Pass `None` in to
-/// have it opened, and drop it when moving on to a different window.
+/// `session` is the backend's fast path for intermediate frames. It is opened
+/// once when the flight starts, not here, and is kept across retargets of the
+/// same window so a burst of hotkeys pays for the per-animation setup once. A
+/// `None` means the backend declined the fast path, and this deliberately does
+/// not retry — every frame simply falls back to
+/// [`WindowBackend::set_window_frame`].
 ///
 /// Any backend error aborts immediately and propagates unchanged, so a window
 /// that turns out to be unmovable (an elevated process on Windows, revoked
 /// Accessibility permission on macOS) reaches the caller exactly as it would
-/// from an unanimated move.
+/// from an unanimated move. The caller is responsible for reconciling a window
+/// left part-way through.
 pub fn pump(
     backend: &dyn WindowBackend,
     id: WindowId,
@@ -151,13 +154,21 @@ pub fn pump(
     // Subsequent frames feed the animator the time that actually elapsed,
     // which is what keeps the motion honest when a frame runs late.
     let mut dt = interval;
+    // Whether this pump has put anything on screen yet. A held shortcut
+    // auto-repeats — the Windows hook forwards repeats deliberately — so at a
+    // low frame rate an action can be waiting at every check. Preempting
+    // before ever stepping would let the animation be starved indefinitely
+    // while the channel grows, so the first frame is always drawn.
+    let mut drawn = false;
 
     loop {
         // Check for a newly pressed hotkey *before* spending a frame on the
         // old target, so a retarget takes effect at the next frame rather than
         // one frame late.
-        if let Some(action) = next() {
-            return Ok(Interruption::Preempted(action));
+        if drawn {
+            if let Some(action) = next() {
+                return Ok(Interruption::Preempted(action));
+            }
         }
 
         let frame = animator.step(dt);
@@ -190,6 +201,7 @@ pub fn pump(
                 backend.set_window_frame(id, frame)?;
             }
         }
+        drawn = true;
 
         // Hand pacing to the injected pacer, which reports how long the frame
         // really took so the animator advances by that much rather than by the

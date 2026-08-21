@@ -953,8 +953,8 @@ impl AnimationSession for MacAnimationSession {
         // another screen: it shrinks the window so it fits the destination
         // before the position change. Two things make it unnecessary here.
         // The animation walks the window across the gap in small steps rather
-        // than teleporting it, and the *final* frame goes through the full
-        // `set_window_frame`, which still does the whole dance — so even if an
+        // than teleporting it, and the *final* frame goes through `finish`,
+        // which still does the whole dance — so even if an
         // intermediate frame is clamped short, the window is corrected before
         // the animation ends. Halving the AX round-trips per frame matters
         // because each one is synchronous IPC into the target app.

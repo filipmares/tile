@@ -86,7 +86,7 @@ pub enum PermissionStatus {
 ///
 /// Frames pushed through here are *intermediate*: the window is expected to
 /// keep moving, so nothing is read back and the result is not reported. The
-/// final frame goes through [`WindowBackend::set_window_frame`] instead.
+/// final frame goes through [`AnimationSession::finish`] instead.
 pub trait AnimationSession {
     /// Places the window's visible frame at `target`, as cheaply as possible.
     ///

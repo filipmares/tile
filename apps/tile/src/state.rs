@@ -33,6 +33,7 @@
 //! [`AppState::perform_action_preemptible`].
 
 use std::path::PathBuf;
+use std::sync::mpsc;
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -64,6 +65,9 @@ pub struct AppState {
     config_dir: Option<PathBuf>,
     hotkey_failures: Mutex<Vec<HotkeyFailure>>,
     permission_dialog_limiter: Mutex<RateLimiter>,
+    /// The same channel the hotkey backend posts to, so callers that must not
+    /// block can hand an action to the worker thread instead of running it.
+    actions: mpsc::Sender<WindowAction>,
 }
 
 impl AppState {
@@ -72,6 +76,7 @@ impl AppState {
         hotkeys: Box<dyn HotkeyBackend>,
         config: Config,
         config_dir: Option<PathBuf>,
+        actions: mpsc::Sender<WindowAction>,
     ) -> Self {
         Self {
             backend: Mutex::new(backend),
@@ -80,6 +85,22 @@ impl AppState {
             config_dir,
             hotkey_failures: Mutex::new(Vec::new()),
             permission_dialog_limiter: Mutex::new(RateLimiter::new(PERMISSION_DIALOG_COOLDOWN)),
+            actions,
+        }
+    }
+
+    /// Hands `action` to the worker thread instead of performing it here.
+    ///
+    /// This is what the tray menu uses. Its callback runs on Tauri's main
+    /// event loop, and an animated action occupies the pipeline for the whole
+    /// animation — so running it inline would freeze the tray, the menu and
+    /// the settings window for every tray-driven snap. Posting it to the same
+    /// channel the hotkeys use also means a tray action and a hotkey press
+    /// stay in one order and can preempt each other, rather than racing for
+    /// the locks.
+    pub fn enqueue_action(&self, action: WindowAction) {
+        if let Err(err) = self.actions.send(action) {
+            log::error!("could not queue {action}: the action worker is gone ({err})");
         }
     }
 
@@ -561,6 +582,9 @@ mod tests {
         /// Set once `begin_animation` has run, after which `focused_window`
         /// reports `restored_frame`.
         restored: RefCell<bool>,
+        /// The id `focused_window` reports. Changing it mid-run stands in for
+        /// focus moving to a different window.
+        focused_id: RefCell<WindowId>,
         /// When set, `set_intermediate_frame` fails after this many frames, as
         /// Accessibility revocation would.
         fail_after: Option<usize>,
@@ -578,6 +602,7 @@ mod tests {
                 restored_frame: None,
                 focus_lost: RefCell::new(false),
                 restored: RefCell::new(false),
+                focused_id: RefCell::new(1),
                 fail_after: None,
                 via_session: Rc::new(RefCell::new(Vec::new())),
                 finished_via_session: Rc::new(RefCell::new(false)),
@@ -650,7 +675,10 @@ mod tests {
                     .copied()
                     .unwrap_or(Rect::new(100.0, 100.0, 400.0, 300.0)),
             };
-            Ok(Some(WindowSnapshot { id: 1, frame }))
+            Ok(Some(WindowSnapshot {
+                id: *self.focused_id.borrow(),
+                frame,
+            }))
         }
 
         fn screens(&self) -> tile_platform::Result<Vec<Screen>> {
@@ -997,6 +1025,52 @@ mod tests {
         );
         // Nothing went through the focus-dependent path at all.
         assert!(backend.frames.borrow().is_empty());
+    }
+
+    #[test]
+    fn an_action_on_another_window_lands_the_first_one() {
+        // The different-window preemption path: the flight in progress must be
+        // finalized and committed before the new window is planned, or it is
+        // left on an intermediate frame with no history entry. Every other
+        // test retargets a single window, so this is the only coverage of
+        // `land` being reached through a focus change.
+        let backend = FakeBackend::new();
+        let mut engine = engine_with_animation();
+        let first_original = backend.focused_window().unwrap().unwrap().frame;
+
+        animated_pipeline(
+            &backend,
+            &mut engine,
+            WindowAction::LeftHalf,
+            params(),
+            &mut FixedPacer,
+            &mut || {
+                // Focus moves to a second window at the same moment the next
+                // action arrives.
+                if *backend.focused_id.borrow() == 1 && !backend.frames.borrow().is_empty() {
+                    *backend.focused_id.borrow_mut() = 2;
+                    Some(WindowAction::RightHalf)
+                } else {
+                    None
+                }
+            },
+        )
+        .unwrap();
+
+        // The second window ends on its own target.
+        assert_eq!(backend.last_frame(), Rect::new(960.0, 0.0, 960.0, 1080.0));
+
+        // The first window was landed on the left half, not abandoned...
+        assert!(
+            backend
+                .frames
+                .borrow()
+                .iter()
+                .any(|f| *f == Rect::new(0.0, 0.0, 960.0, 1080.0)),
+            "the first window was never landed on its target"
+        );
+        // ...and committed, so its Restore point is the pre-Tile frame.
+        assert_eq!(engine.history.peek(1), Some(first_original));
     }
 
     #[test]

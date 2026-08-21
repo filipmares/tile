@@ -16,17 +16,17 @@ use crate::window;
 
 /// Performs `action`, showing a (rate-limited) dialog only when the OS denies
 /// permission. NoOps and other errors are logged, never surfaced.
-pub fn run_action<R: Runtime>(app: &AppHandle<R>, action: WindowAction) {
-    run_action_preemptible(app, action, &mut || None);
-}
-
-/// As [`run_action`], but lets the pipeline pick up actions that arrive while
-/// a window is still animating.
 ///
-/// `next` must not block: it is polled once per animation frame. The hotkey
+/// `next` is polled once per animation frame and must not block; the hotkey
 /// worker passes a non-blocking receive on its channel, which is what lets a
-/// second press steer the movement already under way instead of queueing
-/// behind it.
+/// second press steer a movement already under way instead of queueing behind
+/// it. Callers with no source of further actions pass a closure returning
+/// `None`.
+///
+/// This is the only entry point: the tray no longer calls in directly, because
+/// its callback runs on Tauri's main event loop and an animated action would
+/// hold it for the whole animation. Tray items go through
+/// [`AppState::enqueue_action`] and arrive here on the worker thread.
 pub fn run_action_preemptible<R: Runtime>(
     app: &AppHandle<R>,
     action: WindowAction,

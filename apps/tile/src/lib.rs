@@ -104,7 +104,7 @@ fn setup_app<R: Runtime>(
     rx: mpsc::Receiver<WindowAction>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let window_backend = tile_platform::window_backend()?;
-    let hotkey_backend = tile_platform::hotkey_backend(tx)?;
+    let hotkey_backend = tile_platform::hotkey_backend(tx.clone())?;
 
     let config_dir = config_store::resolve_config_dir();
     let config = match &config_dir {
@@ -121,6 +121,7 @@ fn setup_app<R: Runtime>(
         hotkey_backend,
         config,
         config_dir,
+        tx,
     ));
     app.manage(state.clone());
 

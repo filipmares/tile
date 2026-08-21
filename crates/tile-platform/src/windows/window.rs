@@ -258,11 +258,15 @@ impl AnimationSession for WindowsAnimationSession {
             // minimum size or size increments.
             move_window(self.hwnd, target, delta, SET_WINDOW_POS_FLAGS(0))?;
 
-            // Report the ACTUAL visible frame, exactly as `set_window_frame`
-            // does, since callers need the truth for history and no-op
-            // detection.
-            let actual = extended_frame(self.hwnd).or_else(|| window_rect(self.hwnd).ok());
-            Ok(actual.unwrap_or(target))
+            // Report the ACTUAL visible frame. A failed read is an error
+            // rather than an optimistic echo of `target`: the contract on
+            // `finish` requires the result to be verified, and reporting an
+            // unread rectangle would put a frame in history that may never
+            // have been applied — and would hide a dead window handle.
+            match extended_frame(self.hwnd) {
+                Some(frame) => Ok(frame),
+                None => window_rect(self.hwnd),
+            }
         }
     }
 
