@@ -42,7 +42,7 @@ use tile_platform::{
     AnimationSession, HotkeyBackend, HotkeyFailure, PermissionStatus, PlatformError, WindowBackend,
 };
 
-use crate::animate::{self, Interruption};
+use crate::animate::{self, Interruption, Pacer, SleepPacer};
 use crate::config_store;
 use crate::ratelimit::RateLimiter;
 
@@ -135,6 +135,7 @@ impl AppState {
             &mut engine,
             action,
             animation.params(),
+            &mut SleepPacer::new(),
             next,
         )
     }
@@ -250,6 +251,7 @@ fn animated_pipeline(
     engine: &mut Engine,
     action: WindowAction,
     params: AnimationParams,
+    pacer: &mut dyn Pacer,
     next: &mut dyn FnMut() -> Option<WindowAction>,
 ) -> tile_platform::Result<()> {
     let mut pending = Some(action);
@@ -341,6 +343,7 @@ fn animated_pipeline(
             &mut in_flight.session,
             &mut in_flight.animator,
             params,
+            pacer,
             next,
         )? {
             Interruption::Settled(actual) => {
@@ -385,6 +388,7 @@ fn land(
 mod tests {
     use std::cell::RefCell;
     use std::collections::VecDeque;
+    use std::time::Duration;
 
     use tile_core::{AnimationConfig, Rect, Screen};
 
@@ -491,8 +495,27 @@ mod tests {
 
     fn params() -> AnimationParams {
         AnimationParams {
-            duration_ms: 140,
+            duration_ms: 340,
             fps: 90,
+        }
+    }
+
+    /// A pacer that never sleeps and always reports the nominal interval.
+    ///
+    /// This is what makes these tests deterministic. The real [`SleepPacer`]
+    /// reports the wall-clock time each frame actually took, so on a loaded
+    /// machine a frame can overrun badly, the animator advances further per
+    /// step, and the animation settles in a handful of frames instead of
+    /// dozens. That is correct behaviour in production — a late frame should
+    /// catch up rather than play in slow motion — but it makes frame counts
+    /// unassertable, and an earlier version of these tests failed on a busy
+    /// macOS CI runner for exactly that reason. It also keeps the suite fast:
+    /// with real pacing each of these tests would sleep for a whole animation.
+    struct FixedPacer;
+
+    impl Pacer for FixedPacer {
+        fn wait(&mut self, interval: Duration) -> Duration {
+            interval
         }
     }
 
@@ -525,6 +548,7 @@ mod tests {
             &mut engine,
             WindowAction::LeftHalf,
             params(),
+            &mut FixedPacer,
             &mut || None,
         )
         .unwrap();
@@ -551,6 +575,7 @@ mod tests {
             &mut engine,
             WindowAction::LeftHalf,
             params(),
+            &mut FixedPacer,
             &mut || None,
         )
         .unwrap();
@@ -559,6 +584,7 @@ mod tests {
             &mut engine,
             WindowAction::Restore,
             params(),
+            &mut FixedPacer,
             &mut || None,
         )
         .unwrap();
@@ -581,6 +607,7 @@ mod tests {
             &mut engine,
             WindowAction::LeftHalf,
             params(),
+            &mut FixedPacer,
             &mut || None,
         )
         .unwrap();
@@ -598,6 +625,7 @@ mod tests {
             &mut engine,
             WindowAction::LeftHalf,
             params(),
+            &mut FixedPacer,
             &mut after_frames(2, vec![WindowAction::TopHalf]),
         )
         .unwrap();
@@ -620,6 +648,7 @@ mod tests {
             &mut engine,
             WindowAction::LeftHalf,
             params(),
+            &mut FixedPacer,
             &mut after_frames(2, vec![WindowAction::LeftHalf]),
         )
         .unwrap();
@@ -641,6 +670,7 @@ mod tests {
             &mut engine,
             WindowAction::LeftHalf,
             params(),
+            &mut FixedPacer,
             &mut after_frames(2, vec![WindowAction::TopHalf, WindowAction::RightHalf]),
         )
         .unwrap();

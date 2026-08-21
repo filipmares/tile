@@ -36,6 +36,50 @@ pub enum Interruption {
     Preempted(WindowAction),
 }
 
+/// Paces the animation, one call per emitted frame.
+///
+/// This exists so the pump's timing is injectable. Frame *count* is a function
+/// of how long each frame actually took, which on a loaded machine is anyone's
+/// guess — correct behaviour for a real animation, since a late frame should
+/// advance the springs further rather than play in slow motion, but impossible
+/// to assert against. Tests supply a pacer that reports the nominal interval
+/// without sleeping, which makes them both deterministic and instant.
+pub trait Pacer {
+    /// Waits out the remainder of this frame's `interval` and returns how much
+    /// wall-clock time the frame consumed in total. That becomes the next
+    /// `dt` handed to the animator.
+    fn wait(&mut self, interval: Duration) -> Duration;
+}
+
+/// The real pacer: sleeps out whatever is left of the frame's budget.
+pub struct SleepPacer {
+    previous: Instant,
+}
+
+impl SleepPacer {
+    pub fn new() -> Self {
+        Self {
+            previous: Instant::now(),
+        }
+    }
+}
+
+impl Pacer for SleepPacer {
+    fn wait(&mut self, interval: Duration) -> Duration {
+        // Pushing the frame can itself take longer than the interval (a busy
+        // app on macOS), in which case there is nothing to wait for and the
+        // returned duration simply reflects the overrun.
+        let spent = self.previous.elapsed();
+        if let Some(remaining) = interval.checked_sub(spent) {
+            std::thread::sleep(remaining);
+        }
+        let now = Instant::now();
+        let elapsed = now.duration_since(self.previous);
+        self.previous = now;
+        elapsed
+    }
+}
+
 /// Runs `animator` until it settles or `next` produces an action.
 ///
 /// `session` is the backend's optional fast path for intermediate frames; it
@@ -53,6 +97,7 @@ pub fn pump(
     session: &mut Option<Box<dyn AnimationSession>>,
     animator: &mut Animator,
     params: AnimationParams,
+    pacer: &mut dyn Pacer,
     next: &mut dyn FnMut() -> Option<WindowAction>,
 ) -> tile_platform::Result<Interruption> {
     let interval = effective_interval(params);
@@ -61,7 +106,6 @@ pub fn pump(
     // Subsequent frames feed the animator the time that actually elapsed,
     // which is what keeps the motion honest when a frame runs late.
     let mut dt = interval;
-    let mut previous = Instant::now();
 
     loop {
         // Check for a newly pressed hotkey *before* spending a frame on the
@@ -96,18 +140,10 @@ pub fn pump(
             }
         }
 
-        // Sleep for whatever is left of the frame's budget. Pushing the frame
-        // can itself take longer than the interval (a busy app on macOS), in
-        // which case there is nothing to wait for and the next `dt` simply
-        // reflects the overrun.
-        let spent = previous.elapsed();
-        if let Some(remaining) = interval.checked_sub(spent) {
-            std::thread::sleep(remaining);
-        }
-
-        let now = Instant::now();
-        dt = now.duration_since(previous);
-        previous = now;
+        // Hand pacing to the injected pacer, which reports how long the frame
+        // really took so the animator advances by that much rather than by the
+        // interval we hoped for.
+        dt = pacer.wait(interval);
     }
 }
 
