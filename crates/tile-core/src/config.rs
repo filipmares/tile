@@ -283,13 +283,14 @@ fn normalize_minimum_fraction(value: f64) -> f64 {
 
 /// Roughly how long an animated snap takes, end to end, in milliseconds.
 ///
-/// Fast enough to read as a direct response to the keypress rather than an
-/// effect being played at you — most of the distance is covered in the first
-/// ~40 ms — while still leaving the per-edge stretch visible. Below about
-/// 120 ms the shape of the motion stops registering at all and it may as well
-/// be off; above about 250 ms the window feels like it is lagging the key.
+/// A deliberate middle ground. Fast enough to read as a response to the
+/// keypress rather than an effect being played at you, slow enough that the
+/// stretch and the soft settle-back are actually legible — which is the whole
+/// point of the per-edge springs. Around 180 ms the motion is over before the
+/// eye resolves its shape and it may as well be a jump; past about 500 ms the
+/// window feels like it is lagging the key.
 fn default_animation_duration_ms() -> u32 {
-    180
+    340
 }
 
 /// Frames per second the animation aims for.
@@ -1406,11 +1407,11 @@ mod tests {
     fn animation_defaults_are_on_and_round_trip_through_json() {
         let config = Config::default();
         assert!(config.animation.enabled);
-        assert_eq!(config.animation.duration_ms, 180);
+        assert_eq!(config.animation.duration_ms, 340);
         assert_eq!(config.animation.fps, 90);
 
         let json = config.to_json().unwrap();
-        assert!(json.contains(r#""durationMs": 180"#));
+        assert!(json.contains(r#""durationMs": 340"#));
         assert_eq!(Config::from_json(&json).unwrap(), config);
     }
 
@@ -1434,7 +1435,7 @@ mod tests {
         // restate the tuning knobs.
         let config = Config::from_json(r#"{"animation": {"enabled": false}}"#).unwrap();
         assert!(!config.animation.enabled);
-        assert_eq!(config.animation.duration_ms, 180);
+        assert_eq!(config.animation.duration_ms, 340);
         assert_eq!(config.animation.fps, 90);
     }
 
@@ -1466,7 +1467,7 @@ mod tests {
             ..Default::default()
         };
         zeroed.normalize();
-        assert_eq!(zeroed.animation.duration_ms, 180);
+        assert_eq!(zeroed.animation.duration_ms, 340);
         assert_eq!(zeroed.animation.fps, 90);
 
         let mut tiny = Config {

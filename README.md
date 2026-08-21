@@ -108,10 +108,11 @@ live in `config.json`; there is no settings UI for them yet.
 ### Animated snapping
 
 Windows glide to their new frame rather than jumping to it. Each of the four
-edges is driven by its own spring, and the edge leading the movement is stiffer
-than the one behind it, so the window stretches towards its destination and the
-trailing edge catches up — and a shortcut pressed while a window is still in
-flight redirects the movement it already has instead of restarting it.
+edges is driven by its own spring, and the edge leading the movement is
+stiffer and looser than the one behind it, so the window stretches towards its
+destination, overshoots it slightly, and eases back as the trailing edge
+catches up — and a shortcut pressed while a window is still in flight redirects
+the movement it already has instead of restarting it.
 
 **This is on by default**, including for existing installs, which had no
 animation before. Turn it off in Settings ▸ Behaviour ▸ Motion for the instant
@@ -123,14 +124,14 @@ The timing lives in `config.json` under `animation` and has no settings UI:
 ```jsonc
 "animation": {
   "enabled": true,
-  "durationMs": 180, // how long a snap takes, end to end; 40–1000
+  "durationMs": 340, // how long a snap takes, end to end; 40–1000
   "fps": 90          // frames per second; 15–240, capped lower on macOS
 }
 ```
 
 `durationMs` is approximate — a spring approaches its target asymptotically, so
-larger moves run slightly over and short nudges finish well under. Try 120 for
-something sharper, or 240 for a more relaxed glide.
+larger moves run slightly over and short nudges finish well under. Try 220 for
+something brisker, or 450 for a more languid glide.
 
 ### Windows shortcut notes
 

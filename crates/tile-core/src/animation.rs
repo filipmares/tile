@@ -35,31 +35,35 @@ use crate::geometry::Rect;
 ///
 /// This is what makes [`AnimationParams::duration_ms`] mean something: the
 /// integrator advances at `NATURAL_SETTLE_MS / duration_ms`, so a configured
-/// 180 ms really does finish in about 180 ms. Change the spring constants and
+/// 340 ms really does finish in about 340 ms. Change the spring constants and
 /// this number has to be re-measured, which
 /// `the_configured_duration_is_the_real_settle_time` enforces.
 ///
 /// It is approximate by nature — the settle test uses an absolute half-pixel
 /// threshold, so a longer move takes marginally longer to satisfy it (a 4K
-/// half snap runs about 9% over, a short nudge well under).
-pub const NATURAL_SETTLE_MS: f64 = 575.0;
+/// half snap runs about 8% over, a short nudge well under).
+pub const NATURAL_SETTLE_MS: f64 = 513.0;
 
 /// Stiffness and damping of the edge that leads the movement.
 ///
-/// Damping ratio ≈ 0.87: fast, and *just* underdamped, so it arrives with
-/// authority and a sub-pixel overshoot rather than a visible bounce.
-const LEADING: (f64, f64) = (700.0, 46.0);
+/// Damping ratio ≈ 0.76. The *ratio* is the springiness dial, independently of
+/// how fast the whole thing runs: this one leaves a soft overshoot of about
+/// 1.7% of the distance travelled — 17 px on a half-screen snap — that eases
+/// back rather than bouncing. Pushing it towards 1.0 removes the overshoot and
+/// the motion turns mechanical; dropping it much below 0.7 makes a window
+/// visibly sail past the screen edge and wobble back.
+const LEADING: (f64, f64) = (700.0, 40.0);
 
 /// Stiffness and damping of the edge that trails the movement.
 ///
-/// Less than half the stiffness, and damping ratio ≈ 0.99 — critically damped,
-/// so it never overshoots and simply glides in behind. The gap between the two
-/// is the effect: on a half-screen snap the window stretches about 245px past
-/// its final width before the trailing edge closes it up. Constants this
-/// similar to each other (the first cut used 170/22 against 145/20, a ratio of
-/// 1.17) produce a stretch too small to see, which is a mechanical slide with
-/// extra arithmetic.
-const TRAILING: (f64, f64) = (330.0, 36.0);
+/// Damping ratio ≈ 0.85 — a little more settled than the leading edge, so the
+/// window stops elongating before it stops moving. Less than half the leading
+/// stiffness, and that gap is the whole effect: on a half-screen snap the
+/// window stretches about 260 px past its final width before the trailing edge
+/// closes it up. Constants close to each other (the first cut used 170/22
+/// against 145/20, a ratio of 1.17) produce a stretch too small to see, which
+/// is a mechanical slide with extra arithmetic.
+const TRAILING: (f64, f64) = (330.0, 31.0);
 
 /// Size of one integration sub-step, in seconds.
 ///
@@ -92,7 +96,7 @@ const VELOCITY_EPSILON: f64 = 8.0;
 ///
 /// Three times the natural settle, not one: the multiplier has to clear the
 /// *slowest* real move, not the representative one [`NATURAL_SETTLE_MS`] is
-/// calibrated on. A 4K half snap settles around 625 ms naturally, so a tighter
+/// calibrated on. A 4K half snap settles around 554 ms naturally, so a tighter
 /// budget would truncate it and make the window visibly jump the last few
 /// pixels — which is exactly what the first cut of this module did.
 const BUDGET_MULTIPLIER: f64 = 3.0;
@@ -326,7 +330,7 @@ mod tests {
     use super::*;
 
     const PARAMS: AnimationParams = AnimationParams {
-        duration_ms: 180,
+        duration_ms: 340,
         fps: 90,
     };
 
@@ -346,6 +350,34 @@ mod tests {
     }
 
     #[test]
+    fn the_leading_edge_overshoots_softly() {
+        // Springiness is the point, so this is bounded on *both* sides.
+        //
+        // Too little overshoot and the motion is a mechanical slide — an
+        // earlier revision damped it to 0.1% of travel and lost the character
+        // entirely. Too much and a window sails visibly off the screen edge
+        // before wobbling back, which reads as a glitch rather than as
+        // liquid. About 1.7% is the intended feel.
+        let from = Rect::new(960.0, 0.0, 960.0, 1080.0);
+        let to = Rect::new(0.0, 0.0, 960.0, 1080.0);
+        let travel = from.x - to.x;
+        let mut animator = Animator::new(from, to, PARAMS);
+
+        let frames = run(&mut animator, Duration::from_millis(4));
+        let furthest = frames.iter().fold(f64::MAX, |acc, r| acc.min(r.x));
+        let overshoot = to.x - furthest;
+
+        assert!(
+            overshoot >= travel * 0.005,
+            "overshoot was only {overshoot:.1}px — the spring has been damped flat"
+        );
+        assert!(
+            overshoot <= travel * 0.03,
+            "overshoot was {overshoot:.1}px — too loose, the window sails off screen"
+        );
+    }
+
+    #[test]
     fn the_configured_duration_is_the_real_settle_time() {
         // `durationMs` is only meaningful if it matches reality, and it only
         // does so while `NATURAL_SETTLE_MS` matches the spring constants. This
@@ -353,7 +385,7 @@ mod tests {
         // without it, "180 ms" silently drifted to 567 ms in an earlier
         // revision of this module.
         let frame = Duration::from_millis(11);
-        for duration_ms in [80, 140, 180, 240, 400] {
+        for duration_ms in [80, 180, 240, 340, 500] {
             let params = AnimationParams {
                 duration_ms,
                 fps: 90,
