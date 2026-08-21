@@ -645,6 +645,26 @@ mod tests {
         Engine::new(config)
     }
 
+    /// The frame rates a rate-sensitive test has to hold at.
+    ///
+    /// Every platform cap Tile ships, resolved against the configured rate,
+    /// plus the configurable floor. Running all of them from one host is what
+    /// stops a frame-rate-dependent assertion passing here and failing on
+    /// another platform's CI runner — which it did, twice, before this existed.
+    fn rates_to_cover() -> Vec<u32> {
+        let configured = params().fps;
+        let mut rates: Vec<u32> = animate::ALL_FPS_CAPS
+            .iter()
+            .map(|cap| cap.map_or(configured, |cap| configured.min(cap)))
+            .collect();
+        // The lowest rate `Config::normalize` will hand over, where a single
+        // frame covers most of the journey.
+        rates.push(tile_core::config::MIN_ANIMATION_FPS);
+        rates.sort_unstable();
+        rates.dedup();
+        rates
+    }
+
     fn params() -> AnimationParams {
         AnimationParams {
             duration_ms: 340,
@@ -798,12 +818,10 @@ mod tests {
         let restored = Rect::new(300.0, 300.0, 500.0, 400.0);
         let planned_against = Rect::new(100.0, 100.0, 400.0, 300.0);
 
-        // Run at several frame rates, including the 45fps macOS cap and the
-        // configurable floor. How far a single frame travels depends on the
-        // rate, so a test that inspects the first frame has to hold at all of
-        // them — an earlier version tuned its tolerance to the Windows rate
-        // and failed on macOS.
-        for fps in [90, 45, 15] {
+        // Run at every rate a platform cap can produce, plus the configurable
+        // floor. How far a single frame travels depends on the rate, so a test
+        // that inspects the first frame has to hold at all of them.
+        for fps in rates_to_cover() {
             let backend = FakeBackend::with_restore_to(restored);
             let mut engine = engine_with_animation();
             let params = AnimationParams {

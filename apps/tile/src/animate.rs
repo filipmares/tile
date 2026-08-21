@@ -11,17 +11,44 @@ use std::time::{Duration, Instant};
 use tile_core::{AnimationParams, Animator, Rect, WindowAction, WindowId};
 use tile_platform::{AnimationSession, WindowBackend};
 
-/// Ceiling on the animation frame rate for this platform, if any.
+/// Ceiling on the animation frame rate imposed by a platform, if any.
 ///
 /// On macOS every frame is a pair of synchronous Accessibility calls that
 /// cross a process boundary into the app being moved, so frames are orders of
 /// magnitude more expensive than a Win32 `SetWindowPos` and a high rate buys
 /// nothing but contention with the app's own main thread. Elsewhere the
 /// configured value already carries its own clamp, so no further cap applies.
+///
+/// # Why every cap is named here rather than `#[cfg]`-selected
+///
+/// These are plain numbers, not platform APIs, so there is no reason a test on
+/// one host cannot exercise another host's value — and every reason it should.
+/// A `#[cfg]` on the constant alone makes the macOS arithmetic unreachable from
+/// a Windows machine, which is how a frame-rate-dependent assertion reached CI
+/// and failed there twice. Only [`PLATFORM_FPS_CAP`] is selected by platform;
+/// the capping logic takes the cap as an argument so all of it is covered
+/// everywhere. This mirrors the reason `tile-platform` compiles its
+/// `macos_pure` helpers on non-macOS hosts.
+/// [`allow(dead_code)`]: on any given host one of these caps is only ever used
+/// by tests, since [`PLATFORM_FPS_CAP`] selects the other. That is the point —
+/// the same reason `tile-platform` marks its `macos_pure` module the same way.
+#[allow(dead_code)]
+pub(crate) const MACOS_FPS_CAP: Option<u32> = Some(45);
+
+/// The cap on platforms whose per-frame cost is a cheap system call.
+#[allow(dead_code)]
+pub(crate) const UNCAPPED: Option<u32> = None;
+
+/// Every cap Tile ships, so a rate-sensitive test can cover all of them from
+/// whichever host it happens to run on.
+#[allow(dead_code)]
+pub(crate) const ALL_FPS_CAPS: &[Option<u32>] = &[UNCAPPED, MACOS_FPS_CAP];
+
+/// The cap that applies to the platform this build targets.
 #[cfg(target_os = "macos")]
-const MAX_FPS: Option<u32> = Some(45);
+pub(crate) const PLATFORM_FPS_CAP: Option<u32> = MACOS_FPS_CAP;
 #[cfg(not(target_os = "macos"))]
-const MAX_FPS: Option<u32> = None;
+pub(crate) const PLATFORM_FPS_CAP: Option<u32> = UNCAPPED;
 
 /// Why the pump stopped.
 pub enum Interruption {
@@ -153,9 +180,17 @@ pub fn pump(
     }
 }
 
-/// The wall-clock gap between frames, after the platform cap.
+/// The wall-clock gap between frames on this platform.
 pub(crate) fn effective_interval(params: AnimationParams) -> Duration {
-    let fps = match MAX_FPS {
+    interval_with_cap(params, PLATFORM_FPS_CAP)
+}
+
+/// The wall-clock gap between frames under an arbitrary cap.
+///
+/// Takes the cap rather than reading the platform constant so the macOS
+/// arithmetic is exercised by tests running on any host.
+pub(crate) fn interval_with_cap(params: AnimationParams, cap: Option<u32>) -> Duration {
+    let fps = match cap {
         Some(cap) => params.fps.min(cap),
         None => params.fps,
     };
@@ -167,25 +202,55 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_platform_cap_bounds_the_frame_rate() {
-        // The highest rate `Config::normalize` will ever hand over.
+    fn every_platform_cap_bounds_the_frame_rate() {
+        // Both branches run on every host, so the macOS capping arithmetic is
+        // covered from a Windows or Linux machine too.
         let params = AnimationParams {
-            duration_ms: 140,
+            duration_ms: 340,
             fps: 240,
         };
-        let expected = AnimationParams {
-            fps: MAX_FPS.unwrap_or(params.fps),
-            ..params
-        };
-        assert_eq!(effective_interval(params), expected.frame_interval());
+
+        assert_eq!(
+            interval_with_cap(params, MACOS_FPS_CAP),
+            AnimationParams { fps: 45, ..params }.frame_interval()
+        );
+        assert_eq!(
+            interval_with_cap(params, UNCAPPED),
+            params.frame_interval(),
+            "an uncapped platform should use the configured rate verbatim"
+        );
     }
 
     #[test]
-    fn a_rate_below_the_cap_is_left_alone() {
+    fn a_rate_below_every_cap_is_left_alone() {
         let params = AnimationParams {
-            duration_ms: 140,
+            duration_ms: 340,
             fps: 15,
         };
-        assert_eq!(effective_interval(params), params.frame_interval());
+        for cap in ALL_FPS_CAPS {
+            assert_eq!(
+                interval_with_cap(params, *cap),
+                params.frame_interval(),
+                "cap {cap:?} changed a rate already below it"
+            );
+        }
+    }
+
+    #[test]
+    fn this_platform_uses_one_of_the_declared_caps() {
+        assert!(ALL_FPS_CAPS.contains(&PLATFORM_FPS_CAP));
+        assert_eq!(
+            effective_interval(AnimationParams {
+                duration_ms: 340,
+                fps: 240,
+            }),
+            interval_with_cap(
+                AnimationParams {
+                    duration_ms: 340,
+                    fps: 240,
+                },
+                PLATFORM_FPS_CAP
+            )
+        );
     }
 }
