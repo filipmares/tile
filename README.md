@@ -124,14 +124,15 @@ The timing lives in `config.json` under `animation` and has no settings UI:
 ```jsonc
 "animation": {
   "enabled": true,
-  "durationMs": 340, // how long a snap takes, end to end; 40–1000
+  "durationMs": 450, // how long a snap takes, end to end; 40–1000
   "fps": 90          // frames per second; 15–240, capped lower on macOS
 }
 ```
 
 `durationMs` is approximate — a spring approaches its target asymptotically, so
-larger moves run slightly over and short nudges finish well under. Try 220 for
-something brisker, or 450 for a more languid glide.
+larger moves run slightly over and short nudges finish well under. Try 250 for
+something brisker. It is purely a speed dial: how springy the motion is comes
+from the damping ratios in the code and does not change with it.
 
 ### Windows shortcut notes
 

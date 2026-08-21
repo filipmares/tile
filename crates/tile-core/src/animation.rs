@@ -35,7 +35,7 @@ use crate::geometry::Rect;
 ///
 /// This is what makes [`AnimationParams::duration_ms`] mean something: the
 /// integrator advances at `NATURAL_SETTLE_MS / duration_ms`, so a configured
-/// 340 ms really does finish in about 340 ms. Change the spring constants and
+/// 450 ms really does finish in about 450 ms. Change the spring constants and
 /// this number has to be re-measured, which
 /// `the_configured_duration_is_the_real_settle_time` enforces.
 ///
@@ -330,7 +330,7 @@ mod tests {
     use super::*;
 
     const PARAMS: AnimationParams = AnimationParams {
-        duration_ms: 340,
+        duration_ms: 450,
         fps: 90,
     };
 
@@ -385,7 +385,7 @@ mod tests {
         // without it, "180 ms" silently drifted to 567 ms in an earlier
         // revision of this module.
         let frame = Duration::from_millis(11);
-        for duration_ms in [80, 180, 240, 340, 500] {
+        for duration_ms in [80, 180, 340, 450, 700] {
             let params = AnimationParams {
                 duration_ms,
                 fps: 90,
