@@ -29,22 +29,37 @@ use std::time::Duration;
 
 use crate::geometry::Rect;
 
-/// Nominal settle time the spring constants below are tuned for.
+/// Measured settle time, in milliseconds, of the springs below at a time scale
+/// of 1.0, for the representative snap (a half-screen move on a 1920×1080
+/// display).
 ///
-/// A spring has no hard end time, so a configured duration cannot be honoured
-/// literally. Instead it scales the rate at which the simulation advances
-/// (see [`AnimationParams::time_scale`]), with this value as the 1:1 point.
-pub const BASELINE_DURATION_MS: f64 = 140.0;
+/// This is what makes [`AnimationParams::duration_ms`] mean something: the
+/// integrator advances at `NATURAL_SETTLE_MS / duration_ms`, so a configured
+/// 180 ms really does finish in about 180 ms. Change the spring constants and
+/// this number has to be re-measured, which
+/// `the_configured_duration_is_the_real_settle_time` enforces.
+///
+/// It is approximate by nature — the settle test uses an absolute half-pixel
+/// threshold, so a longer move takes marginally longer to satisfy it (a 4K
+/// half snap runs about 9% over, a short nudge well under).
+pub const NATURAL_SETTLE_MS: f64 = 575.0;
 
 /// Stiffness and damping of the edge that leads the movement.
 ///
-/// Stiffer and more damped than the trailing edge so it arrives first without
-/// overshooting far enough to look like a bounce.
-const LEADING: (f64, f64) = (170.0, 22.0);
+/// Damping ratio ≈ 0.87: fast, and *just* underdamped, so it arrives with
+/// authority and a sub-pixel overshoot rather than a visible bounce.
+const LEADING: (f64, f64) = (700.0, 46.0);
 
-/// Stiffness and damping of the edge that trails the movement. Softer, so it
-/// lags visibly behind the leading edge — this is the stretch.
-const TRAILING: (f64, f64) = (145.0, 20.0);
+/// Stiffness and damping of the edge that trails the movement.
+///
+/// Less than half the stiffness, and damping ratio ≈ 0.99 — critically damped,
+/// so it never overshoots and simply glides in behind. The gap between the two
+/// is the effect: on a half-screen snap the window stretches about 245px past
+/// its final width before the trailing edge closes it up. Constants this
+/// similar to each other (the first cut used 170/22 against 145/20, a ratio of
+/// 1.17) produce a stretch too small to see, which is a mechanical slide with
+/// extra arithmetic.
+const TRAILING: (f64, f64) = (330.0, 36.0);
 
 /// Size of one integration sub-step, in seconds.
 ///
@@ -67,19 +82,25 @@ const POSITION_EPSILON: f64 = 0.5;
 /// momentarily "in position" while still needing to decelerate and come back.
 const VELOCITY_EPSILON: f64 = 8.0;
 
-/// Hard ceiling on simulated time, as a multiple of the nominal duration.
+/// Hard ceiling on simulated time, as a multiple of the natural settle time.
 ///
-/// A spring approaches its target asymptotically, and a hand-edited config
-/// could in principle pick constants that ring for a long time. This budget
-/// guarantees termination: once it is exhausted the animator reports itself
-/// settled and emits the exact target, so the frame pump can never spin
-/// forever no matter what it is fed.
-const BUDGET_MULTIPLIER: f64 = 4.0;
+/// A spring approaches its target asymptotically, and a retarget can restart
+/// the approach from an awkward state. This budget guarantees termination:
+/// once it is exhausted the animator reports itself settled and emits the
+/// exact target, so the frame pump can never spin forever no matter what it is
+/// fed.
+///
+/// Three times the natural settle, not one: the multiplier has to clear the
+/// *slowest* real move, not the representative one [`NATURAL_SETTLE_MS`] is
+/// calibrated on. A 4K half snap settles around 625 ms naturally, so a tighter
+/// budget would truncate it and make the window visibly jump the last few
+/// pixels — which is exactly what the first cut of this module did.
+const BUDGET_MULTIPLIER: f64 = 3.0;
 
 /// How the animation should be driven, derived from the user's configuration.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AnimationParams {
-    /// Nominal settle time. Not a hard deadline; see [`BASELINE_DURATION_MS`].
+    /// Roughly how long the movement takes, end to end.
     pub duration_ms: u32,
     /// How many frames per second the driver should aim to emit. Purely
     /// informational to the animator itself, which is driven by the `dt` it is
@@ -93,12 +114,12 @@ impl AnimationParams {
     /// same simulation faster, and a longer one slower.
     fn time_scale(&self) -> f64 {
         let duration = f64::from(self.duration_ms).max(1.0);
-        BASELINE_DURATION_MS / duration
+        NATURAL_SETTLE_MS / duration
     }
 
     /// Total simulated time after which the animation is forced to settle.
     fn budget(&self) -> f64 {
-        BUDGET_MULTIPLIER * BASELINE_DURATION_MS / 1000.0
+        BUDGET_MULTIPLIER * NATURAL_SETTLE_MS / 1000.0
     }
 
     /// The interval between emitted frames implied by [`AnimationParams::fps`].
@@ -305,7 +326,7 @@ mod tests {
     use super::*;
 
     const PARAMS: AnimationParams = AnimationParams {
-        duration_ms: 140,
+        duration_ms: 180,
         fps: 90,
     };
 
@@ -322,6 +343,85 @@ mod tests {
             }
         }
         panic!("animator failed to settle after 10000 frames");
+    }
+
+    #[test]
+    fn the_configured_duration_is_the_real_settle_time() {
+        // `durationMs` is only meaningful if it matches reality, and it only
+        // does so while `NATURAL_SETTLE_MS` matches the spring constants. This
+        // is the test that catches a constant changed without recalibrating —
+        // without it, "180 ms" silently drifted to 567 ms in an earlier
+        // revision of this module.
+        let frame = Duration::from_millis(11);
+        for duration_ms in [80, 140, 180, 240, 400] {
+            let params = AnimationParams {
+                duration_ms,
+                fps: 90,
+            };
+            // The representative snap `NATURAL_SETTLE_MS` is calibrated on: a
+            // half-screen move on a 1920x1080 display.
+            let mut animator = Animator::new(
+                Rect::new(960.0, 0.0, 960.0, 1080.0),
+                Rect::new(0.0, 0.0, 960.0, 1080.0),
+                params,
+            );
+
+            let frames = run(&mut animator, frame);
+            let actual_ms = frames.len() as f64 * frame.as_secs_f64() * 1000.0;
+            let nominal = f64::from(duration_ms);
+
+            // Within 15%, plus one frame of quantisation: the settle test uses
+            // an absolute pixel threshold, so it can never be exact.
+            let tolerance = nominal * 0.15 + 11.0;
+            assert!(
+                (actual_ms - nominal).abs() <= tolerance,
+                "durationMs {duration_ms} settled in {actual_ms:.0}ms, outside ±{tolerance:.0}ms"
+            );
+        }
+    }
+
+    #[test]
+    fn the_stretch_is_large_enough_to_see() {
+        // The per-edge springs only earn their complexity if the lag between
+        // the leading and trailing edge is actually visible. Guards against
+        // someone tuning the two sets closer together and quietly turning the
+        // animation back into a rigid slide.
+        let mut animator = Animator::new(
+            Rect::new(960.0, 0.0, 960.0, 1080.0),
+            Rect::new(0.0, 0.0, 960.0, 1080.0),
+            PARAMS,
+        );
+
+        let frames = run(&mut animator, Duration::from_millis(11));
+        let widest = frames.iter().fold(0.0_f64, |acc, r| acc.max(r.width));
+
+        assert!(
+            widest - 960.0 >= 100.0,
+            "stretch was only {:.1}px on a 960px snap",
+            widest - 960.0
+        );
+    }
+
+    #[test]
+    fn the_budget_clears_the_slowest_real_move() {
+        // `NATURAL_SETTLE_MS` is calibrated on a 1080p half snap, but the
+        // absolute settle threshold makes larger moves take longer. A 4K half
+        // snap is the worst case Tile realistically sees, and it must settle on
+        // its own merits rather than being truncated by the budget.
+        let mut animator = Animator::new(
+            Rect::new(1920.0, 0.0, 1920.0, 2160.0),
+            Rect::new(0.0, 0.0, 1920.0, 2160.0),
+            PARAMS,
+        );
+
+        let mut frames = 0;
+        let frame = Duration::from_millis(4);
+        while !animator.is_settled() && frames < 10_000 {
+            animator.step(frame);
+            frames += 1;
+        }
+
+        assert!(!animator.exhausted, "the time budget truncated a real move");
     }
 
     #[test]

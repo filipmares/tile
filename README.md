@@ -123,13 +123,14 @@ The timing lives in `config.json` under `animation` and has no settings UI:
 ```jsonc
 "animation": {
   "enabled": true,
-  "durationMs": 140, // nominal settle time; 40–1000
+  "durationMs": 180, // how long a snap takes, end to end; 40–1000
   "fps": 90          // frames per second; 15–240, capped lower on macOS
 }
 ```
 
-`durationMs` is nominal rather than exact — a spring approaches its target
-asymptotically, so the value scales the motion instead of setting a deadline.
+`durationMs` is approximate — a spring approaches its target asymptotically, so
+larger moves run slightly over and short nudges finish well under. Try 120 for
+something sharper, or 240 for a more relaxed glide.
 
 ### Windows shortcut notes
 

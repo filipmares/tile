@@ -281,12 +281,15 @@ fn normalize_minimum_fraction(value: f64) -> f64 {
 // Animation
 // ---------------------------------------------------------------------------
 
-/// Nominal settle time for an animated snap, in milliseconds.
+/// Roughly how long an animated snap takes, end to end, in milliseconds.
 ///
-/// Short enough that the window feels like it responded to the keypress rather
-/// than played a cutscene, long enough for the per-edge stretch to be visible.
+/// Fast enough to read as a direct response to the keypress rather than an
+/// effect being played at you — most of the distance is covered in the first
+/// ~40 ms — while still leaving the per-edge stretch visible. Below about
+/// 120 ms the shape of the motion stops registering at all and it may as well
+/// be off; above about 250 ms the window feels like it is lagging the key.
 fn default_animation_duration_ms() -> u32 {
-    140
+    180
 }
 
 /// Frames per second the animation aims for.
@@ -300,8 +303,8 @@ fn default_animation_fps() -> u32 {
     90
 }
 
-/// Bounds for the nominal animation duration. Below the lower bound the motion
-/// is indistinguishable from a teleport but still costs frames; above the upper
+/// Bounds for the animation duration. Below the lower bound the motion is
+/// indistinguishable from a teleport but still costs frames; above the upper
 /// one the window lags noticeably behind the keypress.
 pub const MIN_ANIMATION_DURATION_MS: u32 = 40;
 pub const MAX_ANIMATION_DURATION_MS: u32 = 1000;
@@ -325,8 +328,9 @@ pub const MAX_ANIMATION_FPS: u32 = 240;
 pub struct AnimationConfig {
     /// Animate window moves instead of applying them in one jump.
     pub enabled: bool,
-    /// Nominal settle time. Springs approach their target asymptotically, so
-    /// this scales the motion rather than acting as a hard deadline.
+    /// Roughly how long the movement takes, end to end. Approximate rather
+    /// than exact: a spring approaches its target asymptotically, so the value
+    /// scales the motion and larger moves run slightly over.
     pub duration_ms: u32,
     /// Frames per second the animation aims to emit.
     pub fps: u32,
@@ -1402,11 +1406,11 @@ mod tests {
     fn animation_defaults_are_on_and_round_trip_through_json() {
         let config = Config::default();
         assert!(config.animation.enabled);
-        assert_eq!(config.animation.duration_ms, 140);
+        assert_eq!(config.animation.duration_ms, 180);
         assert_eq!(config.animation.fps, 90);
 
         let json = config.to_json().unwrap();
-        assert!(json.contains(r#""durationMs": 140"#));
+        assert!(json.contains(r#""durationMs": 180"#));
         assert_eq!(Config::from_json(&json).unwrap(), config);
     }
 
@@ -1430,7 +1434,7 @@ mod tests {
         // restate the tuning knobs.
         let config = Config::from_json(r#"{"animation": {"enabled": false}}"#).unwrap();
         assert!(!config.animation.enabled);
-        assert_eq!(config.animation.duration_ms, 140);
+        assert_eq!(config.animation.duration_ms, 180);
         assert_eq!(config.animation.fps, 90);
     }
 
@@ -1462,7 +1466,7 @@ mod tests {
             ..Default::default()
         };
         zeroed.normalize();
-        assert_eq!(zeroed.animation.duration_ms, 140);
+        assert_eq!(zeroed.animation.duration_ms, 180);
         assert_eq!(zeroed.animation.fps, 90);
 
         let mut tiny = Config {
