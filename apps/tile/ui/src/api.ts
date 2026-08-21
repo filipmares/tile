@@ -27,6 +27,9 @@ export const setCycling = (
   sizes: CycleSize[],
 ): Promise<Config> => invoke("set_cycling", { mode, sizes });
 
+export const setAnimation = (enabled: boolean): Promise<Config> =>
+  invoke("set_animation", { enabled });
+
 export const setLaunchOnLogin = (enabled: boolean): Promise<Config> =>
   invoke("set_launch_on_login", { enabled });
 

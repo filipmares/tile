@@ -17,8 +17,23 @@ use crate::window;
 /// Performs `action`, showing a (rate-limited) dialog only when the OS denies
 /// permission. NoOps and other errors are logged, never surfaced.
 pub fn run_action<R: Runtime>(app: &AppHandle<R>, action: WindowAction) {
+    run_action_preemptible(app, action, &mut || None);
+}
+
+/// As [`run_action`], but lets the pipeline pick up actions that arrive while
+/// a window is still animating.
+///
+/// `next` must not block: it is polled once per animation frame. The hotkey
+/// worker passes a non-blocking receive on its channel, which is what lets a
+/// second press steer the movement already under way instead of queueing
+/// behind it.
+pub fn run_action_preemptible<R: Runtime>(
+    app: &AppHandle<R>,
+    action: WindowAction,
+    next: &mut dyn FnMut() -> Option<WindowAction>,
+) {
     let state = app.state::<Arc<AppState>>();
-    match state.perform_action(action) {
+    match state.perform_action_preemptible(action, next) {
         Ok(()) => {}
         Err(err) => {
             log::error!("action {action} failed: {err}");

@@ -439,6 +439,13 @@ export const CYCLE_SIZES: ReadonlyArray<{ id: CycleSize; label: string }> = [
   { id: "one-third", label: "⅓" },
 ];
 
+/** `AnimationConfig` — how a window travels to its new frame. */
+export interface AnimationConfig {
+  enabled: boolean;
+  durationMs: number;
+  fps: number;
+}
+
 /** `Config` — serde `rename_all = "camelCase"`. */
 export interface Config {
   bindings: Partial<Record<WindowAction, Hotkey | null>>;
@@ -454,6 +461,7 @@ export interface Config {
   minimumWindowHeight: number;
   subsequentExecutionMode: SubsequentExecutionMode;
   cycleSizes: CycleSize[];
+  animation: AnimationConfig;
 }
 
 export type PermissionStatus = "granted" | "denied" | "not-required";

@@ -55,7 +55,10 @@ use objc2_foundation::NSRect;
 
 use tile_core::{Hotkey, Rect, Screen, WindowAction, WindowId, WindowSnapshot};
 
-use crate::{HotkeyBackend, HotkeyFailure, PermissionStatus, PlatformError, Result, WindowBackend};
+use crate::{
+    AnimationSession, HotkeyBackend, HotkeyFailure, PermissionStatus, PlatformError, Result,
+    WindowBackend,
+};
 
 // The pure, host-testable helpers (`flip_rect`, `carbon_key_code`,
 // `carbon_modifiers`) live in their own file so they can also be compiled and
@@ -165,6 +168,20 @@ mod ffi {
         pub fn AXValueCreate(theType: u32, valuePtr: *const c_void) -> AXValueRef;
         pub fn AXIsProcessTrusted() -> Boolean;
         pub fn AXIsProcessTrustedWithOptions(options: CFDictionaryRef) -> Boolean;
+
+        /// Bounds how long an AX call on `element` waits for the target
+        /// application to answer, in seconds.
+        ///
+        /// AX calls are synchronous IPC into another process, so an app that
+        /// is busy (or wedged) blocks the caller for the *system* default of
+        /// six seconds. That is survivable for a one-shot move, but an
+        /// animation makes the call ten times over, so a short per-element
+        /// timeout is what stops one unresponsive app from freezing the frame
+        /// loop. Passing `0` restores the global default.
+        pub fn AXUIElementSetMessagingTimeout(
+            element: AXUIElementRef,
+            timeoutInSeconds: f32,
+        ) -> AXError;
 
         /// Private-but-universally-used SPI that yields the `CGWindowID` for an
         /// AX element. Rectangle and essentially every window manager relies on
@@ -707,6 +724,32 @@ fn ax_window_for_id(pid: ffi::Pid, target_id: u32) -> Option<CfOwned> {
 // Window backend
 // ---------------------------------------------------------------------------
 
+/// Per-element AX timeout used while animating, in seconds.
+///
+/// Comfortably longer than the interval between animation frames, so a merely
+/// busy app is not cut off mid-move, but far below the six-second system
+/// default — which would otherwise let one wedged application stall the whole
+/// frame loop, and with it the hotkey worker thread.
+const ANIMATION_MESSAGING_TIMEOUT: f32 = 0.2;
+
+/// Leaves the native full-screen and minimized states, which silently swallow
+/// position and size changes.
+fn leave_fullscreen_and_minimized(element: ffi::AXUIElementRef) -> Result<()> {
+    if copy_bool(element, "AXFullScreen") == Some(true) {
+        let err = set_bool(element, "AXFullScreen", false);
+        if err != ffi::kAXErrorSuccess {
+            return Err(map_ax_error("exit full screen", err));
+        }
+    }
+    if copy_bool(element, "AXMinimized") == Some(true) {
+        let err = set_bool(element, "AXMinimized", false);
+        if err != ffi::kAXErrorSuccess {
+            return Err(map_ax_error("restore minimized window", err));
+        }
+    }
+    Ok(())
+}
+
 pub struct MacWindowBackend;
 
 impl MacWindowBackend {
@@ -749,20 +792,7 @@ impl WindowBackend for MacWindowBackend {
         }
         let element = front.element.0;
 
-        // A window in native full-screen (or minimized) ignores position/size
-        // changes, so leave those states first.
-        if copy_bool(element, "AXFullScreen") == Some(true) {
-            let err = set_bool(element, "AXFullScreen", false);
-            if err != ffi::kAXErrorSuccess {
-                return Err(map_ax_error("exit full screen", err));
-            }
-        }
-        if copy_bool(element, "AXMinimized") == Some(true) {
-            let err = set_bool(element, "AXMinimized", false);
-            if err != ffi::kAXErrorSuccess {
-                return Err(map_ax_error("restore minimized window", err));
-            }
-        }
+        leave_fullscreen_and_minimized(element)?;
 
         let size = CGSize {
             width: target.width,
@@ -803,6 +833,38 @@ impl WindowBackend for MacWindowBackend {
         Ok(actual)
     }
 
+    fn begin_animation(&self, id: WindowId) -> Result<Option<Box<dyn AnimationSession>>> {
+        // Resolve the window once. This is the expensive part of an AX move —
+        // it walks the system-wide element or the CoreGraphics window list —
+        // and doing it per frame would dominate the cost of the animation.
+        // Holding the element for the run of the animation is also what makes
+        // the frames apply to one window even if focus wanders mid-flight;
+        // the final frame goes back through `set_window_frame`, which
+        // re-checks focus and refuses if it moved.
+        let Some(front) = front_window()? else {
+            return Err(PlatformError::NoFocusedWindow);
+        };
+        if front.id != id {
+            return Err(PlatformError::os(
+                "begin_animation",
+                "the focused window changed before the move could be applied",
+            ));
+        }
+
+        leave_fullscreen_and_minimized(front.element.0)?;
+
+        // SAFETY: `front.element.0` is a live AX element owned by `front`,
+        // which the session below takes ownership of, so it outlives every use
+        // of this timeout. The call only sets a per-element property.
+        unsafe {
+            ffi::AXUIElementSetMessagingTimeout(front.element.0, ANIMATION_MESSAGING_TIMEOUT);
+        }
+
+        Ok(Some(Box::new(MacAnimationSession {
+            element: front.element,
+        })))
+    }
+
     fn permission_status(&self, prompt: bool) -> Result<PermissionStatus> {
         // NOTE: the system permission prompt shown by
         // `AXIsProcessTrustedWithOptions` is only presented for a running,
@@ -837,6 +899,81 @@ impl WindowBackend for MacWindowBackend {
         } else {
             PermissionStatus::Denied
         })
+    }
+}
+
+/// An in-progress animation on one macOS window.
+///
+/// Owns the retained `AXUIElement`, so a frame costs two AX calls instead of
+/// the element lookup plus three that a full `set_window_frame` would.
+struct MacAnimationSession {
+    element: CfOwned,
+}
+
+impl AnimationSession for MacAnimationSession {
+    fn set_intermediate_frame(&mut self, target: Rect) -> Result<()> {
+        let element = self.element.0;
+
+        // Position then size, dropping the leading `set_size` of the
+        // size/position/size dance. That extra call exists only to beat the
+        // window server's clamp-to-current-display when a window moves to
+        // another screen: it shrinks the window so it fits the destination
+        // before the position change. Two things make it unnecessary here.
+        // The animation walks the window across the gap in small steps rather
+        // than teleporting it, and the *final* frame goes through the full
+        // `set_window_frame`, which still does the whole dance — so even if an
+        // intermediate frame is clamped short, the window is corrected before
+        // the animation ends. Halving the AX round-trips per frame matters
+        // because each one is synchronous IPC into the target app.
+        //
+        // As in `set_window_frame`, only `kAXErrorAPIDisabled` (Accessibility
+        // permission revoked mid-flight) is fatal. Everything else — including
+        // the timeout of a briefly busy app — is tolerated, so a single slow
+        // frame drops rather than aborting the whole animation.
+        for (context, err) in [
+            (
+                "set position",
+                set_position(
+                    element,
+                    CGPoint {
+                        x: target.x,
+                        y: target.y,
+                    },
+                ),
+            ),
+            (
+                "set size",
+                set_size(
+                    element,
+                    CGSize {
+                        width: target.width,
+                        height: target.height,
+                    },
+                ),
+            ),
+        ] {
+            if err == ffi::kAXErrorAPIDisabled {
+                return Err(map_ax_error(context, err));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for MacAnimationSession {
+    fn drop(&mut self) {
+        // Put the element back on the system default timeout before releasing
+        // it. The element itself is about to go away, but the same window can
+        // be resolved again by the next action, and an AX timeout tuned for a
+        // 20 ms animation frame is far too tight for a one-shot move into a
+        // busy app.
+        //
+        // SAFETY: `self.element.0` is still live — `CfOwned`'s own `Drop` runs
+        // after this one — and `0.0` is the documented "use the global
+        // default" value.
+        unsafe {
+            ffi::AXUIElementSetMessagingTimeout(self.element.0, 0.0);
+        }
     }
 }
 

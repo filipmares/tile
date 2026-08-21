@@ -78,6 +78,25 @@ pub enum PermissionStatus {
     NotRequired,
 }
 
+/// An open run of intermediate animation frames for one window.
+///
+/// Created by [`WindowBackend::begin_animation`], which performs the
+/// once-per-animation preparation, so pushing a frame is as close to a single
+/// system call as the platform allows. Dropped when the animation ends.
+///
+/// Frames pushed through here are *intermediate*: the window is expected to
+/// keep moving, so nothing is read back and the result is not reported. The
+/// final frame goes through [`WindowBackend::set_window_frame`] instead.
+pub trait AnimationSession {
+    /// Places the window's visible frame at `target`, as cheaply as possible.
+    ///
+    /// An error aborts the animation: the caller stops immediately and
+    /// propagates, so a window that becomes unmovable mid-flight (an elevated
+    /// process, revoked Accessibility permission) surfaces exactly as it would
+    /// have from a plain [`WindowBackend::set_window_frame`].
+    fn set_intermediate_frame(&mut self, target: Rect) -> Result<()>;
+}
+
 /// Reads and manipulates the windows and displays of the host OS.
 ///
 /// Implementations must present coordinates in a single, unified space: a
@@ -109,6 +128,31 @@ pub trait WindowBackend: Send {
     /// A window in a native full-screen/maximized state must be restored to a
     /// normal state first, otherwise the move silently does nothing.
     fn set_window_frame(&self, id: WindowId, target: Rect) -> Result<Rect>;
+
+    /// Opens a fast path for a run of *intermediate* animation frames.
+    ///
+    /// Animating a snap means calling into the window server 10–20 times where
+    /// a plain move calls once, so the per-call work [`set_window_frame`] has
+    /// to do — restoring a maximized window, re-measuring the window's
+    /// invisible border, reading the resulting frame back — becomes the
+    /// dominant cost. A session hoists all of that out of the loop: it is
+    /// created once, does the preparation once, and then each frame is the
+    /// smallest possible call.
+    ///
+    /// Returning `Ok(None)` means "this backend has no fast path", and the
+    /// caller falls back to [`set_window_frame`], discarding the read-back.
+    /// That is the default, which keeps this addition free for the
+    /// `unsupported` fallback and for any future backend.
+    ///
+    /// The **final** frame of an animation must always go through
+    /// [`set_window_frame`] rather than the session, because only it reports
+    /// the frame the window truly ended up with — which the engine needs for
+    /// history and no-op detection.
+    ///
+    /// [`set_window_frame`]: WindowBackend::set_window_frame
+    fn begin_animation(&self, _id: WindowId) -> Result<Option<Box<dyn AnimationSession>>> {
+        Ok(None)
+    }
 
     /// Current permission status, optionally prompting the user.
     ///

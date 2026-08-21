@@ -6,14 +6,16 @@
 //! through the [`Engine`] in this crate.
 
 pub mod action;
+pub mod animation;
 pub mod config;
 pub mod geometry;
 pub mod history;
 pub mod hotkey;
 
 pub use action::{ParseActionError, WindowAction, WindowFamily};
+pub use animation::{AnimationParams, Animator};
 pub use config::{
-    Config, ConfigError, Conflict, CycleSize, Gaps, SharedEdges, SizeOptions,
+    AnimationConfig, Config, ConfigError, Conflict, CycleSize, Gaps, SharedEdges, SizeOptions,
     SubsequentExecutionMode, CONFIG_FILE_NAME, MAX_GAP,
 };
 pub use geometry::{Rect, Screen};

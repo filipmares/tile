@@ -4,6 +4,7 @@
 //!
 //! See [`state`] for the threading model.
 
+mod animate;
 mod commands;
 mod config_store;
 mod dto;
@@ -51,6 +52,7 @@ pub fn run() {
             commands::set_binding,
             commands::set_gaps,
             commands::set_cycling,
+            commands::set_animation,
             commands::set_launch_on_login,
             commands::reset_to_defaults,
             commands::perform_action,
@@ -133,12 +135,19 @@ fn setup_app<R: Runtime>(
     // Worker thread: drains hotkey presses and performs them. It only touches
     // the window backend (safe off the main thread); hotkey registration stays
     // with the backend's own loop.
+    //
+    // The receiver is also handed to the pipeline as a non-blocking poll, so a
+    // press that arrives while the previous one is still animating steers that
+    // animation instead of waiting for it. Draining the channel from inside
+    // the action is safe precisely because this thread is the only consumer.
     let worker_handle = app.clone();
     thread::Builder::new()
         .name("tile-action-worker".into())
         .spawn(move || {
             while let Ok(action) = rx.recv() {
-                feedback::run_action(&worker_handle, action);
+                feedback::run_action_preemptible(&worker_handle, action, &mut || {
+                    rx.try_recv().ok()
+                });
             }
             log::debug!("action worker thread exiting");
         })?;

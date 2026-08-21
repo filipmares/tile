@@ -105,6 +105,32 @@ The step sizes (`sizeStep`, `widthStep` and `moveStep`, each defaulting to 30)
 and the floor (`minimumWindowWidth`, `minimumWindowHeight`, defaulting to 0.25)
 live in `config.json`; there is no settings UI for them yet.
 
+### Animated snapping
+
+Windows glide to their new frame rather than jumping to it. Each of the four
+edges is driven by its own spring, and the edge leading the movement is stiffer
+than the one behind it, so the window stretches towards its destination and the
+trailing edge catches up — and a shortcut pressed while a window is still in
+flight redirects the movement it already has instead of restarting it.
+
+**This is on by default**, including for existing installs, which had no
+animation before. Turn it off in Settings ▸ Behaviour ▸ Motion for the instant
+snapping Tile used to do; that is also the setting to reach for over a remote
+desktop session, or if you would rather have no motion at all.
+
+The timing lives in `config.json` under `animation` and has no settings UI:
+
+```jsonc
+"animation": {
+  "enabled": true,
+  "durationMs": 140, // nominal settle time; 40–1000
+  "fps": 90          // frames per second; 15–240, capped lower on macOS
+}
+```
+
+`durationMs` is nominal rather than exact — a spring approaches its target
+asymptotically, so the value scales the motion instead of setting a deadline.
+
 ### Windows shortcut notes
 
 Tile's keyboard hook replaces Aero Snap for the bound `Win`+Arrow shortcuts.

@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::action::WindowAction;
+use crate::animation::AnimationParams;
 use crate::geometry::Rect;
 use crate::hotkey::{Hotkey, KeyCode, Modifiers};
 
@@ -276,6 +277,102 @@ fn normalize_minimum_fraction(value: f64) -> f64 {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Animation
+// ---------------------------------------------------------------------------
+
+/// Nominal settle time for an animated snap, in milliseconds.
+///
+/// Short enough that the window feels like it responded to the keypress rather
+/// than played a cutscene, long enough for the per-edge stretch to be visible.
+fn default_animation_duration_ms() -> u32 {
+    140
+}
+
+/// Frames per second the animation aims for.
+///
+/// Above a 60 Hz display's refresh rate, so the motion is smooth on a 60 Hz
+/// panel without the driver having to be phase-locked to it, but well short of
+/// a rate that would spend meaningful CPU pushing frames at another process's
+/// window. Platform backends may cap this further where each frame is
+/// expensive; see the frame pump in the app.
+fn default_animation_fps() -> u32 {
+    90
+}
+
+/// Bounds for the nominal animation duration. Below the lower bound the motion
+/// is indistinguishable from a teleport but still costs frames; above the upper
+/// one the window lags noticeably behind the keypress.
+pub const MIN_ANIMATION_DURATION_MS: u32 = 40;
+pub const MAX_ANIMATION_DURATION_MS: u32 = 1000;
+
+/// Bounds for the animation frame rate. The floor keeps the motion from
+/// looking like a slideshow; the ceiling stops a hand-edited config from
+/// hammering another process's window with thousands of position changes a
+/// second.
+pub const MIN_ANIMATION_FPS: u32 = 15;
+pub const MAX_ANIMATION_FPS: u32 = 240;
+
+/// How a window travels to its new frame.
+///
+/// Only [`AnimationConfig::enabled`] is exposed in the settings UI: it is the
+/// choice that matters, and it is what someone who finds motion distracting
+/// (or who is running over a remote desktop session) needs to reach. The
+/// duration and frame rate are deliberately config-file-only tuning knobs, the
+/// same treatment the step sizes get.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AnimationConfig {
+    /// Animate window moves instead of applying them in one jump.
+    pub enabled: bool,
+    /// Nominal settle time. Springs approach their target asymptotically, so
+    /// this scales the motion rather than acting as a hard deadline.
+    pub duration_ms: u32,
+    /// Frames per second the animation aims to emit.
+    pub fps: u32,
+}
+
+impl Default for AnimationConfig {
+    fn default() -> Self {
+        Self {
+            // On by default: the animation is what tells the user their
+            // keypress was received and where the window went, and a snap that
+            // teleports is the thing this replaces. It is a single checkbox
+            // away in the settings window for anyone who wants the instant
+            // behaviour back.
+            enabled: true,
+            duration_ms: default_animation_duration_ms(),
+            fps: default_animation_fps(),
+        }
+    }
+}
+
+impl AnimationConfig {
+    /// Clamps the tuning knobs, mapping nonsense to the defaults so a
+    /// hand-edited config can never stall or spin the frame pump.
+    pub fn normalize(&mut self) {
+        if self.duration_ms == 0 {
+            self.duration_ms = default_animation_duration_ms();
+        }
+        self.duration_ms = self
+            .duration_ms
+            .clamp(MIN_ANIMATION_DURATION_MS, MAX_ANIMATION_DURATION_MS);
+
+        if self.fps == 0 {
+            self.fps = default_animation_fps();
+        }
+        self.fps = self.fps.clamp(MIN_ANIMATION_FPS, MAX_ANIMATION_FPS);
+    }
+
+    /// The parameters the animator is driven with.
+    pub fn params(&self) -> AnimationParams {
+        AnimationParams {
+            duration_ms: self.duration_ms,
+            fps: self.fps,
+        }
+    }
+}
+
 /// Fractions controlling the size-variant actions that resize a window rather
 /// than tile it into the grid, plus the step sizes and floor used by the
 /// incremental resize and move actions.
@@ -542,6 +639,10 @@ pub struct Config {
         deserialize_with = "deserialize_cycle_sizes"
     )]
     pub cycle_sizes: Vec<CycleSize>,
+    /// How a window travels to its new frame. Absent from configs written
+    /// before animation existed, hence the serde default.
+    #[serde(default)]
+    pub animation: AnimationConfig,
 }
 
 impl Default for Config {
@@ -560,6 +661,7 @@ impl Default for Config {
             minimum_window_height: default_minimum_fraction(),
             subsequent_execution_mode: SubsequentExecutionMode::default(),
             cycle_sizes: default_cycle_sizes(),
+            animation: AnimationConfig::default(),
         }
     }
 }
@@ -592,6 +694,7 @@ impl Config {
         self.minimum_window_width = normalize_minimum_fraction(self.minimum_window_width);
         self.minimum_window_height = normalize_minimum_fraction(self.minimum_window_height);
         self.normalize_cycle_sizes();
+        self.animation.normalize();
     }
 
     /// Drops duplicates and puts the cycle into its canonical order, so the
@@ -1293,6 +1396,101 @@ mod tests {
         assert_eq!(config.move_step, 30.0);
         assert_eq!(config.minimum_window_width, 0.25);
         assert_eq!(config.minimum_window_height, 0.25);
+    }
+
+    #[test]
+    fn animation_defaults_are_on_and_round_trip_through_json() {
+        let config = Config::default();
+        assert!(config.animation.enabled);
+        assert_eq!(config.animation.duration_ms, 140);
+        assert_eq!(config.animation.fps, 90);
+
+        let json = config.to_json().unwrap();
+        assert!(json.contains(r#""durationMs": 140"#));
+        assert_eq!(Config::from_json(&json).unwrap(), config);
+    }
+
+    #[test]
+    fn a_config_predating_animation_still_loads() {
+        // A file written by a build that had no concept of animation at all.
+        // It must load, and pick up the current defaults rather than an
+        // all-zero struct that would divide by zero in the frame pump.
+        let json = r#"{
+            "bindings": {},
+            "gap": 8,
+            "launchOnLogin": true
+        }"#;
+        let config = Config::from_json(json).unwrap();
+        assert_eq!(config.animation, AnimationConfig::default());
+    }
+
+    #[test]
+    fn a_partial_animation_object_keeps_the_other_defaults() {
+        // Someone switching the animation off by hand should not have to
+        // restate the tuning knobs.
+        let config = Config::from_json(r#"{"animation": {"enabled": false}}"#).unwrap();
+        assert!(!config.animation.enabled);
+        assert_eq!(config.animation.duration_ms, 140);
+        assert_eq!(config.animation.fps, 90);
+    }
+
+    #[test]
+    fn normalize_clamps_animation_tuning() {
+        let mut config = Config {
+            animation: AnimationConfig {
+                enabled: true,
+                duration_ms: 99_999,
+                fps: 5,
+            },
+            ..Default::default()
+        };
+        config.normalize();
+        assert_eq!(config.animation.duration_ms, MAX_ANIMATION_DURATION_MS);
+        assert_eq!(config.animation.fps, MIN_ANIMATION_FPS);
+
+        // Zero is the dangerous one: a zero duration divides by zero when the
+        // animator scales time, and a zero fps does the same for the frame
+        // interval. Both fall back to the default rather than being clamped to
+        // the floor, since zero reads as "unset" more than "as fast as
+        // possible".
+        let mut zeroed = Config {
+            animation: AnimationConfig {
+                enabled: true,
+                duration_ms: 0,
+                fps: 0,
+            },
+            ..Default::default()
+        };
+        zeroed.normalize();
+        assert_eq!(zeroed.animation.duration_ms, 140);
+        assert_eq!(zeroed.animation.fps, 90);
+
+        let mut tiny = Config {
+            animation: AnimationConfig {
+                enabled: true,
+                duration_ms: 1,
+                fps: 1000,
+            },
+            ..Default::default()
+        };
+        tiny.normalize();
+        assert_eq!(tiny.animation.duration_ms, MIN_ANIMATION_DURATION_MS);
+        assert_eq!(tiny.animation.fps, MAX_ANIMATION_FPS);
+    }
+
+    #[test]
+    fn animation_params_follow_the_config() {
+        let config = Config {
+            animation: AnimationConfig {
+                enabled: true,
+                duration_ms: 220,
+                fps: 60,
+            },
+            ..Default::default()
+        };
+        let params = config.animation.params();
+        assert_eq!(params.duration_ms, 220);
+        assert_eq!(params.fps, 60);
     }
 
     #[test]
