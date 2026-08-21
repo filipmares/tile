@@ -120,13 +120,11 @@ live in `config.json`; there is no settings UI for them yet.
 
 ### Animated snapping
 
-Windows glide to their new frame rather than jumping to it. On Windows and
-other non-macOS platforms, each edge is driven by its own spring, so the window
-stretches towards its destination, overshoots it slightly, and eases back as
-the trailing edge catches up. macOS uses a shorter, critically damped motion
-for the rigid rectangle instead. On every platform, a shortcut pressed while a
-window is still in flight redirects the movement it already has instead of
-restarting it.
+Windows and macOS glide to their new frame rather than jumping to it. Both use
+a rigid rectangle and a restrained, monotonic ease-out, with platform-specific
+timing tuned to the native window manager. On every platform, a shortcut pressed
+while a window is still in flight redirects the movement it already has instead
+of restarting it.
 
 **This is on by default**, including for existing installs, which had no
 animation before. Turn it off in Settings ▸ Behaviour ▸ Motion for the instant
@@ -138,15 +136,15 @@ The timing lives in `config.json` under `animation` and has no settings UI:
 ```jsonc
 "animation": {
   "enabled": true,
-  "durationMs": 450, // 250 on macOS; how long a snap takes; 40–1000
+  "durationMs": 220, // 250 on macOS; how long a snap takes; 40–1000
   "fps": 90          // frames per second; 15–240, capped lower on macOS
 }
 ```
 
-`durationMs` is approximate — a spring approaches its target asymptotically, so
-larger moves run slightly over and short nudges finish well under. The default
-is 250 on macOS and 450 elsewhere. It is purely a speed dial: the platform
-profile supplies the motion model and damping.
+`durationMs` is the end-to-end duration of the rigid ease-out. The default is
+250 ms on macOS and 220 ms on Windows and other platforms. The frame rate is a
+config-file-only pacing knob; the platform profile supplies the native-feeling
+ease-out tuning.
 
 ### Windows shortcut notes
 

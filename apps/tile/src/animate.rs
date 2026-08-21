@@ -69,7 +69,7 @@ pub enum Interruption {
 /// This exists so the pump's timing is injectable. Frame *count* is a function
 /// of how long each frame actually took, which on a loaded machine is anyone's
 /// guess — correct behaviour for a real animation, since a late frame should
-/// advance the springs further rather than play in slow motion, but impossible
+/// advance the motion further rather than play in slow motion, but impossible
 /// to assert against. Tests supply a pacer that reports the nominal interval
 /// without sleeping, which makes them both deterministic and instant.
 pub trait Pacer {
