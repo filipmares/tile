@@ -186,7 +186,7 @@ fn lerp_rect(from: Rect, to: Rect, progress: f64) -> Rect {
 /// frame with the elapsed time and apply the returned rectangle. Stop when
 /// [`Animator::is_settled`] reports true; the final frame is exactly
 /// [`Animator::target`].
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Animator {
     motion: RectMotion,
 }
