@@ -42,6 +42,7 @@ pub const NATURAL_SETTLE_MS: f64 = 513.0;
 
 /// Measured settle time of the macOS rigid profile on the same representative
 /// half-screen move.
+#[allow(dead_code)]
 const MACOS_NATURAL_SETTLE_MS: f64 = 258.0;
 
 /// Stiffness and damping of the edge that leads the movement.
@@ -91,6 +92,7 @@ const NON_MACOS_PROFILE: AnimationProfile = AnimationProfile {
     rigid: (2500.0, 100.0),
 };
 
+#[allow(dead_code)]
 const MACOS_PROFILE: AnimationProfile = AnimationProfile {
     mode: AnimationMode::Rigid,
     natural_settle_ms: MACOS_NATURAL_SETTLE_MS,
@@ -733,6 +735,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::assertions_on_constants)]
     fn platform_profiles_select_distinct_motion_models() {
         assert_ne!(MACOS_PROFILE, NON_MACOS_PROFILE);
         assert_eq!(MACOS_PROFILE.mode, AnimationMode::Rigid);
