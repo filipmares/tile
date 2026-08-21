@@ -15,7 +15,7 @@
 //!
 //! With animation enabled, a single action occupies the backend and engine
 //! locks for the configured animation duration — 250 ms by default on macOS and
-//! 450 ms elsewhere, see [`tile_core::AnimationConfig`] — rather than for one
+//! 220 ms elsewhere, see [`tile_core::AnimationConfig`] — rather than for one
 //! `SetWindowPos`. That is deliberate.
 //!
 //! [`tile_core::Engine::plan`] plans against the window's *current* frame, and

@@ -281,21 +281,9 @@ fn normalize_minimum_fraction(value: f64) -> f64 {
 // Animation
 // ---------------------------------------------------------------------------
 
-/// Roughly how long an animated snap takes, end to end, in milliseconds.
-///
-/// The native-feeling macOS profile is deliberately shorter and rigid, while
-/// the existing per-edge spring profile keeps its more expressive timing on
-/// Windows and other platforms. This is only the speed dial: the motion model
-/// and damping come from the compile-time animation profile.
+/// How long an animated snap takes by default, end to end, in milliseconds.
 fn default_animation_duration_ms() -> u32 {
-    #[cfg(target_os = "macos")]
-    {
-        250
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        450
-    }
+    crate::animation::PLATFORM_DEFAULT_DURATION_MS
 }
 
 /// Frames per second the animation aims for.
@@ -334,9 +322,7 @@ pub const MAX_ANIMATION_FPS: u32 = 240;
 pub struct AnimationConfig {
     /// Animate window moves instead of applying them in one jump.
     pub enabled: bool,
-    /// Roughly how long the movement takes, end to end. Approximate rather
-    /// than exact: a spring approaches its target asymptotically, so the value
-    /// scales the motion and larger moves run slightly over.
+    /// How long the movement takes, end to end, in milliseconds.
     pub duration_ms: u32,
     /// Frames per second the animation aims to emit.
     pub fps: u32,
@@ -1658,8 +1644,10 @@ mod tests {
 
         #[cfg(target_os = "macos")]
         assert_eq!(duration, 250);
-        #[cfg(not(target_os = "macos"))]
-        assert_eq!(duration, 450);
+        #[cfg(target_os = "windows")]
+        assert_eq!(duration, 220);
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        assert_eq!(duration, 220);
     }
 
     #[test]
