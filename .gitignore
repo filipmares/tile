@@ -24,7 +24,8 @@ Thumbs.db
 
 # Editors / IDEs
 .idea/
-.vscode/
+.vscode/*
+!.vscode/tasks.json
 *.swp
 *~
 
