@@ -732,6 +732,15 @@ fn ax_window_for_id(pid: ffi::Pid, target_id: u32) -> Option<CfOwned> {
 /// frame loop, and with it the hotkey worker thread.
 const ANIMATION_MESSAGING_TIMEOUT: f32 = 0.2;
 
+/// Per-element AX timeout used while *preparing* an animation.
+///
+/// Deliberately much longer than [`ANIMATION_MESSAGING_TIMEOUT`]. Setup has to
+/// take a window out of full screen, and macOS animates that transition over
+/// the better part of a second, so the frame-loop timeout would abort a
+/// perfectly healthy exit. Still far below the six-second system default, so a
+/// genuinely wedged app cannot hold the worker thread for that long.
+const SETUP_MESSAGING_TIMEOUT: f32 = 2.0;
+
 /// Leaves the native full-screen and minimized states, which silently swallow
 /// position and size changes.
 fn leave_fullscreen_and_minimized(element: ffi::AXUIElementRef) -> Result<()> {
@@ -851,11 +860,22 @@ impl WindowBackend for MacWindowBackend {
             ));
         }
 
-        leave_fullscreen_and_minimized(front.element.0)?;
-
+        // Bound the setup calls before making any of them. Leaving full screen
+        // or un-minimizing is a synchronous round trip into the target app, so
+        // on the system default this could block the worker thread for six
+        // seconds before the animation had drawn a single frame.
+        //
         // SAFETY: `front.element.0` is a live AX element owned by `front`,
         // which the session below takes ownership of, so it outlives every use
         // of this timeout. The call only sets a per-element property.
+        unsafe {
+            ffi::AXUIElementSetMessagingTimeout(front.element.0, SETUP_MESSAGING_TIMEOUT);
+        }
+
+        leave_fullscreen_and_minimized(front.element.0)?;
+
+        // Tighten to the frame-loop budget now the slow part is done.
+        // SAFETY: as above — the element is still live and owned by `front`.
         unsafe {
             ffi::AXUIElementSetMessagingTimeout(front.element.0, ANIMATION_MESSAGING_TIMEOUT);
         }

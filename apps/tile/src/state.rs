@@ -14,8 +14,9 @@
 //! # Why an animated move still holds both locks
 //!
 //! With animation enabled, a single action occupies the backend and engine
-//! locks for the length of the animation (~140 ms) rather than for one
-//! `SetWindowPos`. That is deliberate.
+//! locks for the configured animation duration — 450 ms by default, see
+//! [`tile_core::AnimationConfig`] — rather than for one `SetWindowPos`. That is
+//! deliberate.
 //!
 //! [`tile_core::Engine::plan`] plans against the window's *current* frame, and
 //! [`tile_core::Engine::commit`] has to run before the next `plan` for size

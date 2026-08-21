@@ -13,7 +13,7 @@ use windows::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW,
 };
 use windows::Win32::System::Threading::GetCurrentProcessId;
-use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+use windows::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetClassNameW, GetForegroundWindow, GetShellWindow, GetWindowLongW, GetWindowRect,
     GetWindowThreadProcessId, IsIconic, IsWindowVisible, IsZoomed, SetWindowPos, ShowWindow,
@@ -169,12 +169,12 @@ impl WindowBackend for WindowsWindowBackend {
 
         // SAFETY: `hwnd` came from `id_from_hwnd`. Both calls are the same
         // ones `set_window_frame` makes, hoisted out of the frame loop.
-        let delta = unsafe {
+        let (delta, dpi) = unsafe {
             restore_if_tiled_away(hwnd);
-            measure_frame_delta(hwnd)?
+            (measure_frame_delta(hwnd)?, GetDpiForWindow(hwnd))
         };
 
-        Ok(Some(Box::new(WindowsAnimationSession { hwnd, delta })))
+        Ok(Some(Box::new(WindowsAnimationSession { hwnd, delta, dpi })))
     }
 
     fn permission_status(&self, _prompt: bool) -> Result<PermissionStatus> {
@@ -189,13 +189,18 @@ impl WindowBackend for WindowsWindowBackend {
 ///
 /// Holds the two things [`WindowsWindowBackend::set_window_frame`] otherwise
 /// recomputes on every call: the restore has already happened, and the
-/// invisible-border delta has already been measured. The delta is safe to
-/// cache for the duration because it is a function of the window's *style*,
-/// which does not change while a window is being dragged around by the
-/// animation.
+/// invisible-border delta has already been measured.
+///
+/// The delta is a function of the window's style *and* of its monitor's DPI —
+/// the invisible resize border is physical pixels, so it grows on a higher-DPI
+/// display. A cross-display throw can therefore invalidate it mid-animation,
+/// which is what `dpi` guards: it is re-measured when the window's DPI changes,
+/// rather than letting the animation run on a stale translation and jump by the
+/// border difference when the final frame re-measures.
 struct WindowsAnimationSession {
     hwnd: HWND,
     delta: FrameDelta,
+    dpi: u32,
 }
 
 impl AnimationSession for WindowsAnimationSession {
@@ -204,10 +209,20 @@ impl AnimationSession for WindowsAnimationSession {
         // window has since been destroyed `SetWindowPos` fails cleanly with an
         // error, which aborts the animation.
         unsafe {
+            // One cheap query per frame to notice a DPI change. `GetDpiForWindow`
+            // is a lookup on the window's monitor, far cheaper than the pair of
+            // calls re-measuring the border would cost, so the common
+            // same-display animation pays almost nothing.
+            let dpi = GetDpiForWindow(self.hwnd);
+            if dpi != 0 && dpi != self.dpi {
+                self.delta = measure_frame_delta(self.hwnd)?;
+                self.dpi = dpi;
+            }
+
             // One call, no DWM read-back: the frame after this one is already
             // on its way, so nothing needs to know exactly where the window
             // landed. That takes an intermediate frame from four system calls
-            // to one.
+            // to two.
             //
             // `SWP_NOSENDCHANGING` is deliberately *only* used here. It stops
             // the app's `WM_WINDOWPOSCHANGING` handler from clamping each
@@ -215,7 +230,7 @@ impl AnimationSession for WindowsAnimationSession {
             // inspect, and it avoids a window with size increments juddering
             // as it snaps to a cell on every frame. It would be wrong on the
             // final frame, where the app's clamp is exactly the truth
-            // `set_window_frame` has to report back.
+            // `finish` has to report back.
             move_window(self.hwnd, target, self.delta, SWP_NOSENDCHANGING)
         }
     }
@@ -223,11 +238,16 @@ impl AnimationSession for WindowsAnimationSession {
     fn finish(&mut self, target: Rect) -> Result<Rect> {
         // SAFETY: `self.hwnd` was validated when the session was opened.
         unsafe {
+            // Re-measure rather than trusting the cached delta. This is the
+            // frame that has to be exact, and a cross-display throw may have
+            // just changed the window's DPI and with it the invisible border.
+            let delta = measure_frame_delta(self.hwnd)?;
+
             // No `SWP_NOSENDCHANGING` here, deliberately: this is the frame
             // that has to stick, so the app must get its
             // `WM_WINDOWPOSCHANGING` and be allowed to clamp the result to its
             // minimum size or size increments.
-            move_window(self.hwnd, target, self.delta, SET_WINDOW_POS_FLAGS(0))?;
+            move_window(self.hwnd, target, delta, SET_WINDOW_POS_FLAGS(0))?;
 
             // Report the ACTUAL visible frame, exactly as `set_window_frame`
             // does, since callers need the truth for history and no-op
