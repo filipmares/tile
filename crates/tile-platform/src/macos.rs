@@ -958,6 +958,62 @@ impl AnimationSession for MacAnimationSession {
         }
         Ok(())
     }
+
+    fn finish(&mut self, target: Rect) -> Result<Rect> {
+        let element = self.element.0;
+
+        // Put the element back on the system default timeout first. The short
+        // animation timeout exists so one busy app cannot stall the frame
+        // loop, and dropping a frame there is harmless. This frame is not
+        // droppable: timing it out would leave the window on its last
+        // intermediate rectangle while the read-back quietly reported the
+        // target as achieved.
+        //
+        // SAFETY: `element` is the live, retained AX element this session owns;
+        // `0.0` is the documented "use the global default" value.
+        unsafe {
+            ffi::AXUIElementSetMessagingTimeout(element, 0.0);
+        }
+
+        // The full size/position/size dance, exactly as `set_window_frame`
+        // does it: macOS clamps a window's size to whatever display it
+        // currently overlaps, so the leading `set_size` shrinks it to fit the
+        // old display, the position change moves it to the target display, and
+        // the second `set_size` grows it once it fits there. Intermediate
+        // frames can skip that; the frame that has to stick cannot.
+        //
+        // Unlike `set_window_frame` this never consults the focused window: the
+        // session already holds the element it has been driving, so a click on
+        // another window mid-animation cannot make the final frame fail.
+        let size = CGSize {
+            width: target.width,
+            height: target.height,
+        };
+        let position = CGPoint {
+            x: target.x,
+            y: target.y,
+        };
+        for (context, err) in [
+            ("set size", set_size(element, size)),
+            ("set position", set_position(element, position)),
+            ("set size", set_size(element, size)),
+        ] {
+            if err == ffi::kAXErrorAPIDisabled {
+                return Err(map_ax_error(context, err));
+            }
+        }
+
+        // Report what the window actually ended up with — Terminal and iTerm
+        // snap to character-cell increments, so this can differ from `target`.
+        let actual = match (
+            copy_point(element, "AXPosition"),
+            copy_size(element, "AXSize"),
+        ) {
+            (Some(p), Some(s)) => Rect::new(p.x, p.y, s.width, s.height),
+            _ => target,
+        };
+        Ok(actual)
+    }
 }
 
 impl Drop for MacAnimationSession {

@@ -240,21 +240,24 @@ impl Animator {
 
     /// Decides, per axis, which edge is leading and which is trailing.
     ///
-    /// The leading edge is the one on the side the rectangle is heading
-    /// towards: moving right, the right edge leads. A pure resize with a fixed
-    /// left edge therefore leads with the right edge, which is also the edge
-    /// the user is watching.
+    /// The leading edge is the one the eye follows. Usually that is the edge on
+    /// the side the rectangle is heading towards — moving right, the right edge
+    /// leads — but that rule alone gets one-sided resizes backwards, so the
+    /// travelled distance is consulted first. See [`leading_edge`].
     fn assign_roles(&mut self) {
-        let horizontal = (self.left.target - self.left.pos) + (self.right.target - self.right.pos);
-        let vertical = (self.top.target - self.top.pos) + (self.bottom.target - self.bottom.pos);
+        let (left_leads, right_leads) = leading_edge(
+            self.left.target - self.left.pos,
+            self.right.target - self.right.pos,
+        );
+        self.left.set_role(left_leads);
+        self.right.set_role(right_leads);
 
-        // A tie (a symmetric grow or shrink about the centre) has no leading
-        // edge; treating the far edge as leading keeps the behaviour defined
-        // and matches the "moving right" case at the limit.
-        self.right.set_role(horizontal >= 0.0);
-        self.left.set_role(horizontal < 0.0);
-        self.bottom.set_role(vertical >= 0.0);
-        self.top.set_role(vertical < 0.0);
+        let (top_leads, bottom_leads) = leading_edge(
+            self.top.target - self.top.pos,
+            self.bottom.target - self.bottom.pos,
+        );
+        self.top.set_role(top_leads);
+        self.bottom.set_role(bottom_leads);
     }
 
     /// The rectangle this animation is heading for.
@@ -323,6 +326,36 @@ impl Animator {
             (self.bottom.pos - self.top.pos).max(0.0),
         )
     }
+}
+
+/// Sub-pixel slack below which two edge distances count as equal.
+const TIE_EPSILON: f64 = 0.5;
+
+/// Given how far the low edge (left/top) and the high edge (right/bottom) each
+/// have to travel, returns `(low_leads, high_leads)`.
+///
+/// Distance is checked before direction, because the two rules disagree on
+/// one-sided resizes and distance is the one that matches what the user sees.
+/// Shrinking a left-anchored window with `SmallerWidth` moves only the right
+/// edge, yet the *sum* of the deltas is negative, so a direction-only rule
+/// concludes the window is "moving left" and hands the stiff leading spring to
+/// the left edge — which is not moving at all — while the only edge actually
+/// travelling gets the soft trailing one. That inverts the intended asymmetry
+/// and leaves the resize slower than its configured duration.
+///
+/// When both edges travel the same distance, which is every pure translation,
+/// there is no "further" edge and direction decides.
+fn leading_edge(low_delta: f64, high_delta: f64) -> (bool, bool) {
+    if (low_delta.abs() - high_delta.abs()).abs() > TIE_EPSILON {
+        let low_leads = low_delta.abs() > high_delta.abs();
+        return (low_leads, !low_leads);
+    }
+
+    // A tie: a translation, or a symmetric grow/shrink about the centre. The
+    // edge on the side the rectangle is heading towards leads. A zero-length
+    // move lands here too and is arbitrary but defined.
+    let forward = low_delta + high_delta >= 0.0;
+    (!forward, forward)
 }
 
 #[cfg(test)]
@@ -454,6 +487,49 @@ mod tests {
         }
 
         assert!(!animator.exhausted, "the time budget truncated a real move");
+    }
+
+    #[test]
+    fn a_one_sided_resize_leads_with_the_edge_that_actually_moves() {
+        // `SmallerWidth` on a left-anchored window moves only the right edge.
+        // A direction-only rule sums the deltas, concludes "moving left", and
+        // gives the stiff leading spring to the stationary left edge — leaving
+        // the only moving edge on the soft trailing one.
+        assert_eq!(leading_edge(0.0, -30.0), (false, true));
+        // Right-anchored: only the left edge moves, so it leads.
+        assert_eq!(leading_edge(30.0, 0.0), (true, false));
+        // Growing, left-anchored: the right edge moves and leads.
+        assert_eq!(leading_edge(0.0, 320.0), (false, true));
+    }
+
+    #[test]
+    fn a_translation_leads_with_the_edge_facing_the_destination() {
+        // Both edges travel the same distance, so direction decides.
+        assert_eq!(leading_edge(960.0, 960.0), (false, true));
+        assert_eq!(leading_edge(-960.0, -960.0), (true, false));
+        // A symmetric resize about the centre is also a tie.
+        assert_eq!(leading_edge(-15.0, 15.0), (false, true));
+    }
+
+    #[test]
+    fn a_one_sided_resize_settles_within_its_configured_duration() {
+        // The consequence of getting the roles backwards: the moving edge runs
+        // on the softer spring, so the resize takes materially longer than the
+        // duration the user configured.
+        let from = Rect::new(0.0, 0.0, 960.0, 1080.0);
+        let to = Rect::new(0.0, 0.0, 930.0, 1080.0);
+        let frame = Duration::from_millis(4);
+        let mut animator = Animator::new(from, to, PARAMS);
+
+        let frames = run(&mut animator, frame);
+        let actual_ms = frames.len() as f64 * frame.as_secs_f64() * 1000.0;
+
+        assert_eq!(*frames.last().unwrap(), to);
+        assert!(
+            actual_ms <= f64::from(PARAMS.duration_ms),
+            "a 30px shrink took {actual_ms:.0}ms against a {}ms budget",
+            PARAMS.duration_ms
+        );
     }
 
     #[test]

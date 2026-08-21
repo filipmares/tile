@@ -219,6 +219,23 @@ impl AnimationSession for WindowsAnimationSession {
             move_window(self.hwnd, target, self.delta, SWP_NOSENDCHANGING)
         }
     }
+
+    fn finish(&mut self, target: Rect) -> Result<Rect> {
+        // SAFETY: `self.hwnd` was validated when the session was opened.
+        unsafe {
+            // No `SWP_NOSENDCHANGING` here, deliberately: this is the frame
+            // that has to stick, so the app must get its
+            // `WM_WINDOWPOSCHANGING` and be allowed to clamp the result to its
+            // minimum size or size increments.
+            move_window(self.hwnd, target, self.delta, SET_WINDOW_POS_FLAGS(0))?;
+
+            // Report the ACTUAL visible frame, exactly as `set_window_frame`
+            // does, since callers need the truth for history and no-op
+            // detection.
+            let actual = extended_frame(self.hwnd).or_else(|| window_rect(self.hwnd).ok());
+            Ok(actual.unwrap_or(target))
+        }
+    }
 }
 
 /// Leaves a maximized or minimized state, which `SetWindowPos` cannot move out

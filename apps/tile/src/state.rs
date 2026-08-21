@@ -36,7 +36,7 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use tile_core::{
-    AnimationParams, Animator, Config, Engine, Plan, WindowAction, WindowId, WindowSnapshot,
+    AnimationParams, Animator, Config, Engine, Plan, Rect, WindowAction, WindowId, WindowSnapshot,
 };
 use tile_platform::{
     AnimationSession, HotkeyBackend, HotkeyFailure, PermissionStatus, PlatformError, WindowBackend,
@@ -235,9 +235,73 @@ struct Flight {
     /// frame Restore will return to.
     window: WindowSnapshot,
     animator: Animator,
-    /// The backend's fast path for intermediate frames, opened on the first
-    /// frame and kept across retargets of the same window.
+    /// The backend's fast path for intermediate frames, opened up front and
+    /// kept across retargets of the same window.
     session: Option<Box<dyn AnimationSession>>,
+    /// Whether [`Flight::action`] has already been recorded with the engine.
+    /// Set when a newly pressed hotkey supersedes this flight, so the action is
+    /// never committed twice.
+    committed: bool,
+}
+
+impl Flight {
+    /// Starts a flight, opening the backend's animation session up front.
+    ///
+    /// The session is opened *before* the animator is constructed because
+    /// opening it is what restores a maximized, minimized or full-screen
+    /// window to its normal state — which moves the window. Building the
+    /// animator from the pre-restore frame would start the animation from a
+    /// rectangle the window no longer occupies, so the first frame would jump.
+    /// The frame is therefore re-read afterwards and used as the true origin.
+    ///
+    /// Only the animator's origin changes. `window` keeps the frame the action
+    /// was planned against, so Restore still returns the window to where it
+    /// was before Tile touched it, native state and all.
+    fn begin(
+        backend: &dyn WindowBackend,
+        id: WindowId,
+        action: WindowAction,
+        window: WindowSnapshot,
+        target: Rect,
+        params: AnimationParams,
+    ) -> tile_platform::Result<Self> {
+        let session = backend.begin_animation(id)?;
+
+        let start = match session {
+            Some(_) => backend
+                .focused_window()?
+                .filter(|current| current.id == id)
+                .map_or(window.frame, |current| current.frame),
+            // No fast path: nothing has been restored yet, so the frame the
+            // action was planned against is still current.
+            None => window.frame,
+        };
+
+        Ok(Self {
+            id,
+            action,
+            animator: Animator::new(start, target, params),
+            window,
+            session,
+            committed: false,
+        })
+    }
+
+    /// Records this flight's action with the engine, at the target it is
+    /// heading for, unless that has already happened.
+    ///
+    /// The window may not have physically arrived, but the engine's model has
+    /// to match what the next plan will be computed against.
+    /// [`tile_core::history::WindowHistory::record`] only replaces the stored
+    /// original when the window is somewhere Tile did not put it, so Restore
+    /// still returns to the true pre-Tile frame.
+    fn commit_to(&mut self, engine: &mut Engine) {
+        if self.committed {
+            return;
+        }
+        engine.commit(self.action, &self.window, self.animator.target());
+        self.committed = true;
+    }
 }
 
 /// The animated pipeline.
@@ -259,10 +323,32 @@ fn animated_pipeline(
 
     loop {
         if let Some(action) = pending.take() {
-            let Some(mut window) = backend.focused_window()? else {
-                log::debug!("ignoring {action}: no movable focused window");
-                break;
+            // A flight that is about to be superseded has to be committed
+            // *before* the next plan, not after. `Engine::plan` reads the cycle
+            // state that `commit` writes, so committing afterwards leaves the
+            // plan one press behind: a third rapid LeftHalf would see the
+            // window at two thirds but a cycle still recorded at a half,
+            // decide the cycle had been broken, and jump back to a half
+            // instead of advancing. Restore has the same problem, seeing no
+            // history while the first move is still in the air.
+            if let Some(in_flight) = flight.as_mut() {
+                in_flight.commit_to(engine);
+            }
+
+            let window = match backend.focused_window()? {
+                Some(window) => window,
+                None => {
+                    // Nothing to plan against, but a window already in flight
+                    // must not be abandoned mid-air just because focus went
+                    // somewhere unmovable.
+                    log::debug!("ignoring {action}: no movable focused window");
+                    if let Some(previous) = flight.take() {
+                        land(backend, engine, previous)?;
+                    }
+                    break;
+                }
             };
+            let mut window = window;
 
             // A window that is mid-flight reports an interpolated frame that
             // means nothing to the engine — it is neither where the window was
@@ -281,7 +367,7 @@ fn animated_pipeline(
                 Plan::Move { id, target } => {
                     // An action aimed at a *different* window must not leave
                     // the current one stranded halfway. Land it on its exact
-                    // target first, and commit it, before moving on.
+                    // target first before moving on.
                     if let Some(previous) = flight.take() {
                         if previous.id == id {
                             flight = Some(previous);
@@ -292,35 +378,19 @@ fn animated_pipeline(
 
                     match &mut flight {
                         Some(in_flight) => {
-                            // Same window: commit the superseded action at the
-                            // target it was heading for. It never physically
-                            // arrived, but the engine's model has to match what
-                            // the next plan was computed against, and
-                            // `WindowHistory::record` only replaces the stored
-                            // original when the window is somewhere Tile did
-                            // not put it — so Restore still returns to the
-                            // true pre-Tile frame.
-                            engine.commit(
-                                in_flight.action,
-                                &in_flight.window,
-                                in_flight.animator.target(),
-                            );
-
                             // Retarget without resetting velocity: the window
                             // bends towards the new frame instead of stopping
-                            // dead and starting again.
+                            // dead and starting again. The superseded action
+                            // was committed above, so this flight now belongs
+                            // to the new one.
                             in_flight.animator.retarget(target);
                             in_flight.action = action;
                             in_flight.window = window;
+                            in_flight.committed = false;
                         }
                         None => {
-                            flight = Some(Flight {
-                                id,
-                                action,
-                                animator: Animator::new(window.frame, target, params),
-                                window,
-                                session: None,
-                            });
+                            flight =
+                                Some(Flight::begin(backend, id, action, window, target, params)?);
                         }
                     }
                 }
@@ -372,13 +442,22 @@ fn animated_pipeline(
 fn land(
     backend: &dyn WindowBackend,
     engine: &mut Engine,
-    flight: Flight,
+    mut flight: Flight,
 ) -> tile_platform::Result<()> {
-    // Drop the session before the final move: the fast path deliberately skips
-    // the app's own clamping, which the frame that has to stick must honour.
-    drop(flight.session);
+    let target = flight.animator.target();
 
-    let actual = backend.set_window_frame(flight.id, flight.animator.target())?;
+    // As in the pump, prefer the session: it addresses the window directly, so
+    // this still works when focus has already moved on — which is precisely
+    // the situation that gets a flight landed early.
+    let actual = match flight.session.as_mut() {
+        Some(open) => open.finish(target)?,
+        None => backend.set_window_frame(flight.id, target)?,
+    };
+
+    // Commit with the true frame even if this flight was already committed at
+    // its target when it was superseded: same action, same window, but a
+    // truer rectangle. `WindowHistory::record` keeps the stored original
+    // either way, so Restore is unaffected.
     engine.commit(flight.action, &flight.window, actual);
     log::debug!("landed {} on window {}", flight.action, flight.id);
     Ok(())
@@ -388,9 +467,10 @@ fn land(
 mod tests {
     use std::cell::RefCell;
     use std::collections::VecDeque;
+    use std::rc::Rc;
     use std::time::Duration;
 
-    use tile_core::{AnimationConfig, Rect, Screen};
+    use tile_core::{AnimationConfig, Screen};
 
     use super::*;
 
@@ -406,6 +486,20 @@ mod tests {
     struct FakeBackend {
         frames: RefCell<Vec<Rect>>,
         min_size: Option<(f64, f64)>,
+        /// When set, `begin_animation` hands out a session and reports this
+        /// frame afterwards, standing in for the platform restoring a window
+        /// out of a maximized or full-screen state.
+        restored_frame: Option<Rect>,
+        /// When true, `focused_window` reports nothing, as if focus moved to
+        /// something Tile cannot manage.
+        focus_lost: RefCell<bool>,
+        /// Set once `begin_animation` has run, after which `focused_window`
+        /// reports `restored_frame`.
+        restored: RefCell<bool>,
+        /// Frames that went through the session rather than `set_window_frame`.
+        via_session: Rc<RefCell<Vec<Rect>>>,
+        /// Whether the last frame was landed through `AnimationSession::finish`.
+        finished_via_session: Rc<RefCell<bool>>,
     }
 
     impl FakeBackend {
@@ -413,12 +507,26 @@ mod tests {
             Self {
                 frames: RefCell::new(Vec::new()),
                 min_size: None,
+                restored_frame: None,
+                focus_lost: RefCell::new(false),
+                restored: RefCell::new(false),
+                via_session: Rc::new(RefCell::new(Vec::new())),
+                finished_via_session: Rc::new(RefCell::new(false)),
             }
         }
 
         fn with_min_size(width: f64, height: f64) -> Self {
             Self {
                 min_size: Some((width, height)),
+                ..Self::new()
+            }
+        }
+
+        /// A backend whose `begin_animation` restores the window, changing its
+        /// frame the way leaving a maximized state does.
+        fn with_restore_to(frame: Rect) -> Self {
+            Self {
+                restored_frame: Some(frame),
                 ..Self::new()
             }
         }
@@ -449,15 +557,21 @@ mod tests {
 
     impl WindowBackend for FakeBackend {
         fn focused_window(&self) -> tile_platform::Result<Option<WindowSnapshot>> {
-            Ok(Some(WindowSnapshot {
-                id: 1,
-                frame: self
+            if *self.focus_lost.borrow() {
+                return Ok(None);
+            }
+            // Once `begin_animation` has "restored" the window, that is where
+            // it now is — which is the whole point of re-reading the frame.
+            let frame = match self.restored_frame {
+                Some(restored) if *self.restored.borrow() => restored,
+                _ => self
                     .frames
                     .borrow()
                     .last()
                     .copied()
                     .unwrap_or(Rect::new(100.0, 100.0, 400.0, 300.0)),
-            }))
+            };
+            Ok(Some(WindowSnapshot { id: 1, frame }))
         }
 
         fn screens(&self) -> tile_platform::Result<Vec<Screen>> {
@@ -478,6 +592,43 @@ mod tests {
 
         fn permission_status(&self, _prompt: bool) -> tile_platform::Result<PermissionStatus> {
             Ok(PermissionStatus::NotRequired)
+        }
+
+        fn begin_animation(
+            &self,
+            _id: WindowId,
+        ) -> tile_platform::Result<Option<Box<dyn AnimationSession>>> {
+            // Only the restore-aware backend offers a session; the others take
+            // the `Ok(None)` fallback so every frame lands in `frames` and the
+            // older tests keep observing the whole animation.
+            if self.restored_frame.is_none() {
+                return Ok(None);
+            }
+            *self.restored.borrow_mut() = true;
+            Ok(Some(Box::new(FakeSession {
+                frames: Rc::clone(&self.via_session),
+                finished: Rc::clone(&self.finished_via_session),
+            })))
+        }
+    }
+
+    /// The fake backend's animation fast path, recording what it is asked to
+    /// do so tests can tell an intermediate frame from the final one.
+    struct FakeSession {
+        frames: Rc<RefCell<Vec<Rect>>>,
+        finished: Rc<RefCell<bool>>,
+    }
+
+    impl AnimationSession for FakeSession {
+        fn set_intermediate_frame(&mut self, target: Rect) -> tile_platform::Result<()> {
+            self.frames.borrow_mut().push(target);
+            Ok(())
+        }
+
+        fn finish(&mut self, target: Rect) -> tile_platform::Result<Rect> {
+            self.frames.borrow_mut().push(target);
+            *self.finished.borrow_mut() = true;
+            Ok(target)
         }
     }
 
@@ -562,6 +713,137 @@ mod tests {
             .borrow()
             .iter()
             .any(|f| *f != Rect::new(0.0, 0.0, 960.0, 1080.0)));
+    }
+
+    #[test]
+    fn a_third_press_mid_flight_keeps_advancing_the_cycle() {
+        // The commit has to happen *before* the next plan. When it lagged one
+        // press behind, a third rapid LeftHalf saw the window at two thirds
+        // but a cycle still recorded at a half, concluded the cycle had been
+        // broken, and jumped back to a half instead of advancing.
+        let backend = FakeBackend::new();
+        let mut engine = engine_with_animation();
+
+        animated_pipeline(
+            &backend,
+            &mut engine,
+            WindowAction::LeftHalf,
+            params(),
+            &mut FixedPacer,
+            &mut after_frames(2, vec![WindowAction::LeftHalf, WindowAction::LeftHalf]),
+        )
+        .unwrap();
+
+        let landed = backend.last_frame();
+        assert_ne!(
+            landed.width, 960.0,
+            "the cycle fell back to a half instead of advancing"
+        );
+        // Default cycle order is a half, two thirds, a third.
+        assert_eq!(landed, Rect::new(0.0, 0.0, 640.0, 1080.0));
+    }
+
+    #[test]
+    fn losing_focus_mid_flight_still_lands_the_window() {
+        // A preempting action arrives, but by the time it is planned there is
+        // no movable focused window. The flight must not simply be dropped:
+        // that leaves the window on its last intermediate frame with its
+        // action never committed.
+        let backend = FakeBackend::new();
+        let mut engine = engine_with_animation();
+
+        let mut frame = 0usize;
+        animated_pipeline(
+            &backend,
+            &mut engine,
+            WindowAction::LeftHalf,
+            params(),
+            &mut FixedPacer,
+            &mut || {
+                frame += 1;
+                if frame == 2 {
+                    // Focus disappears at the same moment as the next press.
+                    *backend.focus_lost.borrow_mut() = true;
+                    Some(WindowAction::TopHalf)
+                } else {
+                    None
+                }
+            },
+        )
+        .unwrap();
+
+        // The window finished on the target it was already heading for.
+        assert_eq!(backend.last_frame(), Rect::new(0.0, 0.0, 960.0, 1080.0));
+
+        // ...and the move was committed, so Restore still works.
+        *backend.focus_lost.borrow_mut() = false;
+        animated_pipeline(
+            &backend,
+            &mut engine,
+            WindowAction::Restore,
+            params(),
+            &mut FixedPacer,
+            &mut || None,
+        )
+        .unwrap();
+        assert_eq!(backend.last_frame(), Rect::new(100.0, 100.0, 400.0, 300.0));
+    }
+
+    #[test]
+    fn the_animation_starts_from_the_frame_left_by_the_restore() {
+        // Opening the session is what leaves a maximized or full-screen
+        // window, and that moves the window. Starting the animator from the
+        // pre-restore rectangle would make the first frame jump.
+        let restored = Rect::new(300.0, 300.0, 500.0, 400.0);
+        let backend = FakeBackend::with_restore_to(restored);
+        let mut engine = engine_with_animation();
+
+        animated_pipeline(
+            &backend,
+            &mut engine,
+            WindowAction::LeftHalf,
+            params(),
+            &mut FixedPacer,
+            &mut || None,
+        )
+        .unwrap();
+
+        let frames = backend.via_session.borrow();
+        let first = *frames.first().expect("no frame was applied");
+
+        // The first frame is a short step away from where the restore left the
+        // window, not from the frame the action was planned against.
+        assert!(
+            (first.x - restored.x).abs() < 60.0 && (first.y - restored.y).abs() < 60.0,
+            "first frame {first:?} did not start from the restored frame {restored:?}"
+        );
+        assert_eq!(*frames.last().unwrap(), Rect::new(0.0, 0.0, 960.0, 1080.0));
+    }
+
+    #[test]
+    fn the_final_frame_lands_through_the_session() {
+        // `set_window_frame` identifies the window by focus on macOS, so the
+        // last frame has to go through the session's retained handle instead —
+        // otherwise a click elsewhere mid-animation strands the window.
+        let backend = FakeBackend::with_restore_to(Rect::new(300.0, 300.0, 500.0, 400.0));
+        let mut engine = engine_with_animation();
+
+        animated_pipeline(
+            &backend,
+            &mut engine,
+            WindowAction::LeftHalf,
+            params(),
+            &mut FixedPacer,
+            &mut || None,
+        )
+        .unwrap();
+
+        assert!(
+            *backend.finished_via_session.borrow(),
+            "the final frame did not go through the session"
+        );
+        // Nothing went through the focus-dependent path at all.
+        assert!(backend.frames.borrow().is_empty());
     }
 
     #[test]

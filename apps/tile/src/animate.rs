@@ -121,10 +121,16 @@ pub fn pump(
         // and velocity, and has a hard time budget besides — so this loop
         // needs no iteration cap of its own.
         if animator.is_settled() {
-            // The final frame goes through the full backend path: it is the
-            // one that has to stick, the one the app is allowed to clamp, and
-            // the only one whose result anybody reads.
-            let actual = backend.set_window_frame(id, animator.target())?;
+            // The final frame is the one that has to stick, the one the app is
+            // allowed to clamp, and the only one whose result anybody reads.
+            // Prefer the session: it lands the window through the handle we
+            // have been driving all along, so a focus change mid-animation
+            // cannot make this fail and strand the window.
+            let target = animator.target();
+            let actual = match session.as_mut() {
+                Some(open) => open.finish(target)?,
+                None => backend.set_window_frame(id, target)?,
+            };
             return Ok(Interruption::Settled(actual));
         }
 

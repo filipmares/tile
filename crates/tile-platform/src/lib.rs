@@ -95,6 +95,23 @@ pub trait AnimationSession {
     /// process, revoked Accessibility permission) surfaces exactly as it would
     /// have from a plain [`WindowBackend::set_window_frame`].
     fn set_intermediate_frame(&mut self, target: Rect) -> Result<()>;
+
+    /// Applies the **final** frame through the same retained handle and reports
+    /// the frame the window actually ended up with.
+    ///
+    /// This exists so an animation can land through the handle it has been
+    /// driving all along rather than by re-resolving the window.
+    /// [`WindowBackend::set_window_frame`] identifies the window by *focus* on
+    /// macOS and refuses when focus has moved, so an ordinary click on another
+    /// window mid-animation would fail the last frame — stranding the window
+    /// on its final intermediate rectangle and skipping the history commit.
+    /// The session already holds the right window, so it does not need to ask.
+    ///
+    /// Unlike [`AnimationSession::set_intermediate_frame`], this must let the
+    /// application clamp the request (minimum sizes, size increments) and must
+    /// read the result back, because this is the frame that has to stick and
+    /// the value the engine records.
+    fn finish(&mut self, target: Rect) -> Result<Rect>;
 }
 
 /// Reads and manipulates the windows and displays of the host OS.
