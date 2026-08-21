@@ -1,0 +1,31 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Install UI dependencies",
+      "type": "shell",
+      "command": "npm",
+      "args": ["ci"],
+      "options": {
+        "cwd": "${workspaceFolder}/apps/tile/ui"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Run Tile (Tauri dev)",
+      "type": "shell",
+      "command": "npm",
+      "args": ["exec", "--prefix", "ui", "--", "tauri", "dev"],
+      "options": {
+        "cwd": "${workspaceFolder}/apps/tile"
+      },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": false
+      }
+    }
+  ]
+}
