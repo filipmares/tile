@@ -584,6 +584,7 @@ impl Config {
             None => true,
         });
         self.gaps.normalize();
+        self.migrate_display_throws();
         self.almost_maximize_width = normalize_fraction(self.almost_maximize_width);
         self.almost_maximize_height = normalize_fraction(self.almost_maximize_height);
         self.size_step = normalize_step(self.size_step);
@@ -592,6 +593,39 @@ impl Config {
         self.minimum_window_width = normalize_minimum_fraction(self.minimum_window_width);
         self.minimum_window_height = normalize_minimum_fraction(self.minimum_window_height);
         self.normalize_cycle_sizes();
+    }
+
+    /// Moves a display throw still sitting on the retired `Shift`+arrow
+    /// default onto [`DISPLAY_MODIFIERS`].
+    ///
+    /// Every saved config contains the *whole* binding map, not just the keys
+    /// a user changed, so without this an existing install would keep firing
+    /// the throws from `Shift`+arrow forever and never see the new default.
+    /// The point of the remap is that `Shift` stops triggering this action, so
+    /// leaving the old binding in place is not an option.
+    ///
+    /// Only the exact previous default is rewritten. A throw the user moved
+    /// somewhere else is theirs, and is left alone. If the new combination is
+    /// already spoken for by another action, the throw is simply unbound
+    /// rather than stealing that binding — `Shift` still stops working, which
+    /// is the part that matters, and nothing the user chose is destroyed.
+    fn migrate_display_throws(&mut self) {
+        let retired = BASE_MODIFIERS.union(Modifiers::SHIFT);
+        for (action, key) in [
+            (WindowAction::PreviousDisplay, KeyCode::Left),
+            (WindowAction::NextDisplay, KeyCode::Right),
+        ] {
+            if self.binding(action) != Some(Hotkey::new(retired, key)) {
+                continue;
+            }
+            let replacement = Hotkey::new(DISPLAY_MODIFIERS, key);
+            let taken = self
+                .bindings
+                .iter()
+                .any(|(a, h)| *a != action && *h == Some(replacement));
+            self.bindings
+                .insert(action, (!taken).then_some(replacement));
+        }
     }
 
     /// Drops duplicates and puts the cycle into its canonical order, so the
@@ -1384,6 +1418,79 @@ mod tests {
             ]
         );
         assert!(config.cycles_sizes());
+    }
+
+    /// A config saved by an older build pins *every* binding, including the
+    /// display throws on their retired `Shift`+arrow default. Loading it must
+    /// move them onto the new modifiers — otherwise the remap would never
+    /// reach anyone who had already run Tile, and `Shift` would keep firing
+    /// the throw.
+    #[test]
+    fn a_saved_shift_display_throw_migrates_to_the_new_modifiers() {
+        let retired = BASE_MODIFIERS.union(Modifiers::SHIFT);
+        let mut saved = Config::default();
+        saved.bindings.insert(
+            WindowAction::PreviousDisplay,
+            Some(Hotkey::new(retired, KeyCode::Left)),
+        );
+        saved.bindings.insert(
+            WindowAction::NextDisplay,
+            Some(Hotkey::new(retired, KeyCode::Right)),
+        );
+
+        let config = Config::from_json(&saved.to_json().unwrap()).unwrap();
+
+        assert_eq!(
+            config.binding(WindowAction::PreviousDisplay),
+            Some(Hotkey::new(DISPLAY_MODIFIERS, KeyCode::Left))
+        );
+        assert_eq!(
+            config.binding(WindowAction::NextDisplay),
+            Some(Hotkey::new(DISPLAY_MODIFIERS, KeyCode::Right))
+        );
+        for (hotkey, action) in config.active_bindings() {
+            assert!(
+                !hotkey.modifiers.contains(Modifiers::SHIFT),
+                "{action} is {hotkey}; the retired Shift throw survived the load"
+            );
+        }
+        assert!(config.conflicts().is_empty());
+    }
+
+    /// The migration rewrites the old *default* and nothing else. A throw the
+    /// user deliberately moved is theirs to keep.
+    #[test]
+    fn a_custom_display_throw_survives_the_migration() {
+        let custom = Hotkey::new(Modifiers::CONTROL | Modifiers::SHIFT, KeyCode::F1);
+        let mut saved = Config::default();
+        saved.set_binding(WindowAction::NextDisplay, Some(custom));
+
+        let config = Config::from_json(&saved.to_json().unwrap()).unwrap();
+
+        assert_eq!(config.binding(WindowAction::NextDisplay), Some(custom));
+    }
+
+    /// If the user already gave the new combination to something else, the
+    /// throw is unbound rather than stealing it. `Shift` stops firing either
+    /// way, and the user's own choice is left standing.
+    #[test]
+    fn the_migration_never_steals_an_existing_binding() {
+        let replacement = Hotkey::new(DISPLAY_MODIFIERS, KeyCode::Right);
+        let mut saved = Config::default();
+        saved.set_binding(WindowAction::Center, Some(replacement));
+        saved.bindings.insert(
+            WindowAction::NextDisplay,
+            Some(Hotkey::new(
+                BASE_MODIFIERS.union(Modifiers::SHIFT),
+                KeyCode::Right,
+            )),
+        );
+
+        let config = Config::from_json(&saved.to_json().unwrap()).unwrap();
+
+        assert_eq!(config.binding(WindowAction::Center), Some(replacement));
+        assert_eq!(config.binding(WindowAction::NextDisplay), None);
+        assert!(config.conflicts().is_empty());
     }
 
     #[test]

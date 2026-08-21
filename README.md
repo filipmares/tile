@@ -81,6 +81,10 @@ The display throw (`Control`+`Command`+`Option`+`←`/`→` on macOS,
 the ends. When you would rather name the monitor outright, **First** through
 **Fourth Display** are also available, unbound by default.
 
+These throws used to sit on `Shift`+`←`/`→`. Upgrading moves them across
+automatically; `Shift` no longer triggers them, and there is no compatibility
+alias. A throw you had rebound yourself is left exactly as you set it.
+
 They count in the same geometric order as the arrows — left to right by
 position, then top to bottom — so "second display" means the same monitor every
 time, whatever order Windows or macOS happened to enumerate them in, and
