@@ -154,7 +154,7 @@ pub fn pump(
 }
 
 /// The wall-clock gap between frames, after the platform cap.
-fn effective_interval(params: AnimationParams) -> Duration {
+pub(crate) fn effective_interval(params: AnimationParams) -> Duration {
     let fps = match MAX_FPS {
         Some(cap) => params.fps.min(cap),
         None => params.fps,

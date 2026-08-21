@@ -796,29 +796,60 @@ mod tests {
         // window, and that moves the window. Starting the animator from the
         // pre-restore rectangle would make the first frame jump.
         let restored = Rect::new(300.0, 300.0, 500.0, 400.0);
-        let backend = FakeBackend::with_restore_to(restored);
-        let mut engine = engine_with_animation();
+        let planned_against = Rect::new(100.0, 100.0, 400.0, 300.0);
 
-        animated_pipeline(
-            &backend,
-            &mut engine,
-            WindowAction::LeftHalf,
-            params(),
-            &mut FixedPacer,
-            &mut || None,
-        )
-        .unwrap();
+        // Run at several frame rates, including the 45fps macOS cap and the
+        // configurable floor. How far a single frame travels depends on the
+        // rate, so a test that inspects the first frame has to hold at all of
+        // them — an earlier version tuned its tolerance to the Windows rate
+        // and failed on macOS.
+        for fps in [90, 45, 15] {
+            let backend = FakeBackend::with_restore_to(restored);
+            let mut engine = engine_with_animation();
+            let params = AnimationParams {
+                duration_ms: 340,
+                fps,
+            };
 
-        let frames = backend.via_session.borrow();
-        let first = *frames.first().expect("no frame was applied");
+            animated_pipeline(
+                &backend,
+                &mut engine,
+                WindowAction::LeftHalf,
+                params,
+                &mut FixedPacer,
+                &mut || None,
+            )
+            .unwrap();
 
-        // The first frame is a short step away from where the restore left the
-        // window, not from the frame the action was planned against.
-        assert!(
-            (first.x - restored.x).abs() < 60.0 && (first.y - restored.y).abs() < 60.0,
-            "first frame {first:?} did not start from the restored frame {restored:?}"
-        );
-        assert_eq!(*frames.last().unwrap(), Rect::new(0.0, 0.0, 960.0, 1080.0));
+            let frames = backend.via_session.borrow();
+            let first = *frames.first().expect("no frame was applied");
+
+            // Predict the first frame from each candidate origin using the
+            // animator directly, which is deterministic, and assert the
+            // observed frame matches the restored one exactly.
+            //
+            // This is deliberately not a distance tolerance. How far a single
+            // frame travels depends on the frame rate — at 15fps the first
+            // frame is already most of the way there — so any threshold that
+            // separates the two origins at one rate fails at another. An
+            // earlier version of this test did exactly that and passed on
+            // Windows while failing on macOS's 45fps cap.
+            let interval = animate::effective_interval(params);
+            let target = Rect::new(0.0, 0.0, 960.0, 1080.0);
+            let from_restored = Animator::new(restored, target, params).step(interval);
+            let from_planned = Animator::new(planned_against, target, params).step(interval);
+
+            assert_eq!(
+                first, from_restored,
+                "at {fps}fps the animation did not start from the restored frame"
+            );
+            assert_ne!(
+                from_restored, from_planned,
+                "at {fps}fps the two origins are indistinguishable, so this \
+                 test proves nothing"
+            );
+            assert_eq!(*frames.last().unwrap(), target);
+        }
     }
 
     #[test]
