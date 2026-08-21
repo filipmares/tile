@@ -144,20 +144,57 @@ expiry keep working, but new builds need a fresh certificate.
 
 ## One-time Windows signing setup
 
-Windows signing uses **Azure Artifact Signing** (previously Azure Trusted
-Signing / Azure Code Signing). It is roughly $10/month at the basic tier, and
-unlike a traditional OV certificate it needs no hardware token, so it works
-unattended in CI.
+> [!NOTE]
+> **Status: not enabled.** Windows releases currently ship unsigned. That is a
+> supported state, not a broken one — the build succeeds, the release notes say
+> the installer is unsigned, and the signature assertions are skipped rather than
+> passing vacuously. The cost is that users see an "Unknown publisher"
+> SmartScreen warning.
+>
+> The Azure path is already wired and secret-gated: adding the six `AZURE_*`
+> secrets activates it with no code change, and removing them turns it off again.
+> Read [Choosing a provider](#choosing-a-provider) first — **SignPath Foundation
+> is the preferred direction**, and it is free.
 
-Signing does not make SmartScreen warnings disappear immediately: a new
-certificate starts with no reputation and earns it as installs accumulate. What
-signing buys straight away is a named publisher instead of "Unknown publisher".
+### Choosing a provider
 
-> [!IMPORTANT]
-> Do not run this on a Visual Studio subscription's monthly Azure credit. Those
-> credits are licensed for development and testing only, and signing artifacts
-> that are published to the public is production use. Use a pay-as-you-go
-> subscription.
+Two providers are worth considering. **SignPath Foundation is the preferred
+option** for this project: it is free for open-source software, and its
+certificate already carries SmartScreen reputation. **Azure Artifact Signing** is
+the alternative, and is the one currently wired into the workflow, so it can be
+switched on with nothing but secrets.
+
+| | **SignPath Foundation** *(preferred)* | **Azure Artifact Signing** | **Unsigned** |
+| --- | --- | --- | --- |
+| Cost | Free for eligible OSS | ~$10/month | Free |
+| Publisher shown | *SignPath Foundation* | Your own validated identity | "Unknown publisher" |
+| SmartScreen reputation | Inherits reputation already accrued across many signed OSS projects | Starts at **zero**; earns trust as installs accumulate | None |
+| Lead time | Application and review | Identity validation | None |
+| Workflow impact | Signs on their HSM via an API rather than Tauri's `signCommand`; signing the `tile.exe` *inside* the installer needs their nested-artifact configuration, so it is a workflow change | Already wired — six secrets and it activates | None |
+
+Two things are easy to get backwards:
+
+- **The free option may clear SmartScreen warnings sooner than the paid one.**
+  Reputation attaches to the certificate, not to the project. A brand-new Azure
+  certificate has none; SignPath's is long-lived and widely used. Paying does not
+  buy you past the warning — only an EV certificate does that, and Azure Artifact
+  Signing does not issue those.
+- **The cost of SignPath is the publisher name**, not money. Windows tells users
+  the software is published by SignPath Foundation, which vouches for it on the
+  project's behalf. If having *your own* name on the binary matters, that is what
+  the Azure subscription buys.
+
+SignPath Foundation requires an OSI-approved licence, a public repository and
+free distribution. Tile meets all three (MIT, public, free), but the application
+is made in the maintainer's name and is subject to review.
+
+### Setting up Azure Artifact Signing
+
+The rest of this section covers Azure Artifact Signing (previously Azure Trusted
+Signing / Azure Code Signing), which is the provider the workflow is currently
+built around. Unlike a traditional OV certificate it needs no hardware token, so
+it works unattended in CI. Adopting SignPath instead would mean replacing the
+`signCommand` step with their submit-and-retrieve API integration.
 
 ### 1. Create the signing account and certificate profile
 
