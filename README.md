@@ -120,12 +120,13 @@ live in `config.json`; there is no settings UI for them yet.
 
 ### Animated snapping
 
-Windows glide to their new frame rather than jumping to it. Each of the four
-edges is driven by its own spring, and the edge leading the movement is
-stiffer and looser than the one behind it, so the window stretches towards its
-destination, overshoots it slightly, and eases back as the trailing edge
-catches up — and a shortcut pressed while a window is still in flight redirects
-the movement it already has instead of restarting it.
+Windows glide to their new frame rather than jumping to it. On Windows and
+other non-macOS platforms, each edge is driven by its own spring, so the window
+stretches towards its destination, overshoots it slightly, and eases back as
+the trailing edge catches up. macOS uses a shorter, critically damped motion
+for the rigid rectangle instead. On every platform, a shortcut pressed while a
+window is still in flight redirects the movement it already has instead of
+restarting it.
 
 **This is on by default**, including for existing installs, which had no
 animation before. Turn it off in Settings ▸ Behaviour ▸ Motion for the instant
@@ -137,15 +138,15 @@ The timing lives in `config.json` under `animation` and has no settings UI:
 ```jsonc
 "animation": {
   "enabled": true,
-  "durationMs": 450, // how long a snap takes, end to end; 40–1000
+  "durationMs": 450, // 250 on macOS; how long a snap takes; 40–1000
   "fps": 90          // frames per second; 15–240, capped lower on macOS
 }
 ```
 
 `durationMs` is approximate — a spring approaches its target asymptotically, so
-larger moves run slightly over and short nudges finish well under. Try 250 for
-something brisker. It is purely a speed dial: how springy the motion is comes
-from the damping ratios in the code and does not change with it.
+larger moves run slightly over and short nudges finish well under. The default
+is 250 on macOS and 450 elsewhere. It is purely a speed dial: the platform
+profile supplies the motion model and damping.
 
 ### Windows shortcut notes
 

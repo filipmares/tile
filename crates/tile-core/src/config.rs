@@ -283,15 +283,16 @@ fn normalize_minimum_fraction(value: f64) -> f64 {
 
 /// Roughly how long an animated snap takes, end to end, in milliseconds.
 ///
-/// Deliberately towards the languid end. The per-edge springs only pay for
-/// themselves if the eye has time to resolve the shape of the motion — the
-/// stretch as the leading edge pulls away, the soft overshoot, the trailing
-/// edge closing up — and below about 250 ms none of that registers and the
-/// animation may as well be a jump. Past about 600 ms the window starts to
-/// feel like it is lagging the key rather than answering it.
-///
-/// This is only the speed dial. How *springy* the motion is lives in the
-/// damping ratios in [`crate::animation`] and does not change with it.
+/// The native-feeling macOS profile is deliberately shorter and rigid, while
+/// the existing per-edge spring profile keeps its more expressive timing on
+/// Windows and other platforms. This is only the speed dial: the motion model
+/// and damping come from the compile-time animation profile.
+#[cfg(target_os = "macos")]
+fn default_animation_duration_ms() -> u32 {
+    250
+}
+
+#[cfg(not(target_os = "macos"))]
 fn default_animation_duration_ms() -> u32 {
     450
 }
@@ -1636,12 +1637,28 @@ mod tests {
     fn animation_defaults_are_on_and_round_trip_through_json() {
         let config = Config::default();
         assert!(config.animation.enabled);
-        assert_eq!(config.animation.duration_ms, 450);
+        assert_eq!(
+            config.animation.duration_ms,
+            AnimationConfig::default().duration_ms
+        );
         assert_eq!(config.animation.fps, 90);
 
         let json = config.to_json().unwrap();
-        assert!(json.contains(r#""durationMs": 450"#));
+        assert!(json.contains(&format!(
+            r#""durationMs": {}"#,
+            config.animation.duration_ms
+        )));
         assert_eq!(Config::from_json(&json).unwrap(), config);
+    }
+
+    #[test]
+    fn animation_default_duration_matches_the_platform_feel() {
+        let duration = AnimationConfig::default().duration_ms;
+
+        #[cfg(target_os = "macos")]
+        assert!((220..=280).contains(&duration));
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(duration, 450);
     }
 
     #[test]
@@ -1664,7 +1681,10 @@ mod tests {
         // restate the tuning knobs.
         let config = Config::from_json(r#"{"animation": {"enabled": false}}"#).unwrap();
         assert!(!config.animation.enabled);
-        assert_eq!(config.animation.duration_ms, 450);
+        assert_eq!(
+            config.animation.duration_ms,
+            AnimationConfig::default().duration_ms
+        );
         assert_eq!(config.animation.fps, 90);
     }
 
@@ -1696,7 +1716,10 @@ mod tests {
             ..Default::default()
         };
         zeroed.normalize();
-        assert_eq!(zeroed.animation.duration_ms, 450);
+        assert_eq!(
+            zeroed.animation.duration_ms,
+            AnimationConfig::default().duration_ms
+        );
         assert_eq!(zeroed.animation.fps, 90);
 
         let mut tiny = Config {

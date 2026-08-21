@@ -16,14 +16,10 @@
 //! motion simply bends towards the new target. That property is the entire
 //! reason for the choice.
 //!
-//! # Why one spring per edge
-//!
-//! A single spring driving the rectangle as a rigid box slides mechanically.
-//! Giving each of the four edges its own spring, and making the edge that moves
-//! *in the direction of travel* stiffer than the one behind it, means the
-//! leading edge arrives first: the window stretches towards its destination and
-//! the trailing edge catches up a beat later. That asymmetry is what reads as
-//! "liquid" rather than "translated".
+//! The platform profile chooses between the existing per-edge spring motion and
+//! a restrained rigid-rectangle motion. The latter is used on macOS, where
+//! Accessibility window changes are most at home with a short, critically
+//! damped transition rather than a visibly elastic resize.
 
 use std::time::Duration;
 
@@ -34,15 +30,19 @@ use crate::geometry::Rect;
 /// display).
 ///
 /// This is what makes [`AnimationParams::duration_ms`] mean something: the
-/// integrator advances at `NATURAL_SETTLE_MS / duration_ms`, so a configured
-/// 450 ms really does finish in about 450 ms. Change the spring constants and
-/// this number has to be re-measured, which
+/// integrator advances at `NATURAL_SETTLE_MS / duration_ms`, so the configured
+/// duration really does finish in about that time. Change the spring constants
+/// and this number has to be re-measured, which
 /// `the_configured_duration_is_the_real_settle_time` enforces.
 ///
 /// It is approximate by nature — the settle test uses an absolute half-pixel
 /// threshold, so a longer move takes marginally longer to satisfy it (a 4K
 /// half snap runs about 8% over, a short nudge well under).
 pub const NATURAL_SETTLE_MS: f64 = 513.0;
+
+/// Measured settle time of the macOS rigid profile on the same representative
+/// half-screen move.
+const MACOS_NATURAL_SETTLE_MS: f64 = 258.0;
 
 /// Stiffness and damping of the edge that leads the movement.
 ///
@@ -64,6 +64,47 @@ const LEADING: (f64, f64) = (700.0, 40.0);
 /// against 145/20, a ratio of 1.17) produce a stretch too small to see, which
 /// is a mechanical slide with extra arithmetic.
 const TRAILING: (f64, f64) = (330.0, 31.0);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+enum AnimationMode {
+    PerEdge,
+    Rigid,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct AnimationProfile {
+    mode: AnimationMode,
+    natural_settle_ms: f64,
+    leading: (f64, f64),
+    trailing: (f64, f64),
+    rigid: (f64, f64),
+}
+
+#[allow(dead_code)]
+const NON_MACOS_PROFILE: AnimationProfile = AnimationProfile {
+    mode: AnimationMode::PerEdge,
+    natural_settle_ms: NATURAL_SETTLE_MS,
+    leading: LEADING,
+    trailing: TRAILING,
+    // Unused by the per-edge profile.
+    rigid: (2500.0, 100.0),
+};
+
+const MACOS_PROFILE: AnimationProfile = AnimationProfile {
+    mode: AnimationMode::Rigid,
+    natural_settle_ms: MACOS_NATURAL_SETTLE_MS,
+    // Unused by the rigid profile.
+    leading: LEADING,
+    trailing: TRAILING,
+    // k = 2500, c = 100: critical damping for a unit-mass spring.
+    rigid: (2500.0, 100.0),
+};
+
+#[cfg(target_os = "macos")]
+const PLATFORM_PROFILE: AnimationProfile = MACOS_PROFILE;
+#[cfg(not(target_os = "macos"))]
+const PLATFORM_PROFILE: AnimationProfile = NON_MACOS_PROFILE;
 
 /// Size of one integration sub-step, in seconds.
 ///
@@ -116,14 +157,14 @@ pub struct AnimationParams {
 impl AnimationParams {
     /// Factor applied to elapsed time so a shorter configured duration runs the
     /// same simulation faster, and a longer one slower.
-    fn time_scale(&self) -> f64 {
+    fn time_scale(&self, natural_settle_ms: f64) -> f64 {
         let duration = f64::from(self.duration_ms).max(1.0);
-        NATURAL_SETTLE_MS / duration
+        natural_settle_ms / duration
     }
 
     /// Total simulated time after which the animation is forced to settle.
-    fn budget(&self) -> f64 {
-        BUDGET_MULTIPLIER * NATURAL_SETTLE_MS / 1000.0
+    fn budget(&self, natural_settle_ms: f64) -> f64 {
+        BUDGET_MULTIPLIER * natural_settle_ms / 1000.0
     }
 
     /// The interval between emitted frames implied by [`AnimationParams::fps`].
@@ -161,8 +202,12 @@ impl Spring {
     /// Assigns the leading or trailing constants. Called on construction and
     /// again on every retarget, because a new destination can flip which edge
     /// is in front.
-    fn set_role(&mut self, leading: bool) {
-        let (k, c) = if leading { LEADING } else { TRAILING };
+    fn set_role(&mut self, leading: bool, profile: AnimationProfile) {
+        let (k, c) = if leading {
+            profile.leading
+        } else {
+            profile.trailing
+        };
         self.k = k;
         self.c = c;
     }
@@ -181,7 +226,60 @@ impl Spring {
     }
 }
 
-/// Animates a window's frame from one rectangle to another, one edge at a time.
+#[derive(Debug, Clone, Copy)]
+struct RigidMotion {
+    from: Rect,
+    to: Rect,
+    spring: Spring,
+}
+
+impl RigidMotion {
+    fn new(from: Rect, to: Rect, profile: AnimationProfile) -> Self {
+        let mut spring = Spring::new(0.0, 1.0);
+        spring.k = profile.rigid.0;
+        spring.c = profile.rigid.1;
+        Self { from, to, spring }
+    }
+
+    fn frame(&self) -> Rect {
+        let progress = self.spring.pos.clamp(0.0, 1.0);
+        Rect::new(
+            lerp(self.from.x, self.to.x, progress),
+            lerp(self.from.y, self.to.y, progress),
+            lerp(self.from.width, self.to.width, progress),
+            lerp(self.from.height, self.to.height, progress),
+        )
+    }
+
+    fn is_settled(&self) -> bool {
+        let max_distance = [
+            (self.to.x - self.from.x).abs(),
+            (self.to.y - self.from.y).abs(),
+            (self.to.max_x() - self.from.max_x()).abs(),
+            (self.to.max_y() - self.from.max_y()).abs(),
+        ]
+        .into_iter()
+        .fold(0.0, f64::max);
+
+        max_distance == 0.0
+            || ((1.0 - self.spring.pos).abs() * max_distance <= POSITION_EPSILON
+                && self.spring.vel.abs() * max_distance <= VELOCITY_EPSILON)
+    }
+
+    fn retarget(&mut self, from: Rect, to: Rect) {
+        self.from = from;
+        self.to = to;
+        self.spring.pos = 0.0;
+        self.spring.target = 1.0;
+    }
+}
+
+fn lerp(from: f64, to: f64, progress: f64) -> f64 {
+    from + (to - from) * progress
+}
+
+/// Animates a window's frame from one rectangle to another using the
+/// compile-time-selected platform profile.
 ///
 /// Construct with [`Animator::new`], then call [`Animator::step`] once per
 /// frame with the elapsed time and apply the returned rectangle to the window.
@@ -193,6 +291,8 @@ pub struct Animator {
     top: Spring,
     right: Spring,
     bottom: Spring,
+    profile: AnimationProfile,
+    rigid: Option<RigidMotion>,
     params: AnimationParams,
     /// Sub-step remainder carried between calls, so a caller whose frames do
     /// not divide evenly into [`FIXED_STEP`] still integrates exactly the time
@@ -208,11 +308,23 @@ pub struct Animator {
 impl Animator {
     /// Starts an animation from `from` to `to`, both at rest.
     pub fn new(from: Rect, to: Rect, params: AnimationParams) -> Self {
+        Self::new_with_profile(from, to, params, PLATFORM_PROFILE)
+    }
+
+    fn new_with_profile(
+        from: Rect,
+        to: Rect,
+        params: AnimationParams,
+        profile: AnimationProfile,
+    ) -> Self {
         let mut animator = Self {
             left: Spring::new(from.x, to.x),
             top: Spring::new(from.y, to.y),
             right: Spring::new(from.max_x(), to.max_x()),
             bottom: Spring::new(from.max_y(), to.max_y()),
+            profile,
+            rigid: (profile.mode == AnimationMode::Rigid)
+                .then(|| RigidMotion::new(from, to, profile)),
             params,
             carry: 0.0,
             elapsed: 0.0,
@@ -229,6 +341,10 @@ impl Animator {
     /// stopping dead and starting again. The time budget is also refreshed,
     /// since this is a new movement rather than a continuation of the old one.
     pub fn retarget(&mut self, to: Rect) {
+        let current = self.current_frame();
+        if let Some(rigid) = self.rigid.as_mut() {
+            rigid.retarget(current, to);
+        }
         self.left.target = to.x;
         self.top.target = to.y;
         self.right.target = to.max_x();
@@ -249,15 +365,15 @@ impl Animator {
             self.left.target - self.left.pos,
             self.right.target - self.right.pos,
         );
-        self.left.set_role(left_leads);
-        self.right.set_role(right_leads);
+        self.left.set_role(left_leads, self.profile);
+        self.right.set_role(right_leads, self.profile);
 
         let (top_leads, bottom_leads) = leading_edge(
             self.top.target - self.top.pos,
             self.bottom.target - self.bottom.pos,
         );
-        self.top.set_role(top_leads);
-        self.bottom.set_role(bottom_leads);
+        self.top.set_role(top_leads, self.profile);
+        self.bottom.set_role(bottom_leads, self.profile);
     }
 
     /// The rectangle this animation is heading for.
@@ -274,10 +390,13 @@ impl Animator {
     /// budget has run out.
     pub fn is_settled(&self) -> bool {
         self.exhausted
-            || (self.left.settled()
-                && self.top.settled()
-                && self.right.settled()
-                && self.bottom.settled())
+            || self.rigid.as_ref().map_or(
+                self.left.settled()
+                    && self.top.settled()
+                    && self.right.settled()
+                    && self.bottom.settled(),
+                RigidMotion::is_settled,
+            )
     }
 
     /// Advances the animation by `dt` of wall-clock time and returns the frame
@@ -291,20 +410,24 @@ impl Animator {
             return self.target();
         }
 
-        let scaled = dt.as_secs_f64() * self.params.time_scale();
+        let scaled = dt.as_secs_f64() * self.params.time_scale(self.profile.natural_settle_ms);
         // Guard against a pathological `dt` (a debugger pause, a suspended
         // laptop) turning into thousands of sub-steps: the budget check below
         // would end the animation anyway, so clamp up front.
-        let budget = self.params.budget();
+        let budget = self.params.budget(self.profile.natural_settle_ms);
         self.carry += scaled.min(budget);
 
         while self.carry >= FIXED_STEP {
             self.carry -= FIXED_STEP;
             self.elapsed += FIXED_STEP;
-            self.left.integrate(FIXED_STEP);
-            self.top.integrate(FIXED_STEP);
-            self.right.integrate(FIXED_STEP);
-            self.bottom.integrate(FIXED_STEP);
+            if let Some(rigid) = self.rigid.as_mut() {
+                rigid.spring.integrate(FIXED_STEP);
+            } else {
+                self.left.integrate(FIXED_STEP);
+                self.top.integrate(FIXED_STEP);
+                self.right.integrate(FIXED_STEP);
+                self.bottom.integrate(FIXED_STEP);
+            }
 
             if self.elapsed >= budget {
                 self.exhausted = true;
@@ -314,6 +437,14 @@ impl Animator {
 
         if self.is_settled() {
             return self.target();
+        }
+
+        self.current_frame()
+    }
+
+    fn current_frame(&self) -> Rect {
+        if let Some(rigid) = &self.rigid {
+            return rigid.frame();
         }
 
         Rect::new(
@@ -394,7 +525,7 @@ mod tests {
         let from = Rect::new(960.0, 0.0, 960.0, 1080.0);
         let to = Rect::new(0.0, 0.0, 960.0, 1080.0);
         let travel = from.x - to.x;
-        let mut animator = Animator::new(from, to, PARAMS);
+        let mut animator = Animator::new_with_profile(from, to, PARAMS, NON_MACOS_PROFILE);
 
         let frames = run(&mut animator, Duration::from_millis(4));
         let furthest = frames.iter().fold(f64::MAX, |acc, r| acc.min(r.x));
@@ -451,10 +582,11 @@ mod tests {
         // the leading and trailing edge is actually visible. Guards against
         // someone tuning the two sets closer together and quietly turning the
         // animation back into a rigid slide.
-        let mut animator = Animator::new(
+        let mut animator = Animator::new_with_profile(
             Rect::new(960.0, 0.0, 960.0, 1080.0),
             Rect::new(0.0, 0.0, 960.0, 1080.0),
             PARAMS,
+            NON_MACOS_PROFILE,
         );
 
         let frames = run(&mut animator, Duration::from_millis(11));
@@ -473,10 +605,11 @@ mod tests {
         // absolute settle threshold makes larger moves take longer. A 4K half
         // snap is the worst case Tile realistically sees, and it must settle on
         // its own merits rather than being truncated by the budget.
-        let mut animator = Animator::new(
+        let mut animator = Animator::new_with_profile(
             Rect::new(1920.0, 0.0, 1920.0, 2160.0),
             Rect::new(0.0, 0.0, 1920.0, 2160.0),
             PARAMS,
+            NON_MACOS_PROFILE,
         );
 
         let mut frames = 0;
@@ -519,7 +652,7 @@ mod tests {
         let from = Rect::new(0.0, 0.0, 960.0, 1080.0);
         let to = Rect::new(0.0, 0.0, 930.0, 1080.0);
         let frame = Duration::from_millis(4);
-        let mut animator = Animator::new(from, to, PARAMS);
+        let mut animator = Animator::new_with_profile(from, to, PARAMS, NON_MACOS_PROFILE);
 
         let frames = run(&mut animator, frame);
         let actual_ms = frames.len() as f64 * frame.as_secs_f64() * 1000.0;
@@ -536,7 +669,7 @@ mod tests {
     fn settles_on_the_exact_target() {
         let from = Rect::new(100.0, 100.0, 400.0, 300.0);
         let to = Rect::new(0.0, 0.0, 960.0, 1040.0);
-        let mut animator = Animator::new(from, to, PARAMS);
+        let mut animator = Animator::new_with_profile(from, to, PARAMS, NON_MACOS_PROFILE);
 
         let frames = run(&mut animator, Duration::from_millis(11));
 
@@ -564,7 +697,7 @@ mod tests {
         // the window is stretched — wider than it started and than it ends.
         let from = Rect::new(0.0, 0.0, 400.0, 300.0);
         let to = Rect::new(800.0, 0.0, 400.0, 300.0);
-        let mut animator = Animator::new(from, to, PARAMS);
+        let mut animator = Animator::new_with_profile(from, to, PARAMS, NON_MACOS_PROFILE);
 
         let frames = run(&mut animator, Duration::from_millis(11));
         let widest = frames.iter().fold(0.0_f64, |acc, r| acc.max(r.width));
@@ -578,7 +711,12 @@ mod tests {
     #[test]
     fn retarget_preserves_velocity() {
         let from = Rect::new(0.0, 0.0, 400.0, 300.0);
-        let mut animator = Animator::new(from, Rect::new(800.0, 0.0, 400.0, 300.0), PARAMS);
+        let mut animator = Animator::new_with_profile(
+            from,
+            Rect::new(800.0, 0.0, 400.0, 300.0),
+            PARAMS,
+            NON_MACOS_PROFILE,
+        );
         for _ in 0..4 {
             animator.step(Duration::from_millis(11));
         }
@@ -592,6 +730,75 @@ mod tests {
 
         assert_eq!(animator.left.vel, moving);
         assert_eq!(animator.target(), Rect::new(1200.0, 0.0, 400.0, 300.0));
+    }
+
+    #[test]
+    fn platform_profiles_select_distinct_motion_models() {
+        assert_ne!(MACOS_PROFILE, NON_MACOS_PROFILE);
+        assert_eq!(MACOS_PROFILE.mode, AnimationMode::Rigid);
+        assert_eq!(NON_MACOS_PROFILE.mode, AnimationMode::PerEdge);
+        assert!(MACOS_PROFILE.natural_settle_ms < NON_MACOS_PROFILE.natural_settle_ms);
+
+        #[cfg(target_os = "macos")]
+        assert_eq!(PLATFORM_PROFILE, MACOS_PROFILE);
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(PLATFORM_PROFILE, NON_MACOS_PROFILE);
+    }
+
+    #[test]
+    fn macos_profile_keeps_the_rectangle_rigid_without_overshoot() {
+        let from = Rect::new(0.0, 0.0, 400.0, 300.0);
+        let to = Rect::new(800.0, 600.0, 800.0, 500.0);
+        let mut animator = Animator::new_with_profile(
+            from,
+            to,
+            AnimationParams {
+                duration_ms: 250,
+                fps: 90,
+            },
+            MACOS_PROFILE,
+        );
+
+        for frame in run(&mut animator, Duration::from_millis(11)) {
+            let progress = (frame.x - from.x) / (to.x - from.x);
+            assert!((0.0..=1.0).contains(&progress), "{frame:?}");
+            assert!(
+                (frame.y - lerp(from.y, to.y, progress)).abs() <= 1e-9
+                    && (frame.width - lerp(from.width, to.width, progress)).abs() <= 1e-9
+                    && (frame.height - lerp(from.height, to.height, progress)).abs() <= 1e-9,
+                "frame was not a rigid interpolation: {frame:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn macos_retarget_preserves_momentum_and_settles_exactly() {
+        let from = Rect::new(0.0, 0.0, 400.0, 300.0);
+        let mut animator = Animator::new_with_profile(
+            from,
+            Rect::new(800.0, 0.0, 400.0, 300.0),
+            AnimationParams {
+                duration_ms: 250,
+                fps: 90,
+            },
+            MACOS_PROFILE,
+        );
+        for _ in 0..4 {
+            animator.step(Duration::from_millis(11));
+        }
+        let moving = animator.rigid.as_ref().unwrap().spring.vel;
+        assert!(moving > 0.0);
+
+        let to = Rect::new(1200.0, 500.0, 600.0, 400.0);
+        animator.retarget(to);
+
+        assert_eq!(animator.rigid.as_ref().unwrap().spring.vel, moving);
+        assert_eq!(
+            *run(&mut animator, Duration::from_millis(11))
+                .last()
+                .unwrap(),
+            to
+        );
     }
 
     #[test]
