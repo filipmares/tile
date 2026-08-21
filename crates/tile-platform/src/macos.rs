@@ -873,7 +873,19 @@ impl WindowBackend for MacWindowBackend {
             ffi::AXUIElementSetMessagingTimeout(front.element.0, SETUP_MESSAGING_TIMEOUT);
         }
 
-        leave_fullscreen_and_minimized(front.element.0)?;
+        if let Err(err) = leave_fullscreen_and_minimized(front.element.0) {
+            // Put the element back on the system default before bailing. The
+            // session that would otherwise do this on drop is never
+            // constructed on this path, so without it the element would be
+            // released still carrying an animation-tuned timeout.
+            //
+            // SAFETY: as above — the element is still live and owned by
+            // `front`, which has not been dropped yet.
+            unsafe {
+                ffi::AXUIElementSetMessagingTimeout(front.element.0, 0.0);
+            }
+            return Err(err);
+        }
 
         // Tighten to the frame-loop budget now the slow part is done.
         // SAFETY: as above — the element is still live and owned by `front`.
