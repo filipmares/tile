@@ -345,11 +345,66 @@ fn animated_pipeline(
     pacer: &mut dyn Pacer,
     next: &mut dyn FnMut() -> Option<WindowAction>,
 ) -> tile_platform::Result<()> {
-    let mut pending = Some(action);
     let mut flight: Option<Flight> = None;
+    let result = run_animated_pipeline(backend, engine, action, params, pacer, next, &mut flight);
+
+    // Any error anywhere above abandons the loop with the window possibly
+    // part-way through its journey. Leaving it there is not neutral: Tile's
+    // model has no record of the move, so the *next* action would treat that
+    // arbitrary intermediate rectangle as the frame the user chose and make it
+    // the Restore point. Land it on the target it was heading for and record
+    // that instead.
+    //
+    // Best effort by definition — whatever failed may well fail again, and
+    // `land` only commits once the move has actually succeeded, so a second
+    // failure leaves history untouched rather than claiming something false.
+    // The original error is what propagates either way.
+    if result.is_err() {
+        if let Some(stranded) = flight.take() {
+            if let Err(err) = land(backend, engine, stranded) {
+                log::debug!("could not land the in-flight window after a failure: {err}");
+            }
+        }
+    }
+
+    result
+}
+
+/// The pipeline proper. Hands its in-flight window back through `flight` so
+/// [`animated_pipeline`] can reconcile it if any step fails.
+#[allow(clippy::too_many_arguments)]
+fn run_animated_pipeline(
+    backend: &dyn WindowBackend,
+    engine: &mut Engine,
+    action: WindowAction,
+    params: AnimationParams,
+    pacer: &mut dyn Pacer,
+    next: &mut dyn FnMut() -> Option<WindowAction>,
+    flight: &mut Option<Flight>,
+) -> tile_platform::Result<()> {
+    let mut pending = Some(action);
 
     loop {
         if let Some(action) = pending.take() {
+            // Read everything fallible *before* touching the engine. Committing
+            // first and then failing on one of these would leave history and
+            // the cycle claiming the old target was applied while the window is
+            // still mid-flight.
+            let focused = backend.focused_window()?;
+            let screens = backend.screens()?;
+
+            let Some(window) = focused else {
+                // Nothing to plan against, but a window already in flight
+                // must not be abandoned mid-air just because focus went
+                // somewhere unmovable.
+                log::debug!("ignoring {action}: no movable focused window");
+                if let Some(previous) = flight.take() {
+                    land(backend, engine, previous)?;
+                }
+                break;
+            };
+            let mut window = window;
+
             // A flight that is about to be superseded has to be committed
             // *before* the next plan, not after. `Engine::plan` reads the cycle
             // state that `commit` writes, so committing afterwards leaves the
@@ -361,21 +416,6 @@ fn animated_pipeline(
             if let Some(in_flight) = flight.as_mut() {
                 in_flight.commit_to(engine);
             }
-
-            let window = match backend.focused_window()? {
-                Some(window) => window,
-                None => {
-                    // Nothing to plan against, but a window already in flight
-                    // must not be abandoned mid-air just because focus went
-                    // somewhere unmovable.
-                    log::debug!("ignoring {action}: no movable focused window");
-                    if let Some(previous) = flight.take() {
-                        land(backend, engine, previous)?;
-                    }
-                    break;
-                }
-            };
-            let mut window = window;
 
             // A window that is mid-flight reports an interpolated frame that
             // means nothing to the engine — it is neither where the window was
@@ -389,7 +429,6 @@ fn animated_pipeline(
                 }
             }
 
-            let screens = backend.screens()?;
             match engine.plan(action, &window, &screens) {
                 Plan::Move { id, target } => {
                     // An action aimed at a *different* window must not leave
@@ -397,13 +436,13 @@ fn animated_pipeline(
                     // target first before moving on.
                     if let Some(previous) = flight.take() {
                         if previous.id == id {
-                            flight = Some(previous);
+                            *flight = Some(previous);
                         } else {
                             land(backend, engine, previous)?;
                         }
                     }
 
-                    match &mut flight {
+                    match flight.as_mut() {
                         Some(in_flight) => {
                             // Retarget without resetting velocity: the window
                             // bends towards the new frame instead of stopping
@@ -416,7 +455,7 @@ fn animated_pipeline(
                             in_flight.committed = false;
                         }
                         None => {
-                            flight =
+                            *flight =
                                 Some(Flight::begin(backend, id, action, window, target, params)?);
                         }
                     }
@@ -522,6 +561,9 @@ mod tests {
         /// Set once `begin_animation` has run, after which `focused_window`
         /// reports `restored_frame`.
         restored: RefCell<bool>,
+        /// When set, `set_intermediate_frame` fails after this many frames, as
+        /// Accessibility revocation would.
+        fail_after: Option<usize>,
         /// Frames that went through the session rather than `set_window_frame`.
         via_session: Rc<RefCell<Vec<Rect>>>,
         /// Whether the last frame was landed through `AnimationSession::finish`.
@@ -536,8 +578,19 @@ mod tests {
                 restored_frame: None,
                 focus_lost: RefCell::new(false),
                 restored: RefCell::new(false),
+                fail_after: None,
                 via_session: Rc::new(RefCell::new(Vec::new())),
                 finished_via_session: Rc::new(RefCell::new(false)),
+            }
+        }
+
+        /// A backend whose intermediate frames start failing part-way through,
+        /// the way revoked Accessibility permission would.
+        fn failing_after(frames: usize) -> Self {
+            Self {
+                restored_frame: Some(Rect::new(100.0, 100.0, 400.0, 300.0)),
+                fail_after: Some(frames),
+                ..Self::new()
             }
         }
 
@@ -637,6 +690,7 @@ mod tests {
                 restored: self
                     .restored_frame
                     .unwrap_or(Rect::new(100.0, 100.0, 400.0, 300.0)),
+                fail_after: self.fail_after,
             })))
         }
     }
@@ -648,10 +702,18 @@ mod tests {
         finished: Rc<RefCell<bool>>,
         /// Where opening the session left the window.
         restored: Rect,
+        fail_after: Option<usize>,
     }
 
     impl AnimationSession for FakeSession {
         fn set_intermediate_frame(&mut self, target: Rect) -> tile_platform::Result<()> {
+            if let Some(limit) = self.fail_after {
+                if self.frames.borrow().len() >= limit {
+                    return Err(tile_platform::PlatformError::PermissionDenied(
+                        "accessibility permission revoked mid-animation".into(),
+                    ));
+                }
+            }
             self.frames.borrow_mut().push(target);
             Ok(())
         }
@@ -935,6 +997,46 @@ mod tests {
         );
         // Nothing went through the focus-dependent path at all.
         assert!(backend.frames.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_failure_mid_flight_does_not_strand_the_window() {
+        // Accessibility revocation makes intermediate frames fail. The error
+        // must still reach the caller — the permission dialog depends on it —
+        // but the window must not be left on an arbitrary intermediate frame
+        // with no record of the move, or the next action would treat that
+        // rectangle as the user's own placement and make it the Restore point.
+        let backend = FakeBackend::failing_after(3);
+        let mut engine = engine_with_animation();
+        let original = backend.focused_window().unwrap().unwrap().frame;
+
+        let err = animated_pipeline(
+            &backend,
+            &mut engine,
+            WindowAction::LeftHalf,
+            params(),
+            &mut FixedPacer,
+            &mut || None,
+        )
+        .expect_err("the failing backend should surface its error");
+        assert!(
+            is_permission_denied(&err),
+            "the original error must propagate unchanged, got {err}"
+        );
+
+        // The window was landed on the target it was heading for.
+        assert!(
+            *backend.finished_via_session.borrow(),
+            "the stranded flight was never landed"
+        );
+        assert_eq!(
+            *backend.via_session.borrow().last().unwrap(),
+            Rect::new(0.0, 0.0, 960.0, 1080.0)
+        );
+
+        // ...and recorded, so Restore still points at the pre-Tile frame
+        // rather than at wherever the animation happened to stop.
+        assert_eq!(engine.history.peek(1), Some(original));
     }
 
     #[test]
