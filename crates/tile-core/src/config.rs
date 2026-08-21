@@ -287,14 +287,15 @@ fn normalize_minimum_fraction(value: f64) -> f64 {
 /// the existing per-edge spring profile keeps its more expressive timing on
 /// Windows and other platforms. This is only the speed dial: the motion model
 /// and damping come from the compile-time animation profile.
-#[cfg(target_os = "macos")]
 fn default_animation_duration_ms() -> u32 {
-    250
-}
-
-#[cfg(not(target_os = "macos"))]
-fn default_animation_duration_ms() -> u32 {
-    450
+    #[cfg(target_os = "macos")]
+    {
+        250
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        450
+    }
 }
 
 /// Frames per second the animation aims for.
@@ -1656,7 +1657,7 @@ mod tests {
         let duration = AnimationConfig::default().duration_ms;
 
         #[cfg(target_os = "macos")]
-        assert!((220..=280).contains(&duration));
+        assert_eq!(duration, 250);
         #[cfg(not(target_os = "macos"))]
         assert_eq!(duration, 450);
     }
