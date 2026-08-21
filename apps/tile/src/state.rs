@@ -268,11 +268,14 @@ impl Flight {
     ) -> tile_platform::Result<Self> {
         let session = backend.begin_animation(id)?;
 
-        let start = match session {
-            Some(_) => backend
-                .focused_window()?
-                .filter(|current| current.id == id)
-                .map_or(window.frame, |current| current.frame),
+        let start = match session.as_ref() {
+            // Read through the session rather than re-querying the focused
+            // window. Opening the session is what restored the window, and on
+            // macOS that can take until the setup timeout — long enough for
+            // focus to move, which would make a `focused_window` read return
+            // the wrong window or nothing at all and silently fall back to the
+            // stale pre-restore frame.
+            Some(open) => open.current_frame()?,
             // No fast path: nothing has been restored yet, so the frame the
             // action was planned against is still current.
             None => window.frame,
@@ -302,6 +305,29 @@ impl Flight {
         }
         engine.commit(self.action, &self.window, self.animator.target());
         self.committed = true;
+    }
+
+    /// Records the frame the window truly ended up with.
+    ///
+    /// When this flight was already committed at its target — because a
+    /// newly pressed hotkey superseded it and the plan that followed turned
+    /// out to be a no-op — the reconciliation has to start from that recorded
+    /// target, not from the original "before" frame.
+    /// [`tile_core::history::WindowHistory::record`] keeps the stored original
+    /// only when `before` matches the entry's `last_applied`; passing the
+    /// original again would no longer match, so it would insert a fresh entry
+    /// whose original is the mid-flight frame and send Restore back to a
+    /// rectangle the window never really occupied.
+    fn commit_final(&self, engine: &mut Engine, actual: Rect) {
+        let window = if self.committed {
+            WindowSnapshot {
+                id: self.id,
+                frame: self.animator.target(),
+            }
+        } else {
+            self.window.clone()
+        };
+        engine.commit(self.action, &window, actual);
     }
 }
 
@@ -423,7 +449,7 @@ fn animated_pipeline(
                 // size increments will not have honoured the request exactly,
                 // and history and no-op detection need the truth.
                 if let Some(landed) = flight.take() {
-                    engine.commit(landed.action, &landed.window, actual);
+                    landed.commit_final(engine, actual);
                     log::debug!("performed {} on window {}", landed.action, landed.id);
                 }
                 break;
@@ -455,11 +481,10 @@ fn land(
         None => backend.set_window_frame(flight.id, target)?,
     };
 
-    // Commit with the true frame even if this flight was already committed at
-    // its target when it was superseded: same action, same window, but a
-    // truer rectangle. `WindowHistory::record` keeps the stored original
-    // either way, so Restore is unaffected.
-    engine.commit(flight.action, &flight.window, actual);
+    // Commit with the true frame. `commit_final` reconciles correctly whether
+    // or not this flight was already committed at its target when it was
+    // superseded, so the stored original — and therefore Restore — survives.
+    flight.commit_final(engine, actual);
     log::debug!("landed {} on window {}", flight.action, flight.id);
     Ok(())
 }
@@ -609,6 +634,9 @@ mod tests {
             Ok(Some(Box::new(FakeSession {
                 frames: Rc::clone(&self.via_session),
                 finished: Rc::clone(&self.finished_via_session),
+                restored: self
+                    .restored_frame
+                    .unwrap_or(Rect::new(100.0, 100.0, 400.0, 300.0)),
             })))
         }
     }
@@ -618,6 +646,8 @@ mod tests {
     struct FakeSession {
         frames: Rc<RefCell<Vec<Rect>>>,
         finished: Rc<RefCell<bool>>,
+        /// Where opening the session left the window.
+        restored: Rect,
     }
 
     impl AnimationSession for FakeSession {
@@ -630,6 +660,15 @@ mod tests {
             self.frames.borrow_mut().push(target);
             *self.finished.borrow_mut() = true;
             Ok(target)
+        }
+
+        fn current_frame(&self) -> tile_platform::Result<Rect> {
+            Ok(self
+                .frames
+                .borrow()
+                .last()
+                .copied()
+                .unwrap_or(self.restored))
         }
     }
 
@@ -686,6 +725,8 @@ mod tests {
     struct FixedPacer;
 
     impl Pacer for FixedPacer {
+        fn reset(&mut self) {}
+
         fn wait(&mut self, interval: Duration) -> Duration {
             interval
         }
@@ -894,6 +935,59 @@ mod tests {
         );
         // Nothing went through the focus-dependent path at all.
         assert!(backend.frames.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_no_op_after_a_retarget_does_not_corrupt_restore() {
+        // The sequence that used to poison history: an action is committed at
+        // its target when a second press supersedes it, the second is
+        // committed when a third arrives, and the third turns out to be a
+        // no-op — so the flight settles while already marked committed.
+        //
+        // Reconciling that from the flight's original "before" frame no longer
+        // matches the stored `last_applied`, so history inserted a fresh entry
+        // whose original was the mid-flight frame, and Restore returned there
+        // instead of to the pre-Tile position.
+        let backend = FakeBackend::new();
+        // `DoNothing` is what makes the third press a no-op rather than a
+        // cycle step.
+        let config = Config {
+            animation: AnimationConfig {
+                enabled: true,
+                duration_ms: 340,
+                fps: 90,
+            },
+            subsequent_execution_mode: tile_core::SubsequentExecutionMode::DoNothing,
+            ..Default::default()
+        };
+        let mut engine = Engine::new(config);
+        let original = backend.focused_window().unwrap().unwrap().frame;
+
+        animated_pipeline(
+            &backend,
+            &mut engine,
+            WindowAction::LeftHalf,
+            params(),
+            &mut FixedPacer,
+            &mut after_frames(2, vec![WindowAction::TopHalf, WindowAction::TopHalf]),
+        )
+        .unwrap();
+
+        animated_pipeline(
+            &backend,
+            &mut engine,
+            WindowAction::Restore,
+            params(),
+            &mut FixedPacer,
+            &mut || None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            backend.last_frame(),
+            original,
+            "Restore returned to a mid-flight frame instead of the pre-Tile one"
+        );
     }
 
     #[test]

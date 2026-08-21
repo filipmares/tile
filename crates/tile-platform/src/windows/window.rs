@@ -238,9 +238,18 @@ impl AnimationSession for WindowsAnimationSession {
     fn finish(&mut self, target: Rect) -> Result<Rect> {
         // SAFETY: `self.hwnd` was validated when the session was opened.
         unsafe {
+            // Re-check the native state. The restore ran when the session was
+            // opened, but a window can be maximized or minimized *during* the
+            // animation — by the app itself, or by a shell shortcut Tile does
+            // not swallow — and `SetWindowPos` is a silent no-op on a maximized
+            // window. Without this the final move would do nothing and the
+            // read-back would cheerfully commit the unchanged frame.
+            restore_if_tiled_away(self.hwnd);
+
             // Re-measure rather than trusting the cached delta. This is the
-            // frame that has to be exact, and a cross-display throw may have
-            // just changed the window's DPI and with it the invisible border.
+            // frame that has to be exact, and a cross-display throw or the
+            // restore above may have just changed the window's DPI and with it
+            // the invisible border.
             let delta = measure_frame_delta(self.hwnd)?;
 
             // No `SWP_NOSENDCHANGING` here, deliberately: this is the frame
@@ -254,6 +263,17 @@ impl AnimationSession for WindowsAnimationSession {
             // detection.
             let actual = extended_frame(self.hwnd).or_else(|| window_rect(self.hwnd).ok());
             Ok(actual.unwrap_or(target))
+        }
+    }
+
+    fn current_frame(&self) -> Result<Rect> {
+        // SAFETY: `self.hwnd` was validated when the session was opened; both
+        // calls are read-only queries that fail cleanly on a dead handle.
+        unsafe {
+            match extended_frame(self.hwnd) {
+                Some(frame) => Ok(frame),
+                None => window_rect(self.hwnd),
+            }
         }
     }
 }

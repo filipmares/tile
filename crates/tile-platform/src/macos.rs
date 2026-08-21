@@ -847,9 +847,10 @@ impl WindowBackend for MacWindowBackend {
         // it walks the system-wide element or the CoreGraphics window list —
         // and doing it per frame would dominate the cost of the animation.
         // Holding the element for the run of the animation is also what makes
-        // the frames apply to one window even if focus wanders mid-flight;
-        // the final frame goes back through `set_window_frame`, which
-        // re-checks focus and refuses if it moved.
+        // every frame apply to this one window even if focus wanders
+        // mid-flight: `finish` drives the final frame through the same
+        // retained element, so nothing in the animation re-checks focus once
+        // it has started.
         let Some(front) = front_window()? else {
             return Err(PlatformError::NoFocusedWindow);
         };
@@ -1025,14 +1026,35 @@ impl AnimationSession for MacAnimationSession {
 
         // Report what the window actually ended up with — Terminal and iTerm
         // snap to character-cell increments, so this can differ from `target`.
-        let actual = match (
+        //
+        // A failed read-back is an error rather than an optimistic `target`.
+        // The set calls above tolerate everything but `kAXErrorAPIDisabled`, so
+        // this read is the only verification that the window moved at all;
+        // echoing the request when it fails would have the engine record a
+        // frame that was never applied and leave Restore pointing at fiction.
+        match (
             copy_point(element, "AXPosition"),
             copy_size(element, "AXSize"),
         ) {
-            (Some(p), Some(s)) => Rect::new(p.x, p.y, s.width, s.height),
-            _ => target,
-        };
-        Ok(actual)
+            (Some(p), Some(s)) => Ok(Rect::new(p.x, p.y, s.width, s.height)),
+            _ => Err(PlatformError::os(
+                "finish",
+                "the application did not report where the window ended up",
+            )),
+        }
+    }
+
+    fn current_frame(&self) -> Result<Rect> {
+        match (
+            copy_point(self.element.0, "AXPosition"),
+            copy_size(self.element.0, "AXSize"),
+        ) {
+            (Some(p), Some(s)) => Ok(Rect::new(p.x, p.y, s.width, s.height)),
+            _ => Err(PlatformError::os(
+                "current_frame",
+                "the application did not report the window's frame",
+            )),
+        }
     }
 }
 

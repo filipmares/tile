@@ -53,9 +53,10 @@ pub(crate) const PLATFORM_FPS_CAP: Option<u32> = UNCAPPED;
 /// Why the pump stopped.
 pub enum Interruption {
     /// The animation reached its target. Carries the frame the window truly
-    /// ended up with, straight from the final
-    /// [`WindowBackend::set_window_frame`] — the value the engine needs for
-    /// history and no-op detection.
+    /// ended up with — from [`AnimationSession::finish`] when the backend
+    /// offered a session, or from [`WindowBackend::set_window_frame`] when it
+    /// did not. Either way it is the read-back the engine needs for history
+    /// and no-op detection, not the frame that was requested.
     Settled(Rect),
     /// A new action arrived while the window was still in flight. The animator
     /// is left untouched, so the caller can retarget it and keep the momentum
@@ -72,6 +73,15 @@ pub enum Interruption {
 /// to assert against. Tests supply a pacer that reports the nominal interval
 /// without sleeping, which makes them both deterministic and instant.
 pub trait Pacer {
+    /// Starts the clock for a run of frames.
+    ///
+    /// Called immediately before the first frame of each pump, so the time
+    /// spent planning the action and opening the backend session — which on
+    /// macOS can run to its setup timeout — is never charged to a frame.
+    /// Without this the second frame would receive the whole setup duration as
+    /// its `dt` and the animation would visibly jump.
+    fn reset(&mut self);
+
     /// Waits out the remainder of this frame's `interval` and returns how much
     /// wall-clock time the frame consumed in total. That becomes the next
     /// `dt` handed to the animator.
@@ -92,6 +102,10 @@ impl SleepPacer {
 }
 
 impl Pacer for SleepPacer {
+    fn reset(&mut self) {
+        self.previous = Instant::now();
+    }
+
     fn wait(&mut self, interval: Duration) -> Duration {
         // Pushing the frame can itself take longer than the interval (a busy
         // app on macOS), in which case there is nothing to wait for and the
@@ -129,6 +143,10 @@ pub fn pump(
 ) -> tile_platform::Result<Interruption> {
     let interval = effective_interval(params);
 
+    // Start the clock now, not when the pacer was created: planning and
+    // backend setup happened in between and must not be billed to a frame.
+    pacer.reset();
+
     // The first frame has no measured history, so assume the nominal interval.
     // Subsequent frames feed the animator the time that actually elapsed,
     // which is what keeps the motion honest when a frame runs late.
@@ -161,13 +179,13 @@ pub fn pump(
             return Ok(Interruption::Settled(actual));
         }
 
-        if session.is_none() {
-            *session = backend.begin_animation(id)?;
-        }
         match session.as_mut() {
             Some(open) => open.set_intermediate_frame(frame)?,
             // No fast path on this backend: fall back to the ordinary move and
-            // throw away the read-back, which is meaningless mid-flight.
+            // throw away the read-back, which is meaningless mid-flight. The
+            // session is opened once when the flight starts, so there is
+            // deliberately no lazy open here — retrying it every frame would
+            // repeat the backend's setup for any backend that declines.
             None => {
                 backend.set_window_frame(id, frame)?;
             }

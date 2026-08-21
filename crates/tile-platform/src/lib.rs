@@ -99,19 +99,35 @@ pub trait AnimationSession {
     /// Applies the **final** frame through the same retained handle and reports
     /// the frame the window actually ended up with.
     ///
-    /// This exists so an animation can land through the handle it has been
-    /// driving all along rather than by re-resolving the window.
-    /// [`WindowBackend::set_window_frame`] identifies the window by *focus* on
-    /// macOS and refuses when focus has moved, so an ordinary click on another
-    /// window mid-animation would fail the last frame — stranding the window
-    /// on its final intermediate rectangle and skipping the history commit.
-    /// The session already holds the right window, so it does not need to ask.
+    /// This is the final-frame path for an *opened session*, and the one
+    /// [`WindowBackend::begin_animation`]'s caller uses whenever a session
+    /// exists. [`WindowBackend::set_window_frame`] is the fallback for the
+    /// `Ok(None)` case only.
+    ///
+    /// Going through the session matters because `set_window_frame` identifies
+    /// the window by *focus* on macOS and refuses when focus has moved, so an
+    /// ordinary click on another window mid-animation would fail the last
+    /// frame — stranding the window on its final intermediate rectangle and
+    /// skipping the history commit. The session already holds the right
+    /// window, so it does not need to ask.
     ///
     /// Unlike [`AnimationSession::set_intermediate_frame`], this must let the
     /// application clamp the request (minimum sizes, size increments) and must
-    /// read the result back, because this is the frame that has to stick and
-    /// the value the engine records.
+    /// verify the result by reading it back, because this is the frame that has
+    /// to stick and the value the engine records. An implementation that cannot
+    /// confirm where the window ended up must return an error rather than
+    /// echoing `target`, or the engine will record a frame that was never
+    /// applied.
     fn finish(&mut self, target: Rect) -> Result<Rect>;
+
+    /// The window's current frame, read through the retained handle.
+    ///
+    /// Used to discover where opening the session left the window: doing so
+    /// restores it out of any maximized, minimized or full-screen state, which
+    /// moves it. Reading through the session rather than re-querying the
+    /// focused window keeps this correct even if focus changed during the
+    /// setup, which on macOS can take up to its setup timeout.
+    fn current_frame(&self) -> Result<Rect>;
 }
 
 /// Reads and manipulates the windows and displays of the host OS.
@@ -157,14 +173,15 @@ pub trait WindowBackend: Send {
     /// smallest possible call.
     ///
     /// Returning `Ok(None)` means "this backend has no fast path", and the
-    /// caller falls back to [`set_window_frame`], discarding the read-back.
-    /// That is the default, which keeps this addition free for the
-    /// `unsupported` fallback and for any future backend.
+    /// caller falls back to [`set_window_frame`] for every frame, discarding
+    /// the read-back on the intermediate ones. That is the default, which
+    /// keeps this addition free for the `unsupported` fallback and for any
+    /// future backend.
     ///
-    /// The **final** frame of an animation must always go through
-    /// [`set_window_frame`] rather than the session, because only it reports
-    /// the frame the window truly ended up with — which the engine needs for
-    /// history and no-op detection.
+    /// When a session *is* opened, [`AnimationSession::finish`] is the path
+    /// for the final frame, not [`set_window_frame`] — see that method for
+    /// why. `set_window_frame` remains the final-frame path only for the
+    /// `Ok(None)` case.
     ///
     /// [`set_window_frame`]: WindowBackend::set_window_frame
     fn begin_animation(&self, _id: WindowId) -> Result<Option<Box<dyn AnimationSession>>> {
