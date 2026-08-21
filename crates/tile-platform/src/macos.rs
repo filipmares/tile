@@ -1008,6 +1008,16 @@ impl AnimationSession for MacAnimationSession {
             ffi::AXUIElementSetMessagingTimeout(element, 0.0);
         }
 
+        // Re-check the native state, mirroring the Windows session. The
+        // restore ran when the session was opened, but a window can enter full
+        // screen or be minimized *during* the animation — by the app itself,
+        // or by a system shortcut Tile does not swallow — and both states
+        // silently swallow position and size changes. Without this the final
+        // move would do nothing and the read-back would report the unchanged
+        // frame as the result. Done after the timeout reset above, since
+        // leaving full screen is slow.
+        leave_fullscreen_and_minimized(element)?;
+
         // The full size/position/size dance, exactly as `set_window_frame`
         // does it: macOS clamps a window's size to whatever display it
         // currently overlaps, so the leading `set_size` shrinks it to fit the
