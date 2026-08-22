@@ -5,6 +5,8 @@
 //! See [`state`] for the threading model.
 
 mod animate;
+mod autostart;
+mod build_kind;
 mod commands;
 mod config_store;
 mod dto;
@@ -20,10 +22,11 @@ use std::thread;
 use std::time::Duration;
 
 use tauri::{AppHandle, Manager, RunEvent, Runtime};
-use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
+use tauri_plugin_autostart::MacosLauncher;
 use tile_core::{Config, WindowAction};
 use tile_platform::PermissionStatus;
 
+use build_kind::BuildKind;
 use state::AppState;
 
 /// How often the startup permission poll re-checks while access is denied.
@@ -49,6 +52,7 @@ pub fn run() {
         ))
         .invoke_handler(tauri::generate_handler![
             commands::get_config,
+            commands::get_build_info,
             commands::set_binding,
             commands::set_gaps,
             commands::set_cycling,
@@ -106,7 +110,17 @@ fn setup_app<R: Runtime>(
     let window_backend = tile_platform::window_backend()?;
     let hotkey_backend = tile_platform::hotkey_backend(tx.clone())?;
 
-    let config_dir = config_store::resolve_config_dir();
+    // Everything that must differ between a checkout and an installed copy
+    // hangs off this one value: which config directory is used, whether the OS
+    // login item is touched, and how the app labels itself.
+    let build_kind = BuildKind::detect();
+    if build_kind.is_development() {
+        log::info!(
+            "development build: settings are stored separately and the OS login item is left alone"
+        );
+    }
+
+    let config_dir = config_store::resolve_config_dir(build_kind);
     let config = match &config_dir {
         Some(dir) => config_store::load_from_dir(dir),
         None => {
@@ -120,6 +134,7 @@ fn setup_app<R: Runtime>(
         window_backend,
         hotkey_backend,
         config,
+        build_kind,
         config_dir,
         tx,
     ));
@@ -131,7 +146,7 @@ fn setup_app<R: Runtime>(
         log::error!("failed to set macOS accessory activation policy: {err}");
     }
 
-    tray::build_tray(app)?;
+    tray::build_tray(app, build_kind)?;
 
     // Worker thread: drains hotkey presses and performs them. It only touches
     // the window backend (safe off the main thread); hotkey registration stays
@@ -153,27 +168,10 @@ fn setup_app<R: Runtime>(
             log::debug!("action worker thread exiting");
         })?;
 
-    sync_autostart_on_launch(app, launch_on_login);
+    autostart::reconcile_on_launch(app, build_kind, launch_on_login);
     begin_permission_flow(app, state);
 
     Ok(())
-}
-
-/// Aligns the OS login item with the persisted preference at startup.
-fn sync_autostart_on_launch<R: Runtime>(app: &AppHandle<R>, desired: bool) {
-    let manager = app.autolaunch();
-    let is_enabled = manager.is_enabled().unwrap_or(false);
-    if is_enabled == desired {
-        return;
-    }
-    let result = if desired {
-        manager.enable()
-    } else {
-        manager.disable()
-    };
-    if let Err(err) = result {
-        log::error!("failed to reconcile launch-on-login at startup: {err}");
-    }
 }
 
 /// Checks permission and applies hotkeys, or waits for the user to grant
@@ -185,7 +183,7 @@ fn begin_permission_flow<R: Runtime>(app: &AppHandle<R>, state: Arc<AppState>) {
         }
         Ok(PermissionStatus::Denied) => {
             log::info!("accessibility permission denied; opening settings and polling");
-            if let Err(err) = window::open_settings(app) {
+            if let Err(err) = window::open_settings(app, state.build_kind()) {
                 log::error!("failed to open settings window: {err}");
             }
             poll_until_granted(state);

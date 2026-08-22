@@ -32,7 +32,7 @@
 //! preemption instead of by queueing — see
 //! [`AppState::perform_action_preemptible`].
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
@@ -45,6 +45,7 @@ use tile_platform::{
 };
 
 use crate::animate::{self, Interruption, Pacer, SleepPacer};
+use crate::build_kind::BuildKind;
 use crate::config_store;
 use crate::ratelimit::RateLimiter;
 
@@ -62,6 +63,7 @@ pub struct AppState {
     backend: Mutex<Box<dyn WindowBackend>>,
     hotkeys: Mutex<Box<dyn HotkeyBackend>>,
     engine: Mutex<Engine>,
+    build_kind: BuildKind,
     config_dir: Option<PathBuf>,
     hotkey_failures: Mutex<Vec<HotkeyFailure>>,
     permission_dialog_limiter: Mutex<RateLimiter>,
@@ -75,6 +77,7 @@ impl AppState {
         backend: Box<dyn WindowBackend>,
         hotkeys: Box<dyn HotkeyBackend>,
         config: Config,
+        build_kind: BuildKind,
         config_dir: Option<PathBuf>,
         actions: mpsc::Sender<WindowAction>,
     ) -> Self {
@@ -82,11 +85,22 @@ impl AppState {
             backend: Mutex::new(backend),
             hotkeys: Mutex::new(hotkeys),
             engine: Mutex::new(Engine::new(config)),
+            build_kind,
             config_dir,
             hotkey_failures: Mutex::new(Vec::new()),
             permission_dialog_limiter: Mutex::new(RateLimiter::new(PERMISSION_DIALOG_COOLDOWN)),
             actions,
         }
+    }
+
+    /// Whether this binary is a local development build or an installed one.
+    pub fn build_kind(&self) -> BuildKind {
+        self.build_kind
+    }
+
+    /// Where the config is being read from and written to, if anywhere.
+    pub fn config_dir(&self) -> Option<&Path> {
+        self.config_dir.as_deref()
     }
 
     /// Hands `action` to the worker thread instead of performing it here.

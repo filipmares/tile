@@ -12,11 +12,20 @@ use std::path::{Path, PathBuf};
 use directories::ProjectDirs;
 use tile_core::{Config, CONFIG_FILE_NAME};
 
+use crate::build_kind::BuildKind;
+
 /// Resolves the platform config directory for Tile, e.g.
 /// `%APPDATA%\Tile\Tile\config` on Windows and
 /// `~/Library/Application Support/dev.Tile.Tile` on macOS.
-pub fn resolve_config_dir() -> Option<PathBuf> {
-    ProjectDirs::from("dev", "Tile", "Tile").map(|dirs| dirs.config_dir().to_path_buf())
+///
+/// A development build resolves to a *sibling* directory (`Tile-Development`)
+/// instead, so running from a checkout can never rewrite — or be confused
+/// with — the config of the copy the user installed. It is a separate
+/// top-level directory rather than a subdirectory so that removing one leaves
+/// the other untouched.
+pub fn resolve_config_dir(kind: BuildKind) -> Option<PathBuf> {
+    ProjectDirs::from("dev", "Tile", kind.project_app_name())
+        .map(|dirs| dirs.config_dir().to_path_buf())
 }
 
 /// Full path to the config file inside `dir`.
@@ -152,5 +161,20 @@ mod tests {
         };
         save_to_dir(&dir.0, &config).unwrap();
         assert_eq!(load_from_dir(&dir.0).gaps, tile_core::Gaps::uniform(99.0));
+    }
+
+    #[test]
+    fn a_development_build_never_shares_the_installed_config_directory() {
+        let installed = resolve_config_dir(BuildKind::Installed);
+        let development = resolve_config_dir(BuildKind::Development);
+        // Both resolve on every supported host; if one ever does not, the app
+        // falls back to in-memory defaults rather than crossing the streams.
+        assert!(installed.is_some(), "installed config dir should resolve");
+        assert!(development.is_some(), "dev config dir should resolve");
+        assert_ne!(installed, development);
+        // Sibling directories, not one nested inside the other.
+        let (installed, development) = (installed.unwrap(), development.unwrap());
+        assert!(!development.starts_with(&installed));
+        assert!(!installed.starts_with(&development));
     }
 }

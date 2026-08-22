@@ -51,7 +51,7 @@ fn on_permission_denied<R: Runtime>(app: &AppHandle<R>, err: &PlatformError) {
     }
 
     // Bring the settings window (which hosts the permission panel) forward.
-    if let Err(open_err) = window::open_settings(app) {
+    if let Err(open_err) = window::open_settings(app, state.build_kind()) {
         log::error!("could not open settings window: {open_err}");
     }
 
