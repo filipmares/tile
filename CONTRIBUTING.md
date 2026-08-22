@@ -80,9 +80,15 @@ If you add behaviour that should differ between the two, add a method to
 with a unit test — the classification, directory-name and label logic are all
 pure and tested in `build_kind.rs`.
 
-To exercise the installed path locally, build with the variable set
-(`TILE_BUILD_KIND=installed ./ui/node_modules/.bin/tauri build`) — but note it
-will then use, and write to, the real config directory and the real login item.
+To exercise the installed path locally from the repository root, build with the
+variable set:
+
+```sh
+cd apps/tile && TILE_BUILD_KIND=installed ./ui/node_modules/.bin/tauri build
+```
+
+Note that it will then use, and write to, the real config directory and the real
+login item.
 
 ## Formatting and lints
 
