@@ -3941,7 +3941,7 @@ dependencies = [
 
 [[package]]
 name = "tile"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "directories",
  "env_logger",
@@ -3960,7 +3960,7 @@ dependencies = [
 
 [[package]]
 name = "tile-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3969,7 +3969,7 @@ dependencies = [
 
 [[package]]
 name = "tile-platform"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "core-foundation",
  "log",
