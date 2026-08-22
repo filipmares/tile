@@ -6,6 +6,10 @@ Runtime tray text mutation is practical. On macOS, with Tauri 2.11.5 and muda
 0.19.3, a retained `MenuItem<R>` changed from `Check for Updates…` to
 `Update to 0.2.1…` after the tray had been built.
 
+The executable probe is preserved in commit
+`3cb3c8352c56a2011d8e4b25a1cb96806cc6be50`; it was removed from the branch tip
+because the real update UI supersedes it.
+
 The probe called `MenuItem::set_text`, `text`, `set_enabled`, and `is_enabled`
 directly from a named background thread. All calls succeeded and the changed
 label appeared in the live tray menu. Tauri's `MenuItem` wrapper is `Send` and
@@ -22,7 +26,7 @@ that: `send_user_message` compares `current_thread().id()` with
 The probe exercises the worker-thread path; this inline-dispatch guard in Tauri
 2.11.5 establishes the main-thread path.
 
-Run the opt-in probe with:
+Check out the proof commit, then run the opt-in probe with:
 
 ```sh
 TILE_TRAY_MUTATION_SPIKE=1 RUST_LOG=info cargo run -p tile

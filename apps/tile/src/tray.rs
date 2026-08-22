@@ -7,8 +7,6 @@
 
 use std::str::FromStr;
 use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
 
 use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::TrayIconBuilder;
@@ -28,44 +26,9 @@ const ID_QUIT: &str = "quit";
 /// Menu item id for the disabled development-build header. It is never
 /// clickable, so it deliberately matches nothing in the event handler.
 const ID_DEV_HEADER: &str = "development-header";
-/// Menu item id used by the opt-in tray mutation spike.
-const ID_UPDATE: &str = "check-for-updates";
-const CHECK_FOR_UPDATES_LABEL: &str = "Check for Updates…";
-const SPIKE_UPDATE_LABEL: &str = "Update to 0.2.1…";
-const MUTATION_SPIKE_ENV: &str = "TILE_TRAY_MUTATION_SPIKE";
-const MUTATION_SPIKE_DELAY: Duration = Duration::from_secs(1);
-
-/// Tauri-owned tray controls that need to outlive menu construction.
-///
-/// This object deliberately stays separate from [`AppState`]. Menu handles are
-/// generic over Tauri's runtime, while the application's domain state has no
-/// reason to know which runtime hosts it.
-pub struct TrayUi<R: Runtime> {
-    update_item: MenuItem<R>,
-}
-
-impl<R: Runtime> Clone for TrayUi<R> {
-    fn clone(&self) -> Self {
-        Self {
-            update_item: self.update_item.clone(),
-        }
-    }
-}
-
-impl<R: Runtime> TrayUi<R> {
-    /// Changes the retained update item's label after the tray is built.
-    pub fn set_update_label(&self, label: &str) -> tauri::Result<()> {
-        self.update_item.set_text(label)
-    }
-
-    /// Enables or disables the retained update item.
-    pub fn set_update_enabled(&self, enabled: bool) -> tauri::Result<()> {
-        self.update_item.set_enabled(enabled)
-    }
-}
 
 /// Builds the tray icon and installs its menu handler.
-pub fn build_tray<R: Runtime>(app: &AppHandle<R>, kind: BuildKind) -> tauri::Result<TrayUi<R>> {
+pub fn build_tray<R: Runtime>(app: &AppHandle<R>, kind: BuildKind) -> tauri::Result<()> {
     // A development build says so at the top of its menu, so two running
     // copies are never confused for one another.
     let dev_header = match kind.tray_header() {
@@ -78,8 +41,6 @@ pub fn build_tray<R: Runtime>(app: &AppHandle<R>, kind: BuildKind) -> tauri::Res
 
     let settings = MenuItem::with_id(app, ID_SETTINGS, "Settings…", true, None::<&str>)?;
     let about = MenuItem::with_id(app, ID_ABOUT, "About Tile", true, None::<&str>)?;
-    let update_item =
-        MenuItem::with_id(app, ID_UPDATE, CHECK_FOR_UPDATES_LABEL, true, None::<&str>)?;
     let sep_top = PredefinedMenuItem::separator(app)?;
 
     // One submenu per family, each holding its actions. Keeping every action
@@ -108,9 +69,6 @@ pub fn build_tray<R: Runtime>(app: &AppHandle<R>, kind: BuildKind) -> tauri::Res
         items.push(separator);
     }
     items.push(&settings);
-    if mutation_spike_enabled() {
-        items.push(&update_item);
-    }
     items.push(&sep_top);
     for submenu in &submenus {
         items.push(submenu);
@@ -136,50 +94,7 @@ pub fn build_tray<R: Runtime>(app: &AppHandle<R>, kind: BuildKind) -> tauri::Res
     }
 
     builder.build(app)?;
-    Ok(TrayUi { update_item })
-}
-
-/// Whether this checkout should expose and run the temporary mutation probe.
-pub fn mutation_spike_enabled() -> bool {
-    std::env::var_os(MUTATION_SPIKE_ENV).is_some()
-}
-
-/// Mutates the retained handle from a worker thread and verifies the result.
-///
-/// Tauri's menu wrapper synchronously dispatches these calls onto its event
-/// loop. Calling the methods here, rather than dispatching them ourselves, is
-/// the behavior this spike exists to prove.
-pub fn run_mutation_spike<R: Runtime>(ui: TrayUi<R>) -> std::io::Result<()> {
-    thread::Builder::new()
-        .name("tile-tray-mutation-spike".into())
-        .spawn(move || {
-            thread::sleep(MUTATION_SPIKE_DELAY);
-
-            let result = (|| -> tauri::Result<(String, bool, bool)> {
-                ui.set_update_enabled(false)?;
-                let disabled = !ui.update_item.is_enabled()?;
-                ui.set_update_label(SPIKE_UPDATE_LABEL)?;
-                let text = ui.update_item.text()?;
-                ui.set_update_enabled(true)?;
-                let enabled = ui.update_item.is_enabled()?;
-                Ok((text, disabled, enabled))
-            })();
-
-            match result {
-                Ok((text, true, true)) if text == SPIKE_UPDATE_LABEL => {
-                    log::info!(
-                        "tray mutation spike passed from background thread: label={text:?}, set_enabled round-trip passed"
-                    );
-                }
-                Ok((text, disabled, enabled)) => {
-                    log::error!(
-                        "tray mutation spike returned unexpected state: label={text:?}, disabled={disabled}, re-enabled={enabled}"
-                    );
-                }
-                Err(err) => log::error!("tray mutation spike failed: {err}"),
-            }
-        })
-        .map(|_| ())
+    Ok(())
 }
 
 /// Adds an orange status badge to the normal icon without requiring a second

@@ -146,11 +146,7 @@ fn setup_app<R: Runtime>(
         log::error!("failed to set macOS accessory activation policy: {err}");
     }
 
-    let tray_ui = tray::build_tray(app, build_kind)?;
-    app.manage(tray_ui.clone());
-    if tray::mutation_spike_enabled() {
-        tray::run_mutation_spike(tray_ui)?;
-    }
+    tray::build_tray(app, build_kind)?;
 
     // Worker thread: drains hotkey presses and performs them. It only touches
     // the window backend (safe off the main thread); hotkey registration stays
