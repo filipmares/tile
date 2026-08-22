@@ -53,6 +53,43 @@ cargo build --workspace
 > [CI workflow](.github/workflows/ci.yml) — `cargo clippy --all-targets` is what
 > catches breakage inside the other platform's `#[cfg]` and `#[cfg(test)]` code.
 
+## Development builds
+
+Every build that is not produced by the release workflow is a **development
+build** — including a local `tauri build`, which is a release *profile* but not
+an installed app. `debug_assertions` cannot tell those apart, so provenance is
+decided by the `TILE_BUILD_KIND` environment variable, which only
+[`release.yml`](.github/workflows/release.yml) sets (`installed`). Anything
+else — unset, empty, misspelled — is classified as a development build, so a
+broken CI variable degrades a release rather than letting a checkout act like
+one.
+
+Classification and everything that hangs off it live in
+[`apps/tile/src/build_kind.rs`](apps/tile/src/build_kind.rs); the kind is
+resolved once at startup and stored on `AppState`. A development build:
+
+- reads and writes its config in a separate `Tile-Development` directory, so it
+  cannot clobber the config of an installed Tile;
+- never enables or disables the OS login item — the `launchOnLogin` preference
+  is still persisted, just not applied (see `apps/tile/src/autostart.rs`);
+- labels itself in the tray menu, the tray tooltip, the settings window title
+  and a panel in the settings UI.
+
+If you add behaviour that should differ between the two, add a method to
+`BuildKind` rather than branching on the enum at the call site, and cover it
+with a unit test — the classification, directory-name and label logic are all
+pure and tested in `build_kind.rs`.
+
+To exercise the installed path locally from the repository root, build with the
+variable set:
+
+```sh
+cd apps/tile && TILE_BUILD_KIND=installed ./ui/node_modules/.bin/tauri build
+```
+
+Note that it will then use, and write to, the real config directory and the real
+login item.
+
 ## Formatting and lints
 
 - Rust code is formatted with `rustfmt` (see `rustfmt.toml`) and must be

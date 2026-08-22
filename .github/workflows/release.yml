@@ -201,6 +201,13 @@ jobs:
     needs: create-release
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    # The one place a build is declared to be the copy users install. It is set
+    # at job level so the compiler *and* the cache key both see it; every other
+    # build — local `cargo tauri build`, CI, `cargo tauri dev` — leaves it
+    # unset and is therefore classified as a development build. See
+    # apps/tile/src/build_kind.rs.
+    env:
+      TILE_BUILD_KIND: installed
     strategy:
       fail-fast: false
       matrix:
@@ -237,6 +244,14 @@ jobs:
           targets: ${{ matrix.rust-targets }}
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          # TILE_BUILD_KIND is compiled into the binary (see
+          # apps/tile/build.rs), so a release build must never restore an
+          # artifact compiled without it. Adding it to the key (it is folded in
+          # on top of the action's own defaults) gives release builds their own
+          # cache bucket, on top of the rebuild that `cargo:rerun-if-env-changed`
+          # already forces.
+          env-vars: TILE_BUILD_KIND
 
       - name: Set up Node
         uses: actions/setup-node@v7

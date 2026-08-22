@@ -471,3 +471,12 @@ export interface HotkeyFailure {
   action: WindowAction;
   reason: string;
 }
+
+/** `BuildKindDto` — serde `rename_all = "kebab-case"`. */
+export type BuildKind = "development" | "installed";
+
+/** `BuildInfoDto` — where this binary came from and where it stores config. */
+export interface BuildInfo {
+  kind: BuildKind;
+  configDir: string | null;
+}

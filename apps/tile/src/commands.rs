@@ -8,31 +8,35 @@
 use std::sync::Arc;
 
 use tauri::{AppHandle, Runtime, State};
-use tauri_plugin_autostart::ManagerExt;
 use tile_core::{Config, CycleSize, Gaps, Hotkey, SubsequentExecutionMode, WindowAction};
 
-use crate::dto::{HotkeyFailureDto, PermissionStatusDto};
+use crate::autostart;
+use crate::dto::{BuildInfoDto, HotkeyFailureDto, PermissionStatusDto};
 use crate::state::AppState;
 
 type Shared = Arc<AppState>;
 
 /// Keeps the OS login-item in sync with the desired state, logging on failure
-/// rather than surfacing an error that would block saving the preference.
-fn sync_autostart<R: Runtime>(app: &AppHandle<R>, enabled: bool) {
-    let manager = app.autolaunch();
-    let result = if enabled {
-        manager.enable()
-    } else {
-        manager.disable()
-    };
-    if let Err(err) = result {
-        log::error!("failed to update launch-on-login to {enabled}: {err}");
-    }
+/// rather than surfacing an error that would block saving the preference. A
+/// development build persists the preference without touching the login item —
+/// see [`crate::autostart`].
+fn sync_autostart<R: Runtime>(app: &AppHandle<R>, state: &AppState, enabled: bool) {
+    autostart::apply(app, state.build_kind(), enabled);
 }
 
 #[tauri::command]
 pub fn get_config(state: State<'_, Shared>) -> Config {
     state.config()
+}
+
+/// Which kind of build this is, and where it keeps its config. Read once by
+/// the UI at boot: it is fixed for the lifetime of the process.
+#[tauri::command]
+pub fn get_build_info(state: State<'_, Shared>) -> BuildInfoDto {
+    BuildInfoDto {
+        kind: state.build_kind().into(),
+        config_dir: state.config_dir().map(|dir| dir.display().to_string()),
+    }
 }
 
 #[tauri::command]
@@ -81,14 +85,14 @@ pub fn set_launch_on_login<R: Runtime>(
     enabled: bool,
 ) -> Config {
     let config = state.update_config(|config| config.launch_on_login = enabled);
-    sync_autostart(&app, config.launch_on_login);
+    sync_autostart(&app, &state, config.launch_on_login);
     config
 }
 
 #[tauri::command]
 pub fn reset_to_defaults<R: Runtime>(app: AppHandle<R>, state: State<'_, Shared>) -> Config {
     let config = state.update_config(|config| *config = Config::default());
-    sync_autostart(&app, config.launch_on_login);
+    sync_autostart(&app, &state, config.launch_on_login);
     config
 }
 
