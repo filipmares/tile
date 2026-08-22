@@ -773,7 +773,11 @@ fn leave_fullscreen_and_minimized(element: ffi::AXUIElementRef) -> Result<()> {
 /// while an app is moving between displays. The leading size write is still
 /// required to avoid display clamping; retries cover the separate case where
 /// the target app has not settled its native frame yet.
-fn apply_frame_and_readback(element: ffi::AXUIElementRef, target: Rect) -> Result<Rect> {
+fn apply_frame_and_readback(
+    element: ffi::AXUIElementRef,
+    target: Rect,
+    operation: &str,
+) -> Result<Rect> {
     let size = CGSize {
         width: target.width,
         height: target.height,
@@ -819,7 +823,7 @@ fn apply_frame_and_readback(element: ffi::AXUIElementRef, target: Rect) -> Resul
             }
         } else if attempt + 1 == FRAME_SETTLE_ATTEMPTS {
             return Err(PlatformError::os(
-                "set_window_frame",
+                operation,
                 "the application did not report where the window ended up",
             ));
         }
@@ -880,7 +884,7 @@ impl WindowBackend for MacWindowBackend {
         // size again grows it to the intended size now that it fits there.
         // Transient per-call errors and a stale read-back are retried by the
         // helper; persistent failures are reflected in the final read-back.
-        apply_frame_and_readback(element, target)
+        apply_frame_and_readback(element, target, "set_window_frame")
     }
 
     fn begin_animation(&self, id: WindowId) -> Result<Option<Box<dyn AnimationSession>>> {
@@ -1069,7 +1073,7 @@ impl AnimationSession for MacAnimationSession {
         // Unlike `set_window_frame` this never consults the focused window: the
         // session already holds the element it has been driving, so a click on
         // another window mid-animation cannot make the final frame fail.
-        apply_frame_and_readback(element, target)
+        apply_frame_and_readback(element, target, "finish")
     }
 
     fn current_frame(&self) -> Result<Rect> {
