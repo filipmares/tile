@@ -37,6 +37,9 @@ export const setAnimation = (enabled: boolean): Promise<Config> =>
 export const setLaunchOnLogin = (enabled: boolean): Promise<Config> =>
   invoke("set_launch_on_login", { enabled });
 
+export const setCheckForUpdates = (enabled: boolean): Promise<Config> =>
+  invoke("set_check_for_updates", { enabled });
+
 export const resetToDefaults = (): Promise<Config> =>
   invoke("reset_to_defaults");
 

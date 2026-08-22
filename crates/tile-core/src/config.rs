@@ -219,6 +219,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_check_for_updates() -> bool {
+    true
+}
+
 /// The default fraction for the [`WindowAction::AlmostMaximize`] size, matching
 /// Rectangle's 90% behaviour.
 fn default_almost_maximize_fraction() -> f64 {
@@ -596,6 +600,9 @@ pub struct Config {
     pub gaps: Gaps,
     /// Start Tile when the user logs in.
     pub launch_on_login: bool,
+    /// Whether Tile checks for new releases in the background.
+    #[serde(default = "default_check_for_updates")]
+    pub check_for_updates: bool,
     /// Show the tray / menu-bar icon.
     pub show_tray_icon: bool,
     /// [`WindowAction::AlmostMaximize`] width as a fraction of the work area.
@@ -647,6 +654,7 @@ impl Default for Config {
             bindings: default_bindings(),
             gaps: Gaps::default(),
             launch_on_login: false,
+            check_for_updates: default_check_for_updates(),
             show_tray_icon: default_true(),
             almost_maximize_width: default_almost_maximize_fraction(),
             almost_maximize_height: default_almost_maximize_fraction(),
@@ -1400,6 +1408,23 @@ mod tests {
     fn missing_fields_fall_back_to_defaults() {
         let config = Config::from_json("{}").unwrap();
         assert_eq!(config, Config::default());
+    }
+
+    #[test]
+    fn checking_for_updates_is_enabled_by_default() {
+        assert!(Config::default().check_for_updates);
+    }
+
+    #[test]
+    fn a_config_predating_the_update_preference_still_loads() {
+        let json = r#"{
+            "bindings": {},
+            "gap": 8,
+            "launchOnLogin": true,
+            "showTrayIcon": false
+        }"#;
+        let config = Config::from_json(json).unwrap();
+        assert!(config.check_for_updates);
     }
 
     #[test]

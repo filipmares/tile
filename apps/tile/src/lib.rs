@@ -58,6 +58,7 @@ pub fn run() {
             commands::set_cycling,
             commands::set_animation,
             commands::set_launch_on_login,
+            commands::set_check_for_updates,
             commands::reset_to_defaults,
             commands::perform_action,
             commands::get_permission_status,

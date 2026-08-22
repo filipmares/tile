@@ -90,6 +90,11 @@ pub fn set_launch_on_login<R: Runtime>(
 }
 
 #[tauri::command]
+pub fn set_check_for_updates(state: State<'_, Shared>, enabled: bool) -> Config {
+    state.update_config(|config| config.check_for_updates = enabled)
+}
+
+#[tauri::command]
 pub fn reset_to_defaults<R: Runtime>(app: AppHandle<R>, state: State<'_, Shared>) -> Config {
     let config = state.update_config(|config| *config = Config::default());
     sync_autostart(&app, &state, config.launch_on_login);

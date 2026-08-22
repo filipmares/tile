@@ -10,6 +10,7 @@ import {
   resetToDefaults,
   setAnimation,
   setBinding,
+  setCheckForUpdates,
   setCycling,
   setGaps,
   setLaunchOnLogin,
@@ -63,6 +64,7 @@ const dom = {
   cycleSizesGrid: el<HTMLDivElement>("#cycle-sizes-grid"),
   animate: el<HTMLInputElement>("#animate-moves"),
   launch: el<HTMLInputElement>("#launch-on-login"),
+  checkForUpdates: el<HTMLInputElement>("#check-for-updates"),
   reset: el<HTMLButtonElement>("#reset"),
   permissionPanel: el<HTMLElement>("#permission-panel"),
   grant: el<HTMLButtonElement>("#grant-permission"),
@@ -315,6 +317,7 @@ function renderBehaviour(): void {
   renderCycleSizes(config);
   dom.animate.checked = config.animation.enabled;
   dom.launch.checked = config.launchOnLogin;
+  dom.checkForUpdates.checked = config.checkForUpdates;
 }
 
 /** Marks the window as a development build. Installed builds render nothing. */
@@ -471,6 +474,15 @@ function wireEvents(): void {
     } catch (err) {
       setRecordingStatus(`Could not update launch-on-login: ${String(err)}`);
       dom.launch.checked = config?.launchOnLogin ?? false;
+    }
+  });
+
+  dom.checkForUpdates.addEventListener("change", async () => {
+    try {
+      config = await setCheckForUpdates(dom.checkForUpdates.checked);
+    } catch (err) {
+      setRecordingStatus(`Could not update automatic checks: ${String(err)}`);
+      dom.checkForUpdates.checked = config?.checkForUpdates ?? true;
     }
   });
 

@@ -451,6 +451,7 @@ export interface Config {
   bindings: Partial<Record<WindowAction, Hotkey | null>>;
   gap: Gaps;
   launchOnLogin: boolean;
+  checkForUpdates: boolean;
   showTrayIcon: boolean;
   almostMaximizeWidth: number;
   almostMaximizeHeight: number;
