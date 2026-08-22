@@ -1,6 +1,6 @@
 //! Tray icon and its menu.
 //!
-//! The menu exposes "Settings…", every window action (so they are usable
+//! The menu exposes "About Tile", "Settings…", every window action (so they are usable
 //! without hotkeys), and "Quit". Actions are grouped into one submenu per
 //! [`WindowFamily`] so the ~45-entry catalogue stays navigable. Clicking an
 //! action performs it immediately.
@@ -18,12 +18,15 @@ use crate::window;
 
 /// Menu item id for the "Settings…" entry.
 const ID_SETTINGS: &str = "settings";
+/// Menu item id for the "About Tile" entry.
+const ID_ABOUT: &str = "about";
 /// Menu item id for the "Quit" entry.
 const ID_QUIT: &str = "quit";
 
 /// Builds the tray icon and installs its menu handler.
 pub fn build_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let settings = MenuItem::with_id(app, ID_SETTINGS, "Settings…", true, None::<&str>)?;
+    let about = MenuItem::with_id(app, ID_ABOUT, "About Tile", true, None::<&str>)?;
     let sep_top = PredefinedMenuItem::separator(app)?;
 
     // One submenu per family, each holding its actions. Keeping every action
@@ -46,6 +49,7 @@ pub fn build_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let quit = MenuItem::with_id(app, ID_QUIT, "Quit Tile", true, None::<&str>)?;
 
     let mut items: Vec<&dyn IsMenuItem<R>> = Vec::new();
+    items.push(&about);
     items.push(&settings);
     items.push(&sep_top);
     for submenu in &submenus {
@@ -72,6 +76,11 @@ pub fn build_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 
 fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str) {
     match id {
+        ID_ABOUT => {
+            if let Err(err) = window::open_about(app) {
+                log::error!("failed to open about window: {err}");
+            }
+        }
         ID_SETTINGS => {
             if let Err(err) = window::open_settings(app) {
                 log::error!("failed to open settings window: {err}");

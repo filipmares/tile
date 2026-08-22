@@ -1,6 +1,7 @@
 // Settings UI controller. No framework: plain DOM.
 
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { getVersion } from "@tauri-apps/api/app";
 import {
   getConfig,
   getHotkeyFailures,
@@ -28,6 +29,8 @@ import {
 
 const ACCESSIBILITY_URL =
   "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+const GITHUB_URL = "https://github.com/filipmares/tile";
+const isAboutScreen = new URLSearchParams(window.location.search).has("about");
 
 /** Non-null `querySelector`, throwing at boot if the markup is wrong. */
 function el<T extends HTMLElement>(selector: string): T {
@@ -37,6 +40,10 @@ function el<T extends HTMLElement>(selector: string): T {
 }
 
 const dom = {
+  app: el<HTMLElement>("#app"),
+  about: el<HTMLElement>("#about"),
+  aboutVersion: el<HTMLParagraphElement>("#about-version"),
+  github: el<HTMLButtonElement>("#github"),
   bindings: el<HTMLUListElement>("#bindings"),
   assignedBindings: el<HTMLUListElement>("#assigned-bindings"),
   allShortcutsCount: el<HTMLSpanElement>("#all-shortcuts-count"),
@@ -472,6 +479,33 @@ function wireEvents(): void {
 }
 
 async function boot(): Promise<void> {
+  if (isAboutScreen) {
+    dom.app.classList.add("app--about");
+    for (const child of dom.app.children) {
+      if (child !== dom.about) (child as HTMLElement).hidden = true;
+    }
+    dom.about.hidden = false;
+    // Wire the action before awaiting anything, so a slow or failing
+    // version lookup can never leave the button dead.
+    dom.github.addEventListener("click", () => {
+      void openUrl(GITHUB_URL).catch((err) =>
+        console.error("could not open the source repository", err),
+      );
+    });
+    try {
+      const version = await getVersion();
+      dom.aboutVersion.textContent = version;
+      dom.aboutVersion.classList.toggle("is-long", version.length > 8);
+    } catch (err) {
+      console.error("could not read app version", err);
+      dom.aboutVersion.textContent = "Unavailable";
+      dom.aboutVersion.classList.add("is-long");
+    } finally {
+      dom.aboutVersion.removeAttribute("aria-busy");
+    }
+    return;
+  }
+
   wireEvents();
   try {
     config = await getConfig();

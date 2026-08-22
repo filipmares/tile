@@ -8,6 +8,20 @@
   </head>
   <body>
     <main class="app" id="app">
+      <section id="about" class="about" hidden aria-labelledby="about-heading">
+        <div class="about__identity">
+          <img class="about__mark" src="/icon.png" alt="" width="56" height="56" />
+          <h1 id="about-heading" class="about__name">Tile</h1>
+        </div>
+        <p class="about__version" id="about-version" aria-live="polite" aria-busy="true">
+          Loading version…
+        </p>
+        <button id="github" type="button" class="button button--primary">
+          View source on GitHub ↗
+        </button>
+        <p class="about__meta">MIT License · © 2026 Filip Mares</p>
+      </section>
+
       <section
         id="permission-panel"
         class="panel panel--warning"

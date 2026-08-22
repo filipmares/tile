@@ -38,6 +38,11 @@
   box-sizing: border-box;
 }
 
+/* `display` on .panel and .app__footer would otherwise defeat the attribute. */
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   background: var(--bg);
@@ -52,6 +57,75 @@ body {
   display: flex;
   flex-direction: column;
   gap: 28px;
+}
+
+.app.app--about {
+  min-height: 100vh;
+  justify-content: center;
+  padding: 28px;
+  background: var(--surface-2);
+}
+
+.about {
+  width: min(100%, 360px);
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  padding: 34px 32px 28px;
+  text-align: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 8%, transparent),
+    0 8px 20px color-mix(in srgb, var(--text) 7%, transparent);
+  animation: about-fade-in 240ms ease-out both;
+}
+
+.about__identity {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 24px;
+}
+
+.about__mark {
+  display: block;
+  flex: 0 0 auto;
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  filter: drop-shadow(0 5px 10px color-mix(in srgb, var(--accent) 22%, transparent));
+}
+
+.about__name {
+  margin: 0;
+  font-size: 30px;
+  line-height: 1.1;
+  letter-spacing: -0.04em;
+}
+
+.about__version {
+  margin: 0 0 24px;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.about .button {
+  width: 100%;
+}
+
+.about__meta {
+  margin: 18px 0 0;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+@keyframes about-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
 }
 
 .section__header {
@@ -620,6 +694,7 @@ fieldset:disabled {
   *::before,
   *::after {
     transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
   }
 }
 
