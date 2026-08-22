@@ -43,6 +43,8 @@ use std::collections::HashMap;
 use std::os::raw::c_void;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 
 use core_foundation::base::TCFType;
 use core_foundation::boolean::CFBoolean;
@@ -741,6 +743,12 @@ const ANIMATION_MESSAGING_TIMEOUT: f32 = 0.2;
 /// genuinely wedged app cannot hold the worker thread for that long.
 const SETUP_MESSAGING_TIMEOUT: f32 = 2.0;
 
+/// Chrome can acknowledge an AX write before its native window frame settles.
+/// Repeating the complete dance gives the window server a bounded opportunity
+/// to apply both dimensions without masking a persistent failure.
+const FRAME_SETTLE_ATTEMPTS: usize = 3;
+const FRAME_SETTLE_DELAY: Duration = Duration::from_millis(20);
+
 /// Leaves the native full-screen and minimized states, which silently swallow
 /// position and size changes.
 fn leave_fullscreen_and_minimized(element: ffi::AXUIElementRef) -> Result<()> {
@@ -757,6 +765,68 @@ fn leave_fullscreen_and_minimized(element: ffi::AXUIElementRef) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Applies a frame and verifies the frame Chrome (and other AX clients) report.
+///
+/// macOS may transiently accept or partially apply an AX position/size update
+/// while an app is moving between displays. The leading size write is still
+/// required to avoid display clamping; retries cover the separate case where
+/// the target app has not settled its native frame yet.
+fn apply_frame_and_readback(element: ffi::AXUIElementRef, target: Rect) -> Result<Rect> {
+    let size = CGSize {
+        width: target.width,
+        height: target.height,
+    };
+    let position = CGPoint {
+        x: target.x,
+        y: target.y,
+    };
+
+    for attempt in 0..FRAME_SETTLE_ATTEMPTS {
+        let mut retry = false;
+        for (context, err) in [
+            ("set size", set_size(element, size)),
+            ("set position", set_position(element, position)),
+            ("set size", set_size(element, size)),
+        ] {
+            if err == ffi::kAXErrorAPIDisabled {
+                return Err(map_ax_error(context, err));
+            }
+            if err != ffi::kAXErrorSuccess {
+                retry = true;
+                log::debug!(
+                    "macOS AX {context} returned {err} on frame attempt {}",
+                    attempt + 1
+                );
+            }
+        }
+
+        let actual = match (
+            copy_point(element, "AXPosition"),
+            copy_size(element, "AXSize"),
+        ) {
+            (Some(p), Some(s)) => Some(Rect::new(p.x, p.y, s.width, s.height)),
+            _ => {
+                retry = true;
+                None
+            }
+        };
+
+        if let Some(actual) = actual {
+            if (!retry && actual.approx_eq(&target, 2.0)) || attempt + 1 == FRAME_SETTLE_ATTEMPTS {
+                return Ok(actual);
+            }
+        } else if attempt + 1 == FRAME_SETTLE_ATTEMPTS {
+            return Err(PlatformError::os(
+                "set_window_frame",
+                "the application did not report where the window ended up",
+            ));
+        }
+        thread::sleep(FRAME_SETTLE_DELAY);
+    }
+
+    unreachable!("frame attempts always return")
 }
 
 pub struct MacWindowBackend;
@@ -803,43 +873,14 @@ impl WindowBackend for MacWindowBackend {
 
         leave_fullscreen_and_minimized(element)?;
 
-        let size = CGSize {
-            width: target.width,
-            height: target.height,
-        };
-        let position = CGPoint {
-            x: target.x,
-            y: target.y,
-        };
-
         // The AX size/position/size dance (see AccessibilityElement.swift):
         // macOS clamps a window's size to whatever display it currently
         // overlaps. Setting size first shrinks it to fit the *old* display,
         // then setting position moves it to the target display, then setting
         // size again grows it to the intended size now that it fits there.
-        // Only `kAXErrorAPIDisabled` (permission lost mid-flight) is fatal;
-        // other per-call errors are tolerated and reflected in the read-back.
-        for (context, err) in [
-            ("set size", set_size(element, size)),
-            ("set position", set_position(element, position)),
-            ("set size", set_size(element, size)),
-        ] {
-            if err == ffi::kAXErrorAPIDisabled {
-                return Err(map_ax_error(context, err));
-            }
-        }
-
-        // Return the frame the window actually ended up with — apps such as
-        // Terminal and iTerm snap to character-cell increments, so this can
-        // differ from `target`.
-        let actual = match (
-            copy_point(element, "AXPosition"),
-            copy_size(element, "AXSize"),
-        ) {
-            (Some(p), Some(s)) => Rect::new(p.x, p.y, s.width, s.height),
-            _ => target,
-        };
-        Ok(actual)
+        // Transient per-call errors and a stale read-back are retried by the
+        // helper; persistent failures are reflected in the final read-back.
+        apply_frame_and_readback(element, target)
     }
 
     fn begin_animation(&self, id: WindowId) -> Result<Option<Box<dyn AnimationSession>>> {
@@ -1028,42 +1069,7 @@ impl AnimationSession for MacAnimationSession {
         // Unlike `set_window_frame` this never consults the focused window: the
         // session already holds the element it has been driving, so a click on
         // another window mid-animation cannot make the final frame fail.
-        let size = CGSize {
-            width: target.width,
-            height: target.height,
-        };
-        let position = CGPoint {
-            x: target.x,
-            y: target.y,
-        };
-        for (context, err) in [
-            ("set size", set_size(element, size)),
-            ("set position", set_position(element, position)),
-            ("set size", set_size(element, size)),
-        ] {
-            if err == ffi::kAXErrorAPIDisabled {
-                return Err(map_ax_error(context, err));
-            }
-        }
-
-        // Report what the window actually ended up with — Terminal and iTerm
-        // snap to character-cell increments, so this can differ from `target`.
-        //
-        // A failed read-back is an error rather than an optimistic `target`.
-        // The set calls above tolerate everything but `kAXErrorAPIDisabled`, so
-        // this read is the only verification that the window moved at all;
-        // echoing the request when it fails would have the engine record a
-        // frame that was never applied and leave Restore pointing at fiction.
-        match (
-            copy_point(element, "AXPosition"),
-            copy_size(element, "AXSize"),
-        ) {
-            (Some(p), Some(s)) => Ok(Rect::new(p.x, p.y, s.width, s.height)),
-            _ => Err(PlatformError::os(
-                "finish",
-                "the application did not report where the window ended up",
-            )),
-        }
+        apply_frame_and_readback(element, target)
     }
 
     fn current_frame(&self) -> Result<Rect> {
