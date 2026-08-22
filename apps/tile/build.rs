@@ -7,6 +7,11 @@ fn main() {
         "cargo:rustc-env=TILE_BUILD_KIND={}",
         std::env::var("TILE_BUILD_KIND").unwrap_or_default()
     );
+    println!("cargo:rerun-if-env-changed=TILE_UPDATER");
+    println!(
+        "cargo:rustc-env=TILE_UPDATER={}",
+        std::env::var("TILE_UPDATER").unwrap_or_default()
+    );
 
     tauri_build::build();
 }

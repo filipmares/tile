@@ -14,6 +14,7 @@ mod feedback;
 mod ratelimit;
 mod state;
 mod tray;
+mod update;
 mod window;
 
 use std::sync::mpsc;
