@@ -264,6 +264,27 @@ Installers are written to `target/release/bundle/`. The app has no main
 window — look for the icon in the system tray (Windows) or menu bar (macOS),
 and choose **Settings…** from its menu.
 
+### Development builds are kept apart from an installed Tile
+
+Anything you build yourself — including `tauri build` — is a **development
+build**, and it deliberately stays out of the way of a copy of Tile you have
+installed from a release:
+
+- It stores its settings in a separate directory (`Tile-Development` beside the
+  installed `Tile` one), so experimenting cannot corrupt or migrate your real
+  `config.json`.
+- It never touches the system login item. **Launch Tile at login** is saved in
+  the development config but not applied, so it cannot repoint or remove the
+  login item belonging to the installed copy.
+- It says so: the menu bar / tray menu is headed *Tile — Development build*,
+  the tray tooltip and settings window title are suffixed *(Development)*, and
+  the settings window shows a panel naming its config directory.
+
+What makes a build "installed" is the `TILE_BUILD_KIND=installed` environment
+variable, which only the release workflow sets. Absent, empty or misspelled, a
+build classifies as development — the safe direction to fail in. See
+[`apps/tile/src/build_kind.rs`](apps/tile/src/build_kind.rs).
+
 ## Testing
 
 Most of Tile is verifiable without a desktop. `cargo test --workspace` covers

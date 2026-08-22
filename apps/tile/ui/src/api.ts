@@ -2,6 +2,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import {
+  BuildInfo,
   Config,
   CycleSize,
   Gaps,
@@ -13,6 +14,9 @@ import {
 } from "./types";
 
 export const getConfig = (): Promise<Config> => invoke("get_config");
+
+/** Build provenance — fixed for the process, so read once at boot. */
+export const getBuildInfo = (): Promise<BuildInfo> => invoke("get_build_info");
 
 export const setBinding = (
   action: WindowAction,

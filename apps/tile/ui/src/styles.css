@@ -573,6 +573,29 @@ select {
   border-color: var(--warning-border);
 }
 
+/* Development builds only: a quiet, unmistakable marker that this is not the
+   installed app. Distinct from --warning, which means "something is wrong". */
+.panel--development {
+  background: var(--surface-2);
+  border-color: var(--accent);
+}
+
+.panel--development h2::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: middle;
+}
+
+#development-config-dir {
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
 .panel p {
   margin: 6px 0;
 }

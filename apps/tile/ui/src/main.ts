@@ -3,6 +3,7 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getVersion } from "@tauri-apps/api/app";
 import {
+  getBuildInfo,
   getConfig,
   getHotkeyFailures,
   getPermissionStatus,
@@ -16,6 +17,7 @@ import {
 import { formatHotkey, interpret } from "./hotkey";
 import {
   ACTIONS,
+  BuildInfo,
   Config,
   CYCLE_SIZES,
   CycleSize,
@@ -65,6 +67,9 @@ const dom = {
   permissionPanel: el<HTMLElement>("#permission-panel"),
   grant: el<HTMLButtonElement>("#grant-permission"),
   openAccessibility: el<HTMLButtonElement>("#open-accessibility"),
+  developmentPanel: el<HTMLElement>("#development-panel"),
+  developmentConfigDir: el<HTMLParagraphElement>("#development-config-dir"),
+  launchDevelopmentNote: el<HTMLParagraphElement>("#launch-development-note"),
 };
 
 let config: Config | null = null;
@@ -312,6 +317,19 @@ function renderBehaviour(): void {
   dom.launch.checked = config.launchOnLogin;
 }
 
+/** Marks the window as a development build. Installed builds render nothing. */
+function renderBuildInfo(info: BuildInfo): void {
+  if (info.kind !== "development") return;
+  dom.developmentPanel.hidden = false;
+  // The launch-on-login toggle is the one control whose behaviour differs, so
+  // it says so where it is, not only in the panel at the top.
+  dom.launchDevelopmentNote.hidden = false;
+  if (info.configDir) {
+    dom.developmentConfigDir.textContent = `Settings are stored in ${info.configDir}`;
+    dom.developmentConfigDir.hidden = false;
+  }
+}
+
 /** Builds the cycle-size checkboxes once, then reflects the saved selection. */
 function renderCycleSizes(cfg: Config): void {
   if (dom.cycleSizesGrid.childElementCount === 0) {
@@ -505,6 +523,13 @@ async function boot(): Promise<void> {
   }
 
   wireEvents();
+  // Build provenance is fetched first and separately: if it fails, the rest of
+  // the settings UI should still load.
+  try {
+    renderBuildInfo(await getBuildInfo());
+  } catch (err) {
+    console.error("could not read build info", err);
+  }
   try {
     config = await getConfig();
     failures = await getHotkeyFailures();

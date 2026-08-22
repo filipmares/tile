@@ -23,6 +23,21 @@
       </section>
 
       <section
+        id="development-panel"
+        class="panel panel--development"
+        hidden
+      >
+        <h2>Development build</h2>
+        <p>
+          This copy was built from a checkout, not installed from a release. It
+          keeps its settings separately from an installed copy of Tile, and it
+          never changes the system login item — “Launch Tile at login” is saved
+          here but not applied.
+        </p>
+        <p class="panel__hint" id="development-config-dir" hidden></p>
+      </section>
+
+      <section
         id="permission-panel"
         class="panel panel--warning"
         hidden
@@ -169,6 +184,10 @@
             <input type="checkbox" id="launch-on-login" name="launch-on-login" />
             <span class="field__label">Launch Tile at login</span>
           </label>
+          <p class="panel__hint" id="launch-development-note" hidden>
+            Saved, but not applied: a development build never changes the
+            system login item.
+          </p>
         </div>
       </section>
 
