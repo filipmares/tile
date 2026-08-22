@@ -495,11 +495,9 @@ async function boot(): Promise<void> {
     try {
       const version = await getVersion();
       dom.aboutVersion.textContent = version;
-      dom.aboutVersion.classList.toggle("is-long", version.length > 8);
     } catch (err) {
       console.error("could not read app version", err);
       dom.aboutVersion.textContent = "Unavailable";
-      dom.aboutVersion.classList.add("is-long");
     } finally {
       dom.aboutVersion.removeAttribute("aria-busy");
     }

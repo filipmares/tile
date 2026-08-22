@@ -3,7 +3,6 @@ import { defineConfig } from "vite";
 // Tauri expects a fixed dev port and relative asset paths in the built bundle.
 export default defineConfig({
   base: "./",
-  publicDir: "../icons",
   clearScreen: false,
   server: {
     port: 5173,
