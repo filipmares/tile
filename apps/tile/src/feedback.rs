@@ -1,6 +1,6 @@
 //! Running an action with user-facing feedback.
 //!
-//! Both the tray menu and the hotkey worker thread funnel through
+//! Both the settings window and the hotkey worker thread funnel through
 //! [`run_action`], so the "perform it, and only nag about denied permission"
 //! policy lives in exactly one place.
 
@@ -23,10 +23,8 @@ use crate::window;
 /// it. Callers with no source of further actions pass a closure returning
 /// `None`.
 ///
-/// This is the only entry point: the tray no longer calls in directly, because
-/// its callback runs on Tauri's main event loop and an animated action would
-/// hold it for the whole animation. Tray items go through
-/// [`AppState::enqueue_action`] and arrive here on the worker thread.
+/// This is the only entry point, so hotkeys and the settings window share one
+/// animation pipeline.
 pub fn run_action_preemptible<R: Runtime>(
     app: &AppHandle<R>,
     action: WindowAction,

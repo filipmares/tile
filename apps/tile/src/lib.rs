@@ -136,7 +136,6 @@ fn setup_app<R: Runtime>(
         config,
         build_kind,
         config_dir,
-        tx,
     ));
     app.manage(state.clone());
 
