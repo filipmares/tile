@@ -685,8 +685,13 @@ jobs:
             echo "::error::tauri-action produced no artifacts"
             exit 1
           fi
+          is_draft="$(gh release view "$TAG" --repo "${{ github.repository }}" --json isDraft --jq .isDraft)"
+          if [ "$is_draft" != "true" ]; then
+            echo "::error::Refusing to replace assets on published release $TAG."
+            exit 1
+          fi
           printf 'Uploading: %s\n' "${paths[@]}"
-          gh release upload "$TAG" "${paths[@]}" --clobber
+          gh release upload "$TAG" "${paths[@]}" --repo "${{ github.repository }}" --clobber
 
   finalize-manifest:
     name: Finalize updater manifest
@@ -774,6 +779,11 @@ jobs:
           done
 
           cat latest.json
+          is_draft="$(gh release view "$TAG" --repo "${{ github.repository }}" --json isDraft --jq .isDraft)"
+          if [ "$is_draft" != "true" ]; then
+            echo "::error::Refusing to replace latest.json on published release $TAG."
+            exit 1
+          fi
           gh release upload "$TAG" latest.json --repo "${{ github.repository }}" --clobber
 
   # ---------------------------------------------------------------------------

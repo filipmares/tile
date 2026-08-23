@@ -95,6 +95,7 @@ let config: Config | null = null;
 let failures: HotkeyFailure[] = [];
 let recording: WindowAction | null = null;
 let permissionTimer: number | null = null;
+let updatePollTimer: number | null = null;
 let updateState: UpdateStatus = { status: "idle" };
 let updateNotes: string | null = null;
 
@@ -455,12 +456,29 @@ function describeAboutUpdateStatus(status: UpdateStatus): string {
   }
 }
 
-  async function refreshUpdateStatus(): Promise<void> {
+  async function refreshUpdateStatus(): Promise<UpdateStatus> {
     try {
-      renderUpdateStatus(await getUpdateStatus());
+      const status = await getUpdateStatus();
+      renderUpdateStatus(status);
+      return status;
     } catch (err) {
-      renderUpdateStatus({ status: "error", message: String(err) });
+      const status: UpdateStatus = { status: "error", message: String(err) };
+      renderUpdateStatus(status);
+      return status;
     }
+  }
+
+  function scheduleUpdateRefresh(status: UpdateStatus): void {
+    if (updatePollTimer !== null) {
+      window.clearTimeout(updatePollTimer);
+    }
+    const delay =
+      status.status === "checking" || status.status === "downloading"
+        ? 1000
+        : 60_000;
+    updatePollTimer = window.setTimeout(async () => {
+      scheduleUpdateRefresh(await refreshUpdateStatus());
+    }, delay);
   }
 
   async function runUpdateCheck(): Promise<UpdateStatus> {
@@ -468,10 +486,12 @@ function describeAboutUpdateStatus(status: UpdateStatus): string {
     try {
       const status = await checkForUpdates();
       renderUpdateStatus(status);
+      scheduleUpdateRefresh(status);
       return status;
     } catch (err) {
       const status: UpdateStatus = { status: "error", message: String(err) };
       renderUpdateStatus(status);
+      scheduleUpdateRefresh(status);
       return status;
     }
   }
@@ -497,11 +517,16 @@ function describeAboutUpdateStatus(status: UpdateStatus): string {
         downloadedBytes: 0,
         totalBytes: null,
       });
+      scheduleUpdateRefresh(updateState);
     }
     try {
-      renderUpdateStatus(await installUpdate(false));
+      const status = await installUpdate(false);
+      renderUpdateStatus(status);
+      scheduleUpdateRefresh(status);
     } catch (err) {
-      renderUpdateStatus({ status: "error", message: String(err) });
+      const status: UpdateStatus = { status: "error", message: String(err) };
+      renderUpdateStatus(status);
+      scheduleUpdateRefresh(status);
     }
   }
 
@@ -745,8 +770,7 @@ async function boot(): Promise<void> {
   renderBindings();
   renderBehaviour();
   await refreshPermission(false);
-  await refreshUpdateStatus();
-  window.setInterval(() => void refreshUpdateStatus(), 2000);
+  scheduleUpdateRefresh(await refreshUpdateStatus());
 }
 
 void boot();

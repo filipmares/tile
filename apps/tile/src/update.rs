@@ -35,6 +35,7 @@ pub enum UpdateStatus {
         downloaded_bytes: u64,
         total_bytes: Option<u64>,
     },
+    #[cfg(target_os = "macos")]
     ReadyToRelaunch {
         version: String,
     },
@@ -56,10 +57,17 @@ pub struct UpdateManager {
 }
 
 fn suppresses_check(status: &UpdateStatus) -> bool {
-    matches!(
-        status,
-        UpdateStatus::Downloading { .. } | UpdateStatus::ReadyToRelaunch { .. }
-    )
+    if matches!(status, UpdateStatus::Downloading { .. }) {
+        return true;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        matches!(status, UpdateStatus::ReadyToRelaunch { .. })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
 }
 
 impl UpdateManager {
@@ -327,6 +335,7 @@ mod tests {
             .is_err());
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn installed_updates_are_not_regressed_by_another_check() {
         assert!(suppresses_check(&UpdateStatus::ReadyToRelaunch {

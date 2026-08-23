@@ -125,10 +125,7 @@ fn tray_icon<R: Runtime>(
 ) -> Option<tauri::image::Image<'static>> {
     let badge = if kind.is_development() {
         Some([245, 145, 35, 255])
-    } else if matches!(
-        status,
-        UpdateStatus::Available { .. } | UpdateStatus::ReadyToRelaunch { .. }
-    ) {
+    } else if matches!(status, UpdateStatus::Available { .. }) || ready_version(status).is_some() {
         Some([37, 99, 235, 255])
     } else {
         None
@@ -144,16 +141,28 @@ fn tray_icon<R: Runtime>(
 }
 
 fn tray_tooltip(kind: BuildKind, status: &UpdateStatus) -> String {
-    match status {
-        UpdateStatus::Available { version, .. } => format!("Tile — {version} available"),
-        UpdateStatus::ReadyToRelaunch { version } => {
-            format!("Tile — relaunch to finish {version}")
-        }
-        _ => kind.tray_tooltip().to_string(),
+    if let UpdateStatus::Available { version, .. } = status {
+        format!("Tile — {version} available")
+    } else if let Some(version) = ready_version(status) {
+        format!("Tile — relaunch to finish {version}")
+    } else {
+        kind.tray_tooltip().to_string()
     }
 }
 
+fn ready_version(status: &UpdateStatus) -> Option<&str> {
+    #[cfg(target_os = "macos")]
+    if let UpdateStatus::ReadyToRelaunch { version } = status {
+        return Some(version);
+    }
+    let _ = status;
+    None
+}
+
 fn update_menu_state(status: &UpdateStatus) -> (String, bool) {
+    if let Some(version) = ready_version(status) {
+        return (format!("Relaunch Tile {version}"), true);
+    }
     match status {
         UpdateStatus::Unavailable => (
             "Check for Updates (Unavailable in Development)".into(),
@@ -165,7 +174,8 @@ fn update_menu_state(status: &UpdateStatus) -> (String, bool) {
         UpdateStatus::Downloading { version, .. } => {
             (format!("Downloading Tile {version}…"), false)
         }
-        UpdateStatus::ReadyToRelaunch { version } => (format!("Relaunch Tile {version}"), true),
+        #[cfg(target_os = "macos")]
+        UpdateStatus::ReadyToRelaunch { .. } => unreachable!("handled before match"),
         UpdateStatus::Error { .. } => ("Retry Update Check…".into(), true),
     }
 }
@@ -250,6 +260,7 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str, kind: BuildKind) 
             let status = app.state::<Arc<UpdateManager>>().status();
             match status {
                 UpdateStatus::Available { version, .. } => request_install(app, version),
+                #[cfg(target_os = "macos")]
                 UpdateStatus::ReadyToRelaunch { .. } => app.request_restart(),
                 _ => spawn_update_check(app.clone()),
             }

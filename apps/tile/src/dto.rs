@@ -122,6 +122,7 @@ impl From<UpdateStatus> for UpdateStatusDto {
                 downloaded_bytes,
                 total_bytes,
             },
+            #[cfg(target_os = "macos")]
             UpdateStatus::ReadyToRelaunch { version } => Self::ReadyToRelaunch { version },
             UpdateStatus::Error { message } => Self::Error { message },
         }
