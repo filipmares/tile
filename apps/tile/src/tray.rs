@@ -72,11 +72,11 @@ fn build_menu<R: Runtime>(
     let quit = MenuItem::with_id(app, ID_QUIT, "Quit Tile", true, None::<&str>)?;
 
     let mut items: Vec<&dyn IsMenuItem<R>> = Vec::new();
-    items.push(&about);
     if let Some((header, dev_separator)) = &dev_header {
         items.push(header);
         items.push(dev_separator);
     }
+    items.push(&about);
     items.push(&settings);
     items.push(&update);
     items.push(&separator);
