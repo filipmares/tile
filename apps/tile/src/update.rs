@@ -138,7 +138,11 @@ impl UpdateManager {
             }
             Err(message) => {
                 let status = UpdateStatus::Error { message };
-                self.publish_status(app, status.clone());
+                let mut inner = lock(&self.inner);
+                inner.available = None;
+                inner.status = status.clone();
+                drop(inner);
+                crate::tray::sync_update_state(app, &status);
                 status
             }
         };
