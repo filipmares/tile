@@ -1037,7 +1037,7 @@ mod tests {
         assert_eq!(config.binding(WindowAction::CenterHalfBack), None);
 
         // The sizes these arrows stand in for must stay in the catalogue, so
-        // the tray menu and custom bindings can still reach them directly.
+        // custom bindings can still reach them directly.
         for action in [
             WindowAction::FirstThird,
             WindowAction::CenterThird,

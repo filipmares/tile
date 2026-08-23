@@ -58,8 +58,7 @@ Everything is rebindable, and the rest of the catalogue — the centered column,
 the explicitly-sized thirds and two-thirds, the corners, center, maximize-height,
 almost-maximize, plus fourths, sixths, ninths, corner thirds, the top/bottom
 halves, the incremental move/resize/halve-double families and the
-named-display moves — ships unbound, reachable from the tray menu or a binding
-of your own.
+named-display moves — ships unbound, reachable through a binding of your own.
 
 ### Press it again to change the size
 

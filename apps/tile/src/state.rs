@@ -9,7 +9,7 @@
 //!   the hotkey channel and drains it, calling [`AppState::perform_action`].
 //! * The window backend, engine and hotkey backend are each behind a [`Mutex`]
 //!   inside [`AppState`], which Tauri manages, so both the worker thread and
-//!   the command handlers (tray menu, settings window) drive the same pipeline.
+//!   the command handlers (settings window) drive the same pipeline.
 //!
 //! # Why an animated move still holds both locks
 //!
@@ -33,7 +33,6 @@
 //! [`AppState::perform_action_preemptible`].
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -67,9 +66,6 @@ pub struct AppState {
     config_dir: Option<PathBuf>,
     hotkey_failures: Mutex<Vec<HotkeyFailure>>,
     permission_dialog_limiter: Mutex<RateLimiter>,
-    /// The same channel the hotkey backend posts to, so callers that must not
-    /// block can hand an action to the worker thread instead of running it.
-    actions: mpsc::Sender<WindowAction>,
 }
 
 impl AppState {
@@ -79,7 +75,6 @@ impl AppState {
         config: Config,
         build_kind: BuildKind,
         config_dir: Option<PathBuf>,
-        actions: mpsc::Sender<WindowAction>,
     ) -> Self {
         Self {
             backend: Mutex::new(backend),
@@ -89,7 +84,6 @@ impl AppState {
             config_dir,
             hotkey_failures: Mutex::new(Vec::new()),
             permission_dialog_limiter: Mutex::new(RateLimiter::new(PERMISSION_DIALOG_COOLDOWN)),
-            actions,
         }
     }
 
@@ -101,21 +95,6 @@ impl AppState {
     /// Where the config is being read from and written to, if anywhere.
     pub fn config_dir(&self) -> Option<&Path> {
         self.config_dir.as_deref()
-    }
-
-    /// Hands `action` to the worker thread instead of performing it here.
-    ///
-    /// This is what the tray menu uses. Its callback runs on Tauri's main
-    /// event loop, and an animated action occupies the pipeline for the whole
-    /// animation — so running it inline would freeze the tray, the menu and
-    /// the settings window for every tray-driven snap. Posting it to the same
-    /// channel the hotkeys use also means a tray action and a hotkey press
-    /// stay in one order and can preempt each other, rather than racing for
-    /// the locks.
-    pub fn enqueue_action(&self, action: WindowAction) {
-        if let Err(err) = self.actions.send(action) {
-            log::error!("could not queue {action}: the action worker is gone ({err})");
-        }
     }
 
     /// A snapshot of the current configuration.
@@ -138,7 +117,7 @@ impl AppState {
     /// screens, ask the engine for a [`Plan`], apply it, and commit history
     /// using the frame the backend actually produced.
     ///
-    /// Callers with no source of further actions (the tray menu, the settings
+    /// Callers with no source of further actions (the settings
     /// window) use this; the hotkey worker uses
     /// [`AppState::perform_action_preemptible`] so a second press can steer an
     /// animation that is still in flight.
