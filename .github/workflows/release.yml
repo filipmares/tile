@@ -414,6 +414,8 @@ jobs:
             updater="$(echo "$ARTIFACTS" | jq -r '.[] | select(endswith("-setup.exe"))' | head -n1)"
             signature="$(echo "$ARTIFACTS" | jq -r '.[] | select(endswith("-setup.exe.sig"))' | head -n1)"
           fi
+          updater="${updater%$'\r'}"
+          signature="${signature%$'\r'}"
           if [ -z "$updater" ] || [ ! -f "$updater" ]; then
             echo "::error::Updater artifact missing from artifactPaths: $ARTIFACTS"
             exit 1
