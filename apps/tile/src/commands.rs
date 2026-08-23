@@ -11,8 +11,9 @@ use tauri::{AppHandle, Runtime, State};
 use tile_core::{Config, CycleSize, Gaps, Hotkey, SubsequentExecutionMode, WindowAction};
 
 use crate::autostart;
-use crate::dto::{BuildInfoDto, HotkeyFailureDto, PermissionStatusDto};
+use crate::dto::{BuildInfoDto, HotkeyFailureDto, PermissionStatusDto, UpdateStatusDto};
 use crate::state::AppState;
+use crate::update::UpdateManager;
 
 type Shared = Arc<AppState>;
 
@@ -119,4 +120,31 @@ pub fn get_hotkey_failures(state: State<'_, Shared>) -> Vec<HotkeyFailureDto> {
         .iter()
         .map(HotkeyFailureDto::from)
         .collect()
+}
+
+#[tauri::command]
+pub fn get_update_status(manager: State<'_, Arc<UpdateManager>>) -> UpdateStatusDto {
+    manager.status().into()
+}
+
+#[tauri::command]
+pub async fn check_for_updates<R: Runtime>(
+    app: AppHandle<R>,
+    manager: State<'_, Arc<UpdateManager>>,
+) -> Result<UpdateStatusDto, String> {
+    let manager = manager.inner().clone();
+    manager.check(&app).await.map(UpdateStatusDto::from)
+}
+
+#[tauri::command]
+pub async fn install_update<R: Runtime>(
+    app: AppHandle<R>,
+    manager: State<'_, Arc<UpdateManager>>,
+    relaunch_after_install: bool,
+) -> Result<UpdateStatusDto, String> {
+    let manager = manager.inner().clone();
+    manager
+        .install(&app, relaunch_after_install)
+        .await
+        .map(UpdateStatusDto::from)
 }

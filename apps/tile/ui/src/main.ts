@@ -3,10 +3,13 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getVersion } from "@tauri-apps/api/app";
 import {
+  checkForUpdates,
   getBuildInfo,
   getConfig,
   getHotkeyFailures,
   getPermissionStatus,
+  getUpdateStatus,
+  installUpdate,
   resetToDefaults,
   setAnimation,
   setBinding,
@@ -26,6 +29,7 @@ import {
   Hotkey,
   HotkeyFailure,
   SubsequentExecutionMode,
+  UpdateStatus,
   WindowAction,
 } from "./types";
 
@@ -45,6 +49,8 @@ const dom = {
   app: el<HTMLElement>("#app"),
   about: el<HTMLElement>("#about"),
   aboutVersion: el<HTMLParagraphElement>("#about-version"),
+  aboutCheckUpdate: el<HTMLButtonElement>("#about-check-update"),
+  aboutUpdateStatus: el<HTMLParagraphElement>("#about-update-status"),
   github: el<HTMLButtonElement>("#github"),
   bindings: el<HTMLUListElement>("#bindings"),
   assignedBindings: el<HTMLUListElement>("#assigned-bindings"),
@@ -70,12 +76,27 @@ const dom = {
   developmentPanel: el<HTMLElement>("#development-panel"),
   developmentConfigDir: el<HTMLParagraphElement>("#development-config-dir"),
   launchDevelopmentNote: el<HTMLParagraphElement>("#launch-development-note"),
+  updatePanel: el<HTMLElement>("#update-panel"),
+  updateStatus: el<HTMLParagraphElement>("#update-status"),
+  updateNotes: el<HTMLParagraphElement>("#update-notes"),
+  updateProgress: el<HTMLProgressElement>("#update-progress"),
+  updateProgressDetail: el<HTMLParagraphElement>("#update-progress-detail"),
+  checkUpdate: el<HTMLButtonElement>("#check-update"),
+  installUpdate: el<HTMLButtonElement>("#install-update"),
+  updateConfirmation: el<HTMLDialogElement>("#update-confirmation"),
+  updateConfirmationMessage: el<HTMLParagraphElement>(
+    "#update-confirmation-message",
+  ),
+  confirmUpdate: el<HTMLButtonElement>("#confirm-update"),
+  cancelUpdate: el<HTMLButtonElement>("#cancel-update"),
 };
 
 let config: Config | null = null;
 let failures: HotkeyFailure[] = [];
 let recording: WindowAction | null = null;
 let permissionTimer: number | null = null;
+let updateState: UpdateStatus = { status: "idle" };
+let updateNotes: string | null = null;
 
 /** Actions sharing a hotkey (only possible from a hand-edited config). */
 function conflictingActions(cfg: Config): Set<WindowAction> {
@@ -330,6 +351,160 @@ function renderBuildInfo(info: BuildInfo): void {
   }
 }
 
+function renderUpdateStatus(status: UpdateStatus): void {
+    updateState = status;
+    if (status.status !== "available" && dom.updateConfirmation.open) {
+      dom.updateConfirmation.close();
+    }
+    dom.updatePanel.hidden = false;
+    dom.updateProgress.hidden = true;
+    dom.updateProgressDetail.hidden = true;
+    dom.updateProgress.removeAttribute("value");
+    dom.installUpdate.hidden = true;
+    dom.checkUpdate.disabled = false;
+    dom.updateNotes.hidden = updateNotes === null;
+    dom.updateNotes.textContent = updateNotes ?? "";
+
+    switch (status.status) {
+      case "unavailable":
+        setUpdateAnnouncement(
+          "Production update checks are unavailable in this development build.",
+        );
+        dom.checkUpdate.disabled = true;
+        break;
+      case "idle":
+        setUpdateAnnouncement("Tile has not checked for updates yet.");
+        break;
+      case "checking":
+        setUpdateAnnouncement("Checking for updates…");
+        dom.checkUpdate.disabled = true;
+        break;
+      case "current":
+        setUpdateAnnouncement("Tile is up to date.");
+        updateNotes = null;
+        dom.updateNotes.hidden = true;
+        break;
+      case "available":
+        updateNotes = status.notes;
+        dom.updateNotes.textContent = updateNotes ?? "";
+        dom.updateNotes.hidden = updateNotes === null;
+        setUpdateAnnouncement(`Tile ${status.version} is available.`);
+        dom.installUpdate.textContent = "Update now";
+        dom.installUpdate.hidden = false;
+        break;
+      case "downloading": {
+        const total = status.totalBytes;
+        const downloadedMb = (status.downloadedBytes / 1_048_576).toFixed(1);
+        setUpdateAnnouncement(`Downloading Tile ${status.version}.`);
+        dom.updateProgressDetail.textContent =
+          total === null
+            ? `${downloadedMb} MB downloaded`
+            : `${Math.min(100, Math.round((status.downloadedBytes / total) * 100))}% downloaded`;
+        dom.updateProgressDetail.hidden = false;
+        dom.updateProgress.hidden = false;
+        if (total !== null) {
+          dom.updateProgress.max = total;
+          dom.updateProgress.value = status.downloadedBytes;
+        }
+        dom.checkUpdate.disabled = true;
+        break;
+      }
+      case "ready-to-relaunch":
+        setUpdateAnnouncement(
+          `Tile ${status.version} is installed and ready to relaunch.`,
+        );
+        dom.installUpdate.textContent = "Relaunch Tile";
+        dom.installUpdate.hidden = false;
+        dom.checkUpdate.disabled = true;
+        break;
+      case "error":
+        setUpdateAnnouncement(`Could not update Tile: ${status.message}`);
+        dom.checkUpdate.textContent = "Retry";
+        break;
+    }
+
+    if (status.status !== "error") {
+      dom.checkUpdate.textContent = "Check for updates";
+    }
+}
+
+function setUpdateAnnouncement(text: string): void {
+  if (dom.updateStatus.textContent !== text) {
+    dom.updateStatus.textContent = text;
+  }
+}
+
+function describeAboutUpdateStatus(status: UpdateStatus): string {
+  switch (status.status) {
+    case "unavailable":
+      return "Update checks are unavailable in this development build.";
+    case "idle":
+      return "Tile has not checked for updates yet.";
+    case "checking":
+      return "Tile is already checking for updates.";
+    case "current":
+      return "Tile is up to date.";
+    case "available":
+      return `Tile ${status.version} is available. Open Settings or the tray menu to update.`;
+    case "downloading":
+      return `Tile ${status.version} is downloading.`;
+    case "ready-to-relaunch":
+      return `Tile ${status.version} is installed and ready to relaunch.`;
+    case "error":
+      return `Could not check for updates: ${status.message}`;
+  }
+}
+
+  async function refreshUpdateStatus(): Promise<void> {
+    try {
+      renderUpdateStatus(await getUpdateStatus());
+    } catch (err) {
+      renderUpdateStatus({ status: "error", message: String(err) });
+    }
+  }
+
+  async function runUpdateCheck(): Promise<UpdateStatus> {
+    renderUpdateStatus({ status: "checking" });
+    try {
+      const status = await checkForUpdates();
+      renderUpdateStatus(status);
+      return status;
+    } catch (err) {
+      const status: UpdateStatus = { status: "error", message: String(err) };
+      renderUpdateStatus(status);
+      return status;
+    }
+  }
+
+  function showUpdateConfirmation(): void {
+    if (updateState.status !== "available") return;
+    const windows = navigator.userAgent.includes("Windows");
+    dom.updateConfirmationMessage.textContent = windows
+      ? "Tile will close, install the update, and reopen automatically. Continue?"
+      : "Tile will install the update. You can relaunch after it finishes. Continue?";
+    if (!dom.updateConfirmation.open) {
+      dom.updateConfirmation.showModal();
+    }
+    dom.confirmUpdate.focus();
+  }
+
+  async function applyUpdate(): Promise<void> {
+    dom.updateConfirmation.close();
+    if (updateState.status === "available") {
+      renderUpdateStatus({
+        status: "downloading",
+        version: updateState.version,
+        downloadedBytes: 0,
+        totalBytes: null,
+      });
+    }
+    try {
+      renderUpdateStatus(await installUpdate(false));
+    } catch (err) {
+      renderUpdateStatus({ status: "error", message: String(err) });
+    }
+  }
+
 /** Builds the cycle-size checkboxes once, then reflects the saved selection. */
 function renderCycleSizes(cfg: Config): void {
   if (dom.cycleSizesGrid.childElementCount === 0) {
@@ -434,6 +609,22 @@ async function refreshPermission(prompt: boolean): Promise<void> {
 }
 
 function wireEvents(): void {
+  dom.checkUpdate.addEventListener("click", () => void runUpdateCheck());
+  dom.installUpdate.addEventListener("click", () => {
+    if (updateState.status === "ready-to-relaunch") {
+      void installUpdate(true);
+    } else {
+      showUpdateConfirmation();
+    }
+  });
+  dom.confirmUpdate.addEventListener("click", () => void applyUpdate());
+  dom.cancelUpdate.addEventListener("click", () => {
+    dom.updateConfirmation.close();
+    dom.installUpdate.focus();
+  });
+  dom.updateConfirmation.addEventListener("cancel", () => {
+    dom.installUpdate.focus();
+  });
   dom.gapWindow.addEventListener("input", () =>
     mirrorWindowGap(dom.gapWindow.value),
   );
@@ -510,6 +701,20 @@ async function boot(): Promise<void> {
         console.error("could not open the source repository", err),
       );
     });
+    dom.aboutCheckUpdate.addEventListener("click", async () => {
+      dom.aboutCheckUpdate.disabled = true;
+      dom.aboutUpdateStatus.textContent = "Checking for updates…";
+      try {
+        dom.aboutUpdateStatus.textContent = describeAboutUpdateStatus(
+          await checkForUpdates(),
+        );
+      } catch (err) {
+        dom.aboutUpdateStatus.textContent =
+          `Could not check for updates: ${String(err)}`;
+      } finally {
+        dom.aboutCheckUpdate.disabled = false;
+      }
+    });
     try {
       const version = await getVersion();
       dom.aboutVersion.textContent = version;
@@ -540,6 +745,8 @@ async function boot(): Promise<void> {
   renderBindings();
   renderBehaviour();
   await refreshPermission(false);
+  await refreshUpdateStatus();
+  window.setInterval(() => void refreshUpdateStatus(), 2000);
 }
 
 void boot();

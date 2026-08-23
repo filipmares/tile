@@ -7,11 +7,14 @@ once every platform job is green — publishes the release automatically. A tag
 carrying a semver pre-release suffix (`v0.2.0-rc.1`) is published but never
 marked `latest`.
 
-Signing is opt-in on both platforms: when the secrets are configured the
-artifacts are signed and the workflow asserts it; when they are not, the build
-still succeeds and the release notes say the artifacts are unsigned.
+Updater signing is mandatory on both platforms. macOS Developer ID signing and
+notarization are also mandatory because replacing the app with an unsigned or
+differently signed build invalidates its Accessibility grant. Windows
+Authenticode signing remains opt-in; unsigned Windows builds still publish with
+an "Unknown publisher" warning.
 
 - [Cutting a release](#cutting-a-release)
+- [One-time updater signing setup](#one-time-updater-signing-setup)
 - [One-time macOS signing setup](#one-time-macos-signing-setup)
 - [One-time Windows signing setup](#one-time-windows-signing-setup)
 - [What the workflow verifies](#what-the-workflow-verifies)
@@ -55,17 +58,54 @@ stops before publishing anything.
 5. The release publishes itself when both platform jobs succeed. If one fails,
    the release stays a draft: fix the cause and re-run.
 
-To rebuild an existing tag without re-tagging, run the workflow manually:
+To repair a **draft** release without re-tagging, run:
 `gh workflow run release.yml -f tag=v0.2.0`. Assets are uploaded with
-`--clobber`, so a re-run replaces them, and an already-published release stays
-published.
+`--clobber`. Once a release is published its assets are immutable because
+clients may be reading `latest.json`; fix a published release by bumping the
+version and cutting a new tag.
+
+The first updater-enabled release is a one-time manual install for users on
+v0.2.0 or earlier. Those versions do not contain the updater plugin or its trust
+key. From the following release onward, use Tile's tray or Settings window to
+update in place.
+
+## One-time updater signing setup
+
+Tauri verifies updater archives with a dedicated minisign keypair. This is
+separate from Apple Developer ID and Windows Authenticode signing.
+
+1. Generate the keypair with the Tauri CLI:
+
+   ```sh
+   apps/tile/ui/node_modules/.bin/tauri signer generate --write-keys ~/.tauri/tile.key
+   ```
+
+2. Put the complete public-key text in `plugins.updater.pubkey` in
+   `apps/tile/tauri.conf.json`.
+3. Add the private key and password as repository secrets:
+
+   | Secret | Value |
+   | ------ | ----- |
+   | `TAURI_SIGNING_PRIVATE_KEY` | Complete contents of `tile.key` |
+   | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password chosen during generation |
+
+4. Store an encrypted backup of the private key and password outside GitHub.
+   The initial key is kept at `~/.tauri/tile.key`, with its password in the
+   login keychain under service `dev.tile.tile.updater-key`.
+   Losing this key prevents future in-app updates for every existing
+   installation. A rotation must ship the new public key in an update signed by
+   the old key.
+5. Delete the local unencrypted private-key file after secret provisioning.
+
+The public key is safe to commit. Never commit or print the private key or its
+password.
 
 ## One-time macOS signing setup
 
 Signing and notarization require a paid **Apple Developer Program** membership
-($99/year). Without it the workflow still builds and publishes, but the macOS
-artifacts are unsigned and the release notes tell users to strip the quarantine
-attribute by hand.
+($99/year). They are mandatory for updater-enabled releases: without the complete
+Developer ID and notarization secret set, the workflow stops before creating or
+publishing release assets.
 
 Everything below is done once. The workflow detects the secrets automatically —
 no workflow edit is needed to turn signing on.
@@ -132,12 +172,11 @@ to `APPLE_CERTIFICATE` without its password.
 
 The workflow only describes a build as signed and notarized once
 `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_PASSWORD`
-and `APPLE_TEAM_ID` are all present; with any of them missing it publishes
-unsigned artifacts and the release notes carry the quarantine workaround
-instead. `APPLE_SIGNING_IDENTITY` is not part of that check because the bundler
-derives the identity from the imported `.p12`, but setting it is still
-recommended: it makes the build fail loudly if the certificate is ever replaced
-with the wrong kind.
+and `APPLE_TEAM_ID` are all present. Any missing value aborts the release before
+the build matrix starts. `APPLE_SIGNING_IDENTITY` is not part of that presence
+check because the bundler derives the identity from the imported `.p12`, but
+setting it is still recommended: it makes the build fail loudly if the
+certificate is ever replaced with the wrong kind.
 
 Developer ID certificates expire after five years. Builds notarized before
 expiry keep working, but new builds need a fresh certificate.
@@ -299,6 +338,26 @@ which anyone can check:
 ```sh
 gh attestation verify Tile_0.2.0_x64-setup.exe --repo filipmares/tile
 ```
+
+**Updater** — the workflow also verifies that:
+
+- macOS and Windows each produced an updater archive and non-empty `.sig`
+- the `Tile.app` inside the macOS updater archive is Developer ID signed, uses
+  the hardened runtime, and carries a valid stapled notarization ticket
+- `latest.json` matches the tag version, has an RFC 3339 publication date, and
+  contains complete `darwin-aarch64`, `darwin-x86_64`, and `windows-x86_64`
+  entries
+- `latest.json` is uploaded only after every referenced asset is present
+
+Inspect the published manifest:
+
+```sh
+curl -fsSL https://github.com/filipmares/tile/releases/latest/download/latest.json | jq .
+```
+
+The release page also contains `.app.tar.gz`, `.sig`, and `latest.json` updater
+assets. They are not manual installers; users should download the `.dmg` on
+macOS or `-setup.exe` on Windows.
 
 ### Verifying the download by hand
 

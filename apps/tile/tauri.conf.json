@@ -19,6 +19,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
       "icons/32x32.png",
@@ -40,5 +41,15 @@
       }
     }
   },
-  "plugins": {}
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/filipmares/tile/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDYxRDdDN0NCOUUzQUQwNUIKUldSYjBEcWV5OGZYWWZSRnVMdkNlRUVwa3kvYmNnTFlYVnJDMktncTNQV2lmczR1Z0t0LzIxdHQK",
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
 }

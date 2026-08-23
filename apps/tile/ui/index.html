@@ -19,6 +19,14 @@
         <button id="github" type="button" class="button button--primary">
           View source on GitHub ↗
         </button>
+        <button id="about-check-update" type="button" class="button">
+          Check for updates
+        </button>
+        <p
+          class="about__update-status"
+          id="about-update-status"
+          aria-live="polite"
+        ></p>
         <p class="about__meta">MIT License · © 2026 Filip Mares</p>
       </section>
 
@@ -35,6 +43,48 @@
           here but not applied.
         </p>
         <p class="panel__hint" id="development-config-dir" hidden></p>
+      </section>
+
+      <section id="update-panel" class="panel" hidden aria-labelledby="update-heading">
+        <h2 id="update-heading">Updates</h2>
+        <p id="update-status" aria-live="polite"></p>
+        <p class="panel__hint" id="update-notes" hidden></p>
+        <progress
+          id="update-progress"
+          aria-label="Update download progress"
+          hidden
+        ></progress>
+        <p class="panel__hint" id="update-progress-detail" hidden></p>
+        <div class="panel__actions">
+          <button id="check-update" type="button" class="button">
+            Check for updates
+          </button>
+          <button
+            id="install-update"
+            type="button"
+            class="button button--primary"
+            hidden
+          >
+            Update now
+          </button>
+        </div>
+        <dialog
+          id="update-confirmation"
+          class="update-confirmation"
+          aria-labelledby="update-confirmation-message"
+        >
+          <p id="update-confirmation-message"></p>
+          <div class="panel__actions">
+            <button
+              id="confirm-update"
+              type="button"
+              class="button button--primary"
+            >
+              Continue
+            </button>
+            <button id="cancel-update" type="button" class="button">Cancel</button>
+          </dialog>
+        </div>
       </section>
 
       <section

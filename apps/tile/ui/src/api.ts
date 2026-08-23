@@ -10,6 +10,7 @@ import {
   HotkeyFailure,
   PermissionStatus,
   SubsequentExecutionMode,
+  UpdateStatus,
   WindowAction,
 } from "./types";
 
@@ -49,3 +50,14 @@ export const getPermissionStatus = (
 
 export const getHotkeyFailures = (): Promise<HotkeyFailure[]> =>
   invoke("get_hotkey_failures");
+
+export const getUpdateStatus = (): Promise<UpdateStatus> =>
+  invoke("get_update_status");
+
+export const checkForUpdates = (): Promise<UpdateStatus> =>
+  invoke("check_for_updates");
+
+export const installUpdate = (
+  relaunchAfterInstall: boolean,
+): Promise<UpdateStatus> =>
+  invoke("install_update", { relaunchAfterInstall });
