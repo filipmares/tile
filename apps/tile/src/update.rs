@@ -216,6 +216,8 @@ impl UpdateManager {
             return Err(message);
         }
 
+        lock(&self.inner).available = None;
+
         #[cfg(target_os = "macos")]
         {
             self.publish_status(
