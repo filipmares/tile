@@ -80,8 +80,10 @@ separate from Apple Developer ID and Windows Authenticode signing.
    apps/tile/ui/node_modules/.bin/tauri signer generate --write-keys ~/.tauri/tile.key
    ```
 
-2. Put the complete public-key text in `plugins.updater.pubkey` in
-   `apps/tile/tauri.conf.json`.
+2. Copy the exact contents of the generated `tile.key.pub` file into
+   `plugins.updater.pubkey` in `apps/tile/tauri.conf.json`. This is the
+   single-line base64-encoded value emitted by Tauri; do not decode it or paste
+   the underlying two-line minisign key.
 3. Add the private key and password as repository secrets:
 
    | Secret | Value |
