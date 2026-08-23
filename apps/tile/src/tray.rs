@@ -1,8 +1,8 @@
 //! Tray icon and its menu.
 //!
-//! The menu is deliberately minimal: "Settings…" and "Quit". Window actions
-//! are driven by hotkeys and configured in the settings window rather than
-//! being duplicated as a large tray catalogue.
+//! The menu is deliberately minimal: "About Tile", "Settings…" and "Quit".
+//! Window actions are driven by hotkeys and configured in the settings window
+//! rather than being duplicated as a large tray catalogue.
 
 use std::sync::Arc;
 
@@ -16,6 +16,8 @@ use crate::window;
 
 /// Menu item id for the "Settings…" entry.
 const ID_SETTINGS: &str = "settings";
+/// Menu item id for the "About Tile" entry.
+const ID_ABOUT: &str = "about";
 /// Menu item id for the "Quit" entry.
 const ID_QUIT: &str = "quit";
 /// Menu item id for the disabled development-build header. It is never
@@ -35,10 +37,12 @@ pub fn build_tray<R: Runtime>(app: &AppHandle<R>, kind: BuildKind) -> tauri::Res
     };
 
     let settings = MenuItem::with_id(app, ID_SETTINGS, "Settings…", true, None::<&str>)?;
+    let about = MenuItem::with_id(app, ID_ABOUT, "About Tile", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, ID_QUIT, "Quit Tile", true, None::<&str>)?;
 
     let mut items: Vec<&dyn IsMenuItem<R>> = Vec::new();
+    items.push(&about);
     if let Some((header, dev_separator)) = &dev_header {
         items.push(header);
         items.push(dev_separator);
@@ -104,6 +108,11 @@ fn development_icon() -> tauri::Result<tauri::image::Image<'static>> {
 
 fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str, kind: BuildKind) {
     match id {
+        ID_ABOUT => {
+            if let Err(err) = window::open_about(app) {
+                log::error!("failed to open about window: {err}");
+            }
+        }
         ID_SETTINGS => {
             if let Err(err) = window::open_settings(app, kind) {
                 log::error!("failed to open settings window: {err}");
