@@ -511,13 +511,14 @@ function describeAboutUpdateStatus(status: UpdateStatus): string {
   async function applyUpdate(): Promise<void> {
     dom.updateConfirmation.close();
     if (updateState.status === "available") {
-      renderUpdateStatus({
+      const downloadingStatus: UpdateStatus = {
         status: "downloading",
         version: updateState.version,
         downloadedBytes: 0,
         totalBytes: null,
-      });
-      scheduleUpdateRefresh(updateState);
+      };
+      renderUpdateStatus(downloadingStatus);
+      scheduleUpdateRefresh(downloadingStatus);
     }
     try {
       const status = await installUpdate(false);
