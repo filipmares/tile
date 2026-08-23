@@ -10,9 +10,9 @@ use crate::geometry::Rect;
 
 /// The family a [`WindowAction`] belongs to.
 ///
-/// Families exist purely for presentation: the tray menu renders one submenu
-/// per family and the settings window renders one group per family, which
-/// keeps ~45 actions navigable instead of dumping them into one flat list.
+/// Families exist purely for presentation: the settings window renders one
+/// group per family, which keeps ~45 actions navigable instead of dumping them
+/// into one flat list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum WindowFamily {
     Halves,

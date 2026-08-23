@@ -418,7 +418,7 @@ function renderUpdateStatus(status: UpdateStatus): void {
         dom.checkUpdate.disabled = true;
         break;
       case "error":
-        setUpdateAnnouncement(`Could not update Tile: ${status.message}`);
+        setUpdateAnnouncement(`Update error: ${status.message}`);
         dom.checkUpdate.textContent = "Retry";
         break;
     }

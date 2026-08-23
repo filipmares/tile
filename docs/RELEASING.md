@@ -89,13 +89,14 @@ separate from Apple Developer ID and Windows Authenticode signing.
    | `TAURI_SIGNING_PRIVATE_KEY` | Complete contents of `tile.key` |
    | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password chosen during generation |
 
-4. Store an encrypted backup of the private key and password outside GitHub.
-   The initial key is kept at `~/.tauri/tile.key`, with its password in the
-   login keychain under service `dev.tile.tile.updater-key`.
+4. Retain the password-encrypted key at `~/.tauri/tile.key` as the recoverable
+   backup outside GitHub. Its password is stored separately in the login
+   keychain under service `dev.tile.tile.updater-key`.
    Losing this key prevents future in-app updates for every existing
    installation. A rotation must ship the new public key in an update signed by
    the old key.
-5. Delete the local unencrypted private-key file after secret provisioning.
+5. Delete any unencrypted scratch copy or export after secret provisioning.
+   Keep the encrypted `~/.tauri/tile.key` backup.
 
 The public key is safe to commit. Never commit or print the private key or its
 password.
