@@ -14,6 +14,7 @@ mod feedback;
 mod ratelimit;
 mod state;
 mod tray;
+mod update;
 mod window;
 
 use std::sync::mpsc;
@@ -28,6 +29,7 @@ use tile_platform::PermissionStatus;
 
 use build_kind::BuildKind;
 use state::AppState;
+use update::UpdateManager;
 
 /// How often the startup permission poll re-checks while access is denied.
 const PERMISSION_POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -46,6 +48,7 @@ pub fn run() {
     let build = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
             None,
@@ -62,6 +65,9 @@ pub fn run() {
             commands::perform_action,
             commands::get_permission_status,
             commands::get_hotkey_failures,
+            commands::get_update_status,
+            commands::check_for_updates,
+            commands::install_update,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -138,6 +144,8 @@ fn setup_app<R: Runtime>(
         config_dir,
     ));
     app.manage(state.clone());
+    let updates = Arc::new(UpdateManager::new(build_kind));
+    app.manage(updates.clone());
 
     // macOS: run as an accessory (no Dock icon), matching the tray-only design.
     #[cfg(target_os = "macos")]
@@ -169,6 +177,7 @@ fn setup_app<R: Runtime>(
 
     autostart::reconcile_on_launch(app, build_kind, launch_on_login);
     begin_permission_flow(app, state);
+    update::begin_update_checks(app.clone(), updates);
 
     Ok(())
 }

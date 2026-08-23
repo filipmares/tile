@@ -10,6 +10,7 @@ use tile_core::{Hotkey, WindowAction};
 use tile_platform::{HotkeyFailure, PermissionStatus};
 
 use crate::build_kind::BuildKind;
+use crate::update::UpdateStatus;
 
 /// Serializable form of [`BuildKind`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,6 +67,68 @@ pub struct HotkeyFailureDto {
     pub reason: String,
 }
 
+/// Serializable update state consumed by the tray-adjacent settings UI.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "status",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+pub enum UpdateStatusDto {
+    Unavailable,
+    Idle,
+    Checking,
+    Current,
+    Available {
+        version: String,
+        notes: Option<String>,
+        date: Option<String>,
+    },
+    Downloading {
+        version: String,
+        downloaded_bytes: u64,
+        total_bytes: Option<u64>,
+    },
+    ReadyToRelaunch {
+        version: String,
+    },
+    Error {
+        message: String,
+    },
+}
+
+impl From<UpdateStatus> for UpdateStatusDto {
+    fn from(status: UpdateStatus) -> Self {
+        match status {
+            UpdateStatus::Unavailable => Self::Unavailable,
+            UpdateStatus::Idle => Self::Idle,
+            UpdateStatus::Checking => Self::Checking,
+            UpdateStatus::Current => Self::Current,
+            UpdateStatus::Available {
+                version,
+                notes,
+                date,
+            } => Self::Available {
+                version,
+                notes,
+                date,
+            },
+            UpdateStatus::Downloading {
+                version,
+                downloaded_bytes,
+                total_bytes,
+            } => Self::Downloading {
+                version,
+                downloaded_bytes,
+                total_bytes,
+            },
+            #[cfg(target_os = "macos")]
+            UpdateStatus::ReadyToRelaunch { version } => Self::ReadyToRelaunch { version },
+            UpdateStatus::Error { message } => Self::Error { message },
+        }
+    }
+}
+
 impl From<&HotkeyFailure> for HotkeyFailureDto {
     fn from(failure: &HotkeyFailure) -> Self {
         Self {
@@ -100,5 +163,28 @@ mod tests {
         })
         .unwrap();
         assert_eq!(json, r#"{"kind":"installed","configDir":null}"#);
+    }
+
+    #[test]
+    fn update_status_serializes_the_ui_contract() {
+        let available = UpdateStatusDto::from(UpdateStatus::Available {
+            version: "1.2.3".into(),
+            notes: Some("What changed".into()),
+            date: None,
+        });
+        assert_eq!(
+            serde_json::to_string(&available).unwrap(),
+            r#"{"status":"available","version":"1.2.3","notes":"What changed","date":null}"#
+        );
+
+        let progress = UpdateStatusDto::from(UpdateStatus::Downloading {
+            version: "1.2.3".into(),
+            downloaded_bytes: 512,
+            total_bytes: Some(1024),
+        });
+        assert_eq!(
+            serde_json::to_string(&progress).unwrap(),
+            r#"{"status":"downloading","version":"1.2.3","downloadedBytes":512,"totalBytes":1024}"#
+        );
     }
 }

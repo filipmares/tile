@@ -480,3 +480,23 @@ export interface BuildInfo {
   kind: BuildKind;
   configDir: string | null;
 }
+
+export type UpdateStatus =
+  | { status: "unavailable" }
+  | { status: "idle" }
+  | { status: "checking" }
+  | { status: "current" }
+  | {
+      status: "available";
+      version: string;
+      notes: string | null;
+      date: string | null;
+    }
+  | {
+      status: "downloading";
+      version: string;
+      downloadedBytes: number;
+      totalBytes: number | null;
+    }
+  | { status: "ready-to-relaunch"; version: string }
+  | { status: "error"; message: string };

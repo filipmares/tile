@@ -67,6 +67,8 @@ jobs:
           HAS_AZURE_ENDPOINT: ${{ secrets.AZURE_ARTIFACT_SIGNING_ENDPOINT != '' }}
           HAS_AZURE_ACCOUNT: ${{ secrets.AZURE_ARTIFACT_SIGNING_ACCOUNT != '' }}
           HAS_AZURE_PROFILE: ${{ secrets.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE != '' }}
+          HAS_TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+          HAS_TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD != '' }}
         run: |
           set -euo pipefail
           tag="${{ inputs.tag || github.ref_name }}"
@@ -119,33 +121,36 @@ jobs:
           done
           echo "windows_signed=$windows_signed" >> "$GITHUB_OUTPUT"
 
+          if [ "$macos_signed" != "true" ]; then
+            echo "::error::Updater-enabled releases require Apple Developer ID signing and notarization so updates preserve the Accessibility grant."
+            exit 1
+          fi
+          if [ "$HAS_TAURI_SIGNING_PRIVATE_KEY" != "true" ] || \
+             [ "$HAS_TAURI_SIGNING_PRIVATE_KEY_PASSWORD" != "true" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD are both required for updater-enabled releases."
+            exit 1
+          fi
+
       - name: Compose release notes
         shell: bash
         env:
           TAG: ${{ steps.meta.outputs.tag }}
-          MACOS_SIGNED: ${{ steps.meta.outputs.macos_signed }}
           WINDOWS_SIGNED: ${{ steps.meta.outputs.windows_signed }}
         run: |
           set -euo pipefail
           {
             echo "## Install"
             echo
+            echo "> [!IMPORTANT]"
+            echo "> Tile v0.2.0 and earlier cannot update themselves. Install this release"
+            echo "> manually once; future updates will be available from Tile's tray and Settings."
+            echo
             echo "**macOS** — download \`Tile_*_universal.dmg\`, open it and drag **Tile** into"
             echo "Applications. The build is universal: one download for both Apple Silicon and"
             echo "Intel Macs. Tile lives in the menu bar, not the Dock."
             echo
-            if [ "$MACOS_SIGNED" = "true" ]; then
-              echo "The macOS build is signed with a Developer ID certificate and notarized by"
-              echo "Apple, so it opens without any Gatekeeper workaround."
-            else
-              echo "> [!WARNING]"
-              echo "> This macOS build is **not signed or notarized**, so Gatekeeper will refuse"
-              echo "> to open it. After dragging Tile into Applications, run:"
-              echo ">"
-              echo "> \`\`\`sh"
-              echo "> xattr -dr com.apple.quarantine /Applications/Tile.app"
-              echo "> \`\`\`"
-            fi
+            echo "The macOS build is signed with a Developer ID certificate and notarized by"
+            echo "Apple, so it opens without any Gatekeeper workaround."
             echo
             echo "On first launch macOS asks for the **Accessibility** permission — Tile needs it"
             echo "to move and resize other applications' windows."
@@ -163,6 +168,9 @@ jobs:
               echo "> This Windows build is **not signed**, so SmartScreen will warn that the"
               echo "> publisher is unknown. Choose **More info ▸ Run anyway** to continue."
             fi
+            echo
+            echo "Files ending in \`.app.tar.gz\` or \`.sig\`, plus \`latest.json\`, are"
+            echo "used by Tile's updater and are not manual installers."
             echo
             echo "---"
             echo
@@ -190,6 +198,10 @@ jobs:
             # a release users are already downloading. Refresh the notes only,
             # and leave a published release published.
             is_draft="$(gh release view "$TAG" --json isDraft --jq .isDraft)"
+            if [ "$is_draft" != "true" ]; then
+              echo "::error::Published releases are immutable. Cut a new version and tag instead of replacing live assets."
+              exit 1
+            fi
             echo "Release $TAG already exists (draft: $is_draft); refreshing notes only."
             gh release edit "$TAG" --title "Tile $TAG" --notes-file release-notes.md
           else
@@ -264,12 +276,31 @@ jobs:
         working-directory: apps/tile/ui
         run: npm ci
 
-      # Signing credentials are only exported when they are actually
-      # configured. Passing them through as empty strings is not harmless: the
-      # Tauri bundler treats a *defined* APPLE_CERTIFICATE as "signing is on"
-      # and then fails with "failed to import keychain certificate". Writing
-      # them to $GITHUB_ENV conditionally leaves them undefined when a secret is
-      # missing, so an unsigned build still succeeds.
+      - name: Configure updater signing
+        shell: bash
+        env:
+          IN_TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          IN_TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "$IN_TAURI_SIGNING_PRIVATE_KEY" ] || [ -z "$IN_TAURI_SIGNING_PRIVATE_KEY_PASSWORD" ]; then
+            echo "::error::Updater signing secrets are required."
+            exit 1
+          fi
+          echo "::add-mask::$IN_TAURI_SIGNING_PRIVATE_KEY"
+          echo "::add-mask::$IN_TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+          {
+            echo 'TAURI_SIGNING_PRIVATE_KEY<<TAURI_SIGNING_PRIVATE_KEY_EOF'
+            echo "$IN_TAURI_SIGNING_PRIVATE_KEY"
+            echo 'TAURI_SIGNING_PRIVATE_KEY_EOF'
+          } >> "$GITHUB_ENV"
+          echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$IN_TAURI_SIGNING_PRIVATE_KEY_PASSWORD" >> "$GITHUB_ENV"
+
+      # macOS signing is a release prerequisite because changing the code
+      # signature invalidates Tile's Accessibility grant. Passing credentials
+      # through as empty strings is still not harmless: the Tauri bundler treats
+      # a defined APPLE_CERTIFICATE as "signing is on" and then fails while
+      # importing it, so values are exported only when present.
       #
       # The notarization trio is all-or-nothing: with APPLE_ID and
       # APPLE_PASSWORD set but no APPLE_TEAM_ID, the Tauri v2 bundler hard-errors
@@ -285,8 +316,6 @@ jobs:
           IN_APPLE_ID: ${{ secrets.APPLE_ID }}
           IN_APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           IN_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          IN_TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          IN_TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           export_if_set() {
@@ -300,8 +329,6 @@ jobs:
           export_if_set APPLE_CERTIFICATE "${IN_APPLE_CERTIFICATE:-}"
           export_if_set APPLE_CERTIFICATE_PASSWORD "${IN_APPLE_CERTIFICATE_PASSWORD:-}"
           export_if_set APPLE_SIGNING_IDENTITY "${IN_APPLE_SIGNING_IDENTITY:-}"
-          export_if_set TAURI_SIGNING_PRIVATE_KEY "${IN_TAURI_SIGNING_PRIVATE_KEY:-}"
-          export_if_set TAURI_SIGNING_PRIVATE_KEY_PASSWORD "${IN_TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
 
           if [ -n "${IN_APPLE_CERTIFICATE:-}" ] && [ -z "${IN_APPLE_CERTIFICATE_PASSWORD:-}" ]; then
             echo "::error::APPLE_CERTIFICATE is set but APPLE_CERTIFICATE_PASSWORD is not; the .p12 cannot be imported."
@@ -371,6 +398,48 @@ jobs:
         with:
           projectPath: apps/tile
           args: ${{ matrix.args }} ${{ steps.windows-signing.outputs.config-arg }}
+
+      - name: Verify updater artifacts
+        shell: bash
+        env:
+          ARTIFACTS: ${{ steps.build.outputs.artifactPaths }}
+        run: |
+          set -euo pipefail
+          updater=""
+          signature=""
+          if [ "${{ matrix.os }}" = "macos-latest" ]; then
+            updater="$(echo "$ARTIFACTS" | jq -r '.[] | select(endswith(".app.tar.gz"))' | head -n1)"
+            signature="$(echo "$ARTIFACTS" | jq -r '.[] | select(endswith(".app.tar.gz.sig"))' | head -n1)"
+          else
+            updater="$(echo "$ARTIFACTS" | jq -r '.[] | select(endswith("-setup.exe"))' | head -n1)"
+            signature="$(echo "$ARTIFACTS" | jq -r '.[] | select(endswith("-setup.exe.sig"))' | head -n1)"
+          fi
+          updater="${updater%$'\r'}"
+          signature="${signature%$'\r'}"
+          if [ -z "$updater" ] || [ ! -f "$updater" ]; then
+            echo "::error::Updater artifact missing from artifactPaths: $ARTIFACTS"
+            exit 1
+          fi
+          if [ -z "$signature" ] || [ ! -s "$signature" ]; then
+            echo "::error::Updater signature missing or empty in artifactPaths: $ARTIFACTS"
+            exit 1
+          fi
+          echo "Verified updater artifact: $updater"
+          echo "Verified updater signature: $signature"
+
+          if [ "${{ matrix.os }}" = "macos-latest" ]; then
+            extract_dir="$(mktemp -d)"
+            tar -xzf "$updater" -C "$extract_dir"
+            payload="$(find "$extract_dir" -name 'Tile.app' -type d | head -n1)"
+            if [ -z "$payload" ]; then
+              echo "::error::Tile.app was not found inside $updater"
+              exit 1
+            fi
+            codesign --verify --deep --strict --verbose=2 "$payload"
+            codesign -dvvv "$payload" 2>&1 | grep -q 'flags=.*runtime' \
+              || { echo "::error::Hardened runtime is not enabled on updater payload $payload"; exit 1; }
+            xcrun stapler validate "$payload"
+          fi
 
       # The Tauri bundler notarizes and staples the .app, then packages it into
       # a signed .dmg — but the .dmg itself is never submitted to Apple. An
@@ -618,8 +687,106 @@ jobs:
             echo "::error::tauri-action produced no artifacts"
             exit 1
           fi
+          is_draft="$(gh release view "$TAG" --repo "${{ github.repository }}" --json isDraft --jq .isDraft)"
+          if [ "$is_draft" != "true" ]; then
+            echo "::error::Refusing to replace assets on published release $TAG."
+            exit 1
+          fi
           printf 'Uploading: %s\n' "${paths[@]}"
-          gh release upload "$TAG" "${paths[@]}" --clobber
+          gh release upload "$TAG" "${paths[@]}" --repo "${{ github.repository }}" --clobber
+
+  finalize-manifest:
+    name: Finalize updater manifest
+    needs: [create-release, build]
+    if: success()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.create-release.outputs.tag }}
+
+      - name: Install minisign verifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends minisign
+
+      - name: Assemble, validate and upload latest.json
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.create-release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Updater version '$version' derived from $TAG is not valid SemVer."
+            exit 1
+          fi
+
+          mkdir updater-assets
+          gh release download "$TAG" --repo "${{ github.repository }}" --dir updater-assets
+
+          mac_bundle="$(find updater-assets -maxdepth 1 -type f -name '*.app.tar.gz' | head -n1)"
+          mac_sig="$(find updater-assets -maxdepth 1 -type f -name '*.app.tar.gz.sig' | head -n1)"
+          win_bundle="$(find updater-assets -maxdepth 1 -type f -name '*-setup.exe' | head -n1)"
+          win_sig="$(find updater-assets -maxdepth 1 -type f -name '*-setup.exe.sig' | head -n1)"
+          for file in "$mac_bundle" "$mac_sig" "$win_bundle" "$win_sig"; do
+            if [ -z "$file" ] || [ ! -s "$file" ]; then
+              echo "::error::A required updater asset or signature is missing from the draft release."
+              find updater-assets -maxdepth 1 -type f -print
+              exit 1
+            fi
+          done
+
+          jq -r '.plugins.updater.pubkey' apps/tile/tauri.conf.json \
+            | base64 --decode > updater-public-key.txt
+          public_key="$(tail -n1 updater-public-key.txt)"
+          base64 --decode < "$mac_sig" > macos-updater.minisig
+          base64 --decode < "$win_sig" > windows-updater.minisig
+          minisign -V -P "$public_key" -x macos-updater.minisig -m "$mac_bundle"
+          minisign -V -P "$public_key" -x windows-updater.minisig -m "$win_bundle"
+
+          pub_date="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          notes="Tile $version is available. Full changelog: https://github.com/${{ github.repository }}/commits/$TAG"
+          release_url="https://github.com/${{ github.repository }}/releases/download/$TAG"
+          jq -n \
+            --arg version "$version" \
+            --arg notes "$notes" \
+            --arg pub_date "$pub_date" \
+            --arg mac_url "$release_url/$(basename "$mac_bundle")" \
+            --arg mac_sig "$(cat "$mac_sig")" \
+            --arg win_url "$release_url/$(basename "$win_bundle")" \
+            --arg win_sig "$(cat "$win_sig")" \
+            '{
+              version: $version,
+              notes: $notes,
+              pub_date: $pub_date,
+              platforms: {
+                "darwin-aarch64": { url: $mac_url, signature: $mac_sig },
+                "darwin-x86_64": { url: $mac_url, signature: $mac_sig },
+                "windows-x86_64": { url: $win_url, signature: $win_sig }
+              }
+            }' > latest.json
+
+          test "$(jq -r .version latest.json)" = "$version"
+          date -u -d "$(jq -r .pub_date latest.json)" >/dev/null
+          for target in darwin-aarch64 darwin-x86_64 windows-x86_64; do
+            jq -e --arg target "$target" \
+              '.platforms[$target].url | type == "string" and length > 0' latest.json >/dev/null
+            jq -e --arg target "$target" \
+              '.platforms[$target].signature | type == "string" and length > 0' latest.json >/dev/null
+          done
+
+          cat latest.json
+          is_draft="$(gh release view "$TAG" --repo "${{ github.repository }}" --json isDraft --jq .isDraft)"
+          if [ "$is_draft" != "true" ]; then
+            echo "::error::Refusing to replace latest.json on published release $TAG."
+            exit 1
+          fi
+          gh release upload "$TAG" latest.json --repo "${{ github.repository }}" --clobber
 
   # ---------------------------------------------------------------------------
   # Publishing is a separate job so it can depend on *every* platform build.
@@ -631,7 +798,7 @@ jobs:
   # ---------------------------------------------------------------------------
   publish:
     name: Publish release
-    needs: [create-release, build]
+    needs: [create-release, build, finalize-manifest]
     if: success()
     runs-on: ubuntu-latest
     timeout-minutes: 10
