@@ -472,6 +472,10 @@ function describeAboutUpdateStatus(status: UpdateStatus): string {
     if (updatePollTimer !== null) {
       window.clearTimeout(updatePollTimer);
     }
+    if (status.status === "unavailable") {
+      updatePollTimer = null;
+      return;
+    }
     const delay =
       status.status === "checking" || status.status === "downloading"
         ? 1000
