@@ -522,6 +522,98 @@ fn ax_element_pid(element: ffi::AXUIElementRef) -> Option<ffi::Pid> {
     (err == ffi::kAXErrorSuccess).then_some(pid)
 }
 
+trait EnhancedUiAccess {
+    fn current(&self) -> Option<bool>;
+    /// Returns whether the attribute was changed.
+    fn set(&self, value: bool) -> Result<bool>;
+}
+
+struct AxEnhancedUiAccess {
+    app: CfOwned,
+}
+
+impl EnhancedUiAccess for AxEnhancedUiAccess {
+    fn current(&self) -> Option<bool> {
+        copy_bool(self.app.0, "AXEnhancedUserInterface")
+    }
+
+    fn set(&self, value: bool) -> Result<bool> {
+        let err = set_bool(self.app.0, "AXEnhancedUserInterface", value);
+        match err {
+            ffi::kAXErrorSuccess => Ok(true),
+            ffi::kAXErrorAPIDisabled => Err(map_ax_error("set AXEnhancedUserInterface", err)),
+            other => {
+                log::debug!(
+                    "macOS AXEnhancedUserInterface write returned {other}; continuing without it"
+                );
+                Ok(false)
+            }
+        }
+    }
+}
+
+/// Temporarily suppresses the native frame animations some applications enable
+/// through `AXEnhancedUserInterface`.
+struct EnhancedUiGuard<A: EnhancedUiAccess> {
+    access: A,
+    restore_enabled: bool,
+}
+
+impl<A: EnhancedUiAccess> EnhancedUiGuard<A> {
+    fn new(access: A) -> Result<Self> {
+        let mut guard = Self {
+            access,
+            restore_enabled: false,
+        };
+        guard.ensure_disabled()?;
+        Ok(guard)
+    }
+
+    /// Re-suppresses Enhanced UI if another accessibility client enabled it
+    /// while Tile was animating the window.
+    fn ensure_disabled(&mut self) -> Result<()> {
+        if self.access.current() == Some(true) && self.access.set(false)? {
+            // Restore every true value Tile actually changed, including one an
+            // external client re-enabled during a running animation.
+            self.restore_enabled = true;
+        }
+        Ok(())
+    }
+}
+
+impl EnhancedUiGuard<AxEnhancedUiAccess> {
+    fn for_window(window: ffi::AXUIElementRef) -> Result<Option<Self>> {
+        let Some(pid) = ax_element_pid(window) else {
+            log::debug!("macOS AX could not resolve the window owner for Enhanced UI suppression");
+            return Ok(None);
+        };
+        // SAFETY: `pid` owns `window`; the returned application element follows
+        // the create rule and is released by `CfOwned`.
+        let app = CfOwned(unsafe { ffi::AXUIElementCreateApplication(pid) });
+        if app.0.is_null() {
+            log::debug!("macOS AX could not create the application element for pid {pid}");
+            return Ok(None);
+        }
+        Self::new(AxEnhancedUiAccess { app }).map(Some)
+    }
+}
+
+impl<A: EnhancedUiAccess> Drop for EnhancedUiGuard<A> {
+    fn drop(&mut self) {
+        if self.restore_enabled {
+            match self.access.set(true) {
+                Ok(true) => {}
+                Ok(false) => {
+                    log::warn!("failed to restore macOS AXEnhancedUserInterface");
+                }
+                Err(err) => {
+                    log::warn!("failed to restore macOS AXEnhancedUserInterface: {err}");
+                }
+            }
+        }
+    }
+}
+
 /// Builds a [`FrontWindow`] snapshot from a movable AX window element, reading
 /// its position and size. Returns `None` if either attribute is unavailable.
 fn snapshot_window(element: CfOwned) -> Option<FrontWindow> {
@@ -743,9 +835,8 @@ const ANIMATION_MESSAGING_TIMEOUT: f32 = 0.2;
 /// genuinely wedged app cannot hold the worker thread for that long.
 const SETUP_MESSAGING_TIMEOUT: f32 = 2.0;
 
-/// Chrome can acknowledge an AX write before its native window frame settles.
-/// Repeating the complete dance gives the window server a bounded opportunity
-/// to apply both dimensions without masking a persistent failure.
+/// Chrome and other applications can transiently accept or partially apply an
+/// AX frame update, so final frames receive a few quick verified attempts.
 const FRAME_SETTLE_ATTEMPTS: usize = 3;
 const FRAME_SETTLE_DELAY: Duration = Duration::from_millis(20);
 
@@ -874,6 +965,7 @@ impl WindowBackend for MacWindowBackend {
             ));
         }
         let element = front.element.0;
+        let _enhanced_ui = EnhancedUiGuard::for_window(element)?;
 
         leave_fullscreen_and_minimized(element)?;
 
@@ -905,6 +997,7 @@ impl WindowBackend for MacWindowBackend {
                 "the focused window changed before the move could be applied",
             ));
         }
+        let enhanced_ui = EnhancedUiGuard::for_window(front.element.0)?;
 
         // Bound the setup calls before making any of them. Leaving full screen
         // or un-minimizing is a synchronous round trip into the target app, so
@@ -940,6 +1033,7 @@ impl WindowBackend for MacWindowBackend {
 
         Ok(Some(Box::new(MacAnimationSession {
             element: front.element,
+            enhanced_ui,
         })))
     }
 
@@ -986,6 +1080,7 @@ impl WindowBackend for MacWindowBackend {
 /// the element lookup plus three that a full `set_window_frame` would.
 struct MacAnimationSession {
     element: CfOwned,
+    enhanced_ui: Option<EnhancedUiGuard<AxEnhancedUiAccess>>,
 }
 
 impl AnimationSession for MacAnimationSession {
@@ -1062,6 +1157,9 @@ impl AnimationSession for MacAnimationSession {
         // frame as the result. Done after the timeout reset above, since
         // leaving full screen is slow.
         leave_fullscreen_and_minimized(element)?;
+        if let Some(guard) = &mut self.enhanced_ui {
+            guard.ensure_disabled()?;
+        }
 
         // The full size/position/size dance, exactly as `set_window_frame`
         // does it: macOS clamps a window's size to whatever display it
@@ -1073,7 +1171,9 @@ impl AnimationSession for MacAnimationSession {
         // Unlike `set_window_frame` this never consults the focused window: the
         // session already holds the element it has been driving, so a click on
         // another window mid-animation cannot make the final frame fail.
-        apply_frame_and_readback(element, target, "finish")
+        let actual = apply_frame_and_readback(element, target, "finish");
+        drop(self.enhanced_ui.take());
+        actual
     }
 
     fn current_frame(&self) -> Result<Rect> {
@@ -1104,6 +1204,90 @@ impl Drop for MacAnimationSession {
         unsafe {
             ffi::AXUIElementSetMessagingTimeout(self.element.0, 0.0);
         }
+        drop(self.enhanced_ui.take());
+    }
+}
+
+#[cfg(test)]
+mod enhanced_ui_tests {
+    use super::{EnhancedUiAccess, EnhancedUiGuard, PlatformError, Result};
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    #[derive(Clone)]
+    struct FakeAccess {
+        state: Rc<Cell<Option<bool>>>,
+        writes: Rc<RefCell<Vec<bool>>>,
+    }
+
+    impl FakeAccess {
+        fn new(state: Option<bool>) -> Self {
+            Self {
+                state: Rc::new(Cell::new(state)),
+                writes: Rc::new(RefCell::new(Vec::new())),
+            }
+        }
+    }
+
+    impl EnhancedUiAccess for FakeAccess {
+        fn current(&self) -> Option<bool> {
+            self.state.get()
+        }
+
+        fn set(&self, value: bool) -> Result<bool> {
+            self.state.set(Some(value));
+            self.writes.borrow_mut().push(value);
+            Ok(true)
+        }
+    }
+
+    #[test]
+    fn unavailable_and_disabled_enhanced_ui_are_initially_untouched() {
+        for initial in [None, Some(false)] {
+            let access = FakeAccess::new(initial);
+            let writes = access.writes.clone();
+            drop(EnhancedUiGuard::new(access).unwrap());
+            assert!(writes.borrow().is_empty());
+        }
+    }
+
+    #[test]
+    fn enabled_enhanced_ui_is_suppressed_and_restored() {
+        let access = FakeAccess::new(Some(true));
+        let state = access.state.clone();
+        let writes = access.writes.clone();
+        let guard = EnhancedUiGuard::new(access).unwrap();
+        assert_eq!(state.get(), Some(false));
+        drop(guard);
+        assert_eq!(state.get(), Some(true));
+        assert_eq!(*writes.borrow(), [false, true]);
+    }
+
+    #[test]
+    fn enhanced_ui_is_suppressed_again_before_the_final_frame() {
+        let access = FakeAccess::new(Some(false));
+        let state = access.state.clone();
+        let writes = access.writes.clone();
+        let mut guard = EnhancedUiGuard::new(access).unwrap();
+        state.set(Some(true));
+        guard.ensure_disabled().unwrap();
+        drop(guard);
+        assert_eq!(state.get(), Some(true));
+        assert_eq!(*writes.borrow(), [false, true]);
+    }
+
+    #[test]
+    fn early_operation_error_still_restores_enhanced_ui_on_scope_exit() {
+        let access = FakeAccess::new(Some(true));
+        let state = access.state.clone();
+        let writes = access.writes.clone();
+        let operation: Result<()> = {
+            let _guard = EnhancedUiGuard::new(access).unwrap();
+            Err(PlatformError::os("test operation", "injected failure"))
+        };
+        assert!(operation.is_err());
+        assert_eq!(state.get(), Some(true));
+        assert_eq!(*writes.borrow(), [false, true]);
     }
 }
 
