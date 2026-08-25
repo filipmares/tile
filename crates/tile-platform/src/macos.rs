@@ -524,7 +524,8 @@ fn ax_element_pid(element: ffi::AXUIElementRef) -> Option<ffi::Pid> {
 
 trait EnhancedUiAccess {
     fn current(&self) -> Option<bool>;
-    fn set(&self, value: bool) -> Result<()>;
+    /// Returns whether the attribute was changed.
+    fn set(&self, value: bool) -> Result<bool>;
 }
 
 struct AxEnhancedUiAccess {
@@ -536,12 +537,17 @@ impl EnhancedUiAccess for AxEnhancedUiAccess {
         copy_bool(self.app.0, "AXEnhancedUserInterface")
     }
 
-    fn set(&self, value: bool) -> Result<()> {
+    fn set(&self, value: bool) -> Result<bool> {
         let err = set_bool(self.app.0, "AXEnhancedUserInterface", value);
-        if err == ffi::kAXErrorSuccess {
-            Ok(())
-        } else {
-            Err(map_ax_error("set AXEnhancedUserInterface", err))
+        match err {
+            ffi::kAXErrorSuccess => Ok(true),
+            ffi::kAXErrorAPIDisabled => Err(map_ax_error("set AXEnhancedUserInterface", err)),
+            other => {
+                log::debug!(
+                    "macOS AXEnhancedUserInterface write returned {other}; continuing without it"
+                );
+                Ok(false)
+            }
         }
     }
 }
@@ -566,8 +572,7 @@ impl<A: EnhancedUiAccess> EnhancedUiGuard<A> {
     /// Re-suppresses Enhanced UI if another accessibility client enabled it
     /// while Tile was animating the window.
     fn ensure_disabled(&mut self) -> Result<()> {
-        if self.access.current() == Some(true) {
-            self.access.set(false)?;
+        if self.access.current() == Some(true) && self.access.set(false)? {
             // Restore every true value Tile actually changed, including one an
             // external client re-enabled during a running animation.
             self.restore_enabled = true;
@@ -1223,10 +1228,10 @@ mod enhanced_ui_tests {
             self.state.get()
         }
 
-        fn set(&self, value: bool) -> Result<()> {
+        fn set(&self, value: bool) -> Result<bool> {
             self.state.set(Some(value));
             self.writes.borrow_mut().push(value);
-            Ok(())
+            Ok(true)
         }
     }
 
