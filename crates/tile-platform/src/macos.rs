@@ -601,8 +601,14 @@ impl EnhancedUiGuard<AxEnhancedUiAccess> {
 impl<A: EnhancedUiAccess> Drop for EnhancedUiGuard<A> {
     fn drop(&mut self) {
         if self.restore_enabled {
-            if let Err(err) = self.access.set(true) {
-                log::warn!("failed to restore macOS AXEnhancedUserInterface: {err}");
+            match self.access.set(true) {
+                Ok(true) => {}
+                Ok(false) => {
+                    log::warn!("failed to restore macOS AXEnhancedUserInterface");
+                }
+                Err(err) => {
+                    log::warn!("failed to restore macOS AXEnhancedUserInterface: {err}");
+                }
             }
         }
     }
