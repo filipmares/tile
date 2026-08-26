@@ -263,24 +263,33 @@ pub fn pump(
             // have been driving all along, so a focus change mid-animation
             // cannot make this fail and strand the window.
             let target = animator.target();
-            let actual = match session.as_mut() {
-                Some(open) => open.finish(target)?,
-                None => backend.set_window_frame(id, target)?,
+            let result = match session.as_mut() {
+                Some(open) => open.finish(target),
+                None => backend.set_window_frame(id, target),
+            };
+            let actual = match result {
+                Ok(actual) => actual,
+                Err(err) => {
+                    pacer.finish_stats("error");
+                    return Err(err);
+                }
             };
             pacer.finish_stats("settled");
             return Ok(Interruption::Settled(actual));
         }
 
-        match session.as_mut() {
-            Some(open) => open.set_intermediate_frame(frame)?,
+        let result = match session.as_mut() {
+            Some(open) => open.set_intermediate_frame(frame),
             // No fast path on this backend: fall back to the ordinary move and
             // throw away the read-back, which is meaningless mid-flight. The
             // session is opened once when the flight starts, so there is
             // deliberately no lazy open here — retrying it every frame would
             // repeat the backend's setup for any backend that declines.
-            None => {
-                backend.set_window_frame(id, frame)?;
-            }
+            None => backend.set_window_frame(id, frame).map(|_| ()),
+        };
+        if let Err(err) = result {
+            pacer.finish_stats("error");
+            return Err(err);
         }
         drawn = true;
         pacer.record_frame_work(frame_started.elapsed());
@@ -312,6 +321,44 @@ pub(crate) fn interval_with_cap(params: AnimationParams, cap: Option<u32>) -> Du
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tile_platform::{PermissionStatus, PlatformError};
+
+    struct ErrorBackend;
+
+    impl WindowBackend for ErrorBackend {
+        fn focused_window(&self) -> tile_platform::Result<Option<tile_core::WindowSnapshot>> {
+            unreachable!("pump does not query the focused window")
+        }
+
+        fn screens(&self) -> tile_platform::Result<Vec<tile_core::Screen>> {
+            unreachable!("pump does not enumerate screens")
+        }
+
+        fn set_window_frame(&self, _id: WindowId, _target: Rect) -> tile_platform::Result<Rect> {
+            Err(PlatformError::os("test frame", "injected failure"))
+        }
+
+        fn permission_status(&self, _prompt: bool) -> tile_platform::Result<PermissionStatus> {
+            Ok(PermissionStatus::NotRequired)
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingPacer {
+        outcomes: Vec<&'static str>,
+    }
+
+    impl Pacer for RecordingPacer {
+        fn reset(&mut self) {}
+
+        fn wait(&mut self, interval: Duration) -> Duration {
+            interval
+        }
+
+        fn finish_stats(&mut self, outcome: &'static str) {
+            self.outcomes.push(outcome);
+        }
+    }
 
     #[test]
     fn sleep_pacer_aggregates_stats_across_same_window_retargets() {
@@ -339,6 +386,57 @@ mod tests {
         let stats = pacer.stats.as_ref().unwrap();
         assert_eq!(stats.id, 8);
         assert_eq!(stats.frames, 0);
+    }
+
+    #[test]
+    fn intermediate_frame_errors_finish_pump_stats() {
+        let params = AnimationParams {
+            duration_ms: 250,
+            fps: 60,
+        };
+        let mut animator = Animator::new(
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            Rect::new(100.0, 0.0, 100.0, 100.0),
+            params,
+        );
+        let mut pacer = RecordingPacer::default();
+
+        let result = pump(
+            &ErrorBackend,
+            1,
+            &mut None,
+            &mut animator,
+            params,
+            &mut pacer,
+            &mut || None,
+        );
+
+        assert!(result.is_err());
+        assert_eq!(pacer.outcomes, ["error"]);
+    }
+
+    #[test]
+    fn final_frame_errors_finish_pump_stats() {
+        let params = AnimationParams {
+            duration_ms: 250,
+            fps: 60,
+        };
+        let rect = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let mut animator = Animator::new(rect, rect, params);
+        let mut pacer = RecordingPacer::default();
+
+        let result = pump(
+            &ErrorBackend,
+            1,
+            &mut None,
+            &mut animator,
+            params,
+            &mut pacer,
+            &mut || None,
+        );
+
+        assert!(result.is_err());
+        assert_eq!(pacer.outcomes, ["error"]);
     }
 
     #[test]
