@@ -86,17 +86,66 @@ pub trait Pacer {
     /// wall-clock time the frame consumed in total. That becomes the next
     /// `dt` handed to the animator.
     fn wait(&mut self, interval: Duration) -> Duration;
+
+    /// Starts or resumes diagnostics for one retained window flight.
+    fn begin_stats(&mut self, _id: WindowId, _interval: Duration) {}
+
+    /// Records the work performed before frame pacing sleeps.
+    fn record_frame_work(&mut self, _elapsed: Duration) {}
+
+    /// Emits and clears the aggregate diagnostic for a completed flight.
+    fn finish_stats(&mut self, _outcome: &'static str) {}
 }
 
 /// The real pacer: sleeps out whatever is left of the frame's budget.
 pub struct SleepPacer {
     previous: Instant,
+    stats: Option<PumpStats>,
+}
+
+struct PumpStats {
+    id: WindowId,
+    started: Instant,
+    interval: Duration,
+    frames: u32,
+    overruns: u32,
+}
+
+impl PumpStats {
+    fn new(id: WindowId, interval: Duration) -> Self {
+        Self {
+            id,
+            started: Instant::now(),
+            interval,
+            frames: 0,
+            overruns: 0,
+        }
+    }
+
+    fn record_frame(&mut self, elapsed: Duration) {
+        self.frames += 1;
+        if elapsed > self.interval {
+            self.overruns += 1;
+        }
+    }
+
+    fn log(&self, outcome: &'static str) {
+        log::debug!(
+            "animation pump summary: outcome={} duration_ms={} interval_us={} frames={} overruns={}",
+            outcome,
+            self.started.elapsed().as_millis(),
+            self.interval.as_micros(),
+            self.frames,
+            self.overruns
+        );
+    }
 }
 
 impl SleepPacer {
     pub fn new() -> Self {
         Self {
             previous: Instant::now(),
+            stats: None,
         }
     }
 }
@@ -118,6 +167,35 @@ impl Pacer for SleepPacer {
         let elapsed = now.duration_since(self.previous);
         self.previous = now;
         elapsed
+    }
+
+    fn begin_stats(&mut self, id: WindowId, interval: Duration) {
+        if self.stats.as_ref().is_some_and(|stats| stats.id != id) {
+            if let Some(stats) = self.stats.take() {
+                stats.log("superseded");
+            }
+        }
+        if self.stats.is_none() {
+            self.stats = Some(PumpStats::new(id, interval));
+        }
+    }
+
+    fn record_frame_work(&mut self, elapsed: Duration) {
+        if let Some(stats) = &mut self.stats {
+            stats.record_frame(elapsed);
+        }
+    }
+
+    fn finish_stats(&mut self, outcome: &'static str) {
+        if let Some(stats) = self.stats.take() {
+            stats.log(outcome);
+        }
+    }
+}
+
+impl Drop for SleepPacer {
+    fn drop(&mut self) {
+        self.finish_stats("aborted");
     }
 }
 
@@ -149,6 +227,7 @@ pub fn pump(
     // Start the clock now, not when the pacer was created: planning and
     // backend setup happened in between and must not be billed to a frame.
     pacer.reset();
+    pacer.begin_stats(id, interval);
 
     // The first frame has no measured history, so assume the nominal interval.
     // Subsequent frames feed the animator the time that actually elapsed,
@@ -162,6 +241,7 @@ pub fn pump(
     let mut drawn = false;
 
     loop {
+        let frame_started = Instant::now();
         // Check for a newly pressed hotkey *before* spending a frame on the
         // old target, so a retarget takes effect at the next frame rather than
         // one frame late.
@@ -187,6 +267,7 @@ pub fn pump(
                 Some(open) => open.finish(target)?,
                 None => backend.set_window_frame(id, target)?,
             };
+            pacer.finish_stats("settled");
             return Ok(Interruption::Settled(actual));
         }
 
@@ -202,6 +283,7 @@ pub fn pump(
             }
         }
         drawn = true;
+        pacer.record_frame_work(frame_started.elapsed());
 
         // Hand pacing to the injected pacer, which reports how long the frame
         // really took so the animator advances by that much rather than by the
@@ -230,6 +312,34 @@ pub(crate) fn interval_with_cap(params: AnimationParams, cap: Option<u32>) -> Du
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sleep_pacer_aggregates_stats_across_same_window_retargets() {
+        let mut pacer = SleepPacer::new();
+        pacer.begin_stats(7, Duration::from_millis(20));
+        pacer.record_frame_work(Duration::from_millis(10));
+        pacer.begin_stats(7, Duration::from_millis(20));
+        pacer.record_frame_work(Duration::from_millis(21));
+
+        let stats = pacer.stats.as_ref().unwrap();
+        assert_eq!(stats.frames, 2);
+        assert_eq!(stats.overruns, 1);
+        pacer.finish_stats("settled");
+        assert!(pacer.stats.is_none());
+    }
+
+    #[test]
+    fn sleep_pacer_starts_fresh_stats_for_a_different_window() {
+        let mut pacer = SleepPacer::new();
+        pacer.begin_stats(7, Duration::from_millis(20));
+        pacer.record_frame_work(Duration::from_millis(21));
+
+        pacer.begin_stats(8, Duration::from_millis(20));
+
+        let stats = pacer.stats.as_ref().unwrap();
+        assert_eq!(stats.id, 8);
+        assert_eq!(stats.frames, 0);
+    }
 
     #[test]
     fn every_platform_cap_bounds_the_frame_rate() {
