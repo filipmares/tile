@@ -44,7 +44,7 @@ use std::os::raw::c_void;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use core_foundation::base::TCFType;
 use core_foundation::boolean::CFBoolean;
@@ -526,6 +526,7 @@ trait EnhancedUiAccess {
     fn current(&self) -> Option<bool>;
     /// Returns whether the attribute was changed.
     fn set(&self, value: bool) -> Result<bool>;
+    fn set_messaging_timeout(&self, timeout: f32) -> Result<()>;
 }
 
 struct AxEnhancedUiAccess {
@@ -548,6 +549,20 @@ impl EnhancedUiAccess for AxEnhancedUiAccess {
                 );
                 Ok(false)
             }
+        }
+    }
+
+    fn set_messaging_timeout(&self, timeout: f32) -> Result<()> {
+        // SAFETY: `self.app` owns a live AX application element and the timeout
+        // is a finite number of seconds, or zero to restore the system default.
+        let err = unsafe { ffi::AXUIElementSetMessagingTimeout(self.app.0, timeout) };
+        if err == ffi::kAXErrorSuccess {
+            Ok(())
+        } else {
+            Err(map_ax_error(
+                "set AXEnhancedUserInterface messaging timeout",
+                err,
+            ))
         }
     }
 }
@@ -579,6 +594,10 @@ impl<A: EnhancedUiAccess> EnhancedUiGuard<A> {
         }
         Ok(())
     }
+
+    fn set_messaging_timeout(&self, timeout: f32) -> Result<()> {
+        self.access.set_messaging_timeout(timeout)
+    }
 }
 
 impl EnhancedUiGuard<AxEnhancedUiAccess> {
@@ -594,7 +613,9 @@ impl EnhancedUiGuard<AxEnhancedUiAccess> {
             log::debug!("macOS AX could not create the application element for pid {pid}");
             return Ok(None);
         }
-        Self::new(AxEnhancedUiAccess { app }).map(Some)
+        let access = AxEnhancedUiAccess { app };
+        access.set_messaging_timeout(SETUP_MESSAGING_TIMEOUT)?;
+        Self::new(access).map(Some)
     }
 }
 
@@ -610,6 +631,9 @@ impl<A: EnhancedUiAccess> Drop for EnhancedUiGuard<A> {
                     log::warn!("failed to restore macOS AXEnhancedUserInterface: {err}");
                 }
             }
+        }
+        if let Err(err) = self.access.set_messaging_timeout(0.0) {
+            log::warn!("failed to restore macOS AX application messaging timeout: {err}");
         }
     }
 }
@@ -840,6 +864,132 @@ const SETUP_MESSAGING_TIMEOUT: f32 = 2.0;
 const FRAME_SETTLE_ATTEMPTS: usize = 3;
 const FRAME_SETTLE_DELAY: Duration = Duration::from_millis(20);
 
+#[derive(Clone, Copy)]
+enum FrameAttribute {
+    Position,
+    Size,
+}
+
+#[derive(Default)]
+struct AxCallStats {
+    position_buckets: [u32; 10],
+    size_buckets: [u32; 10],
+    position_failures: u32,
+    size_failures: u32,
+}
+
+impl AxCallStats {
+    fn record(&mut self, attribute: FrameAttribute, elapsed: Duration, result: ffi::AXError) {
+        let micros = elapsed.as_micros();
+        let bucket = [1, 2, 4, 8, 16, 32, 64, 128, 256]
+            .into_iter()
+            .position(|millis| micros < millis * 1_000)
+            .unwrap_or(9);
+        let (buckets, failures) = match attribute {
+            FrameAttribute::Position => (&mut self.position_buckets, &mut self.position_failures),
+            FrameAttribute::Size => (&mut self.size_buckets, &mut self.size_failures),
+        };
+        buckets[bucket] += 1;
+        if result != ffi::kAXErrorSuccess {
+            *failures += 1;
+        }
+    }
+}
+
+trait IntermediateFrameWriter {
+    fn set_position(&mut self, target: Rect) -> ffi::AXError;
+    fn set_size(&mut self, target: Rect) -> ffi::AXError;
+}
+
+#[derive(Default)]
+struct IntermediateFrameState {
+    position: Option<(f64, f64)>,
+    size: Option<(f64, f64)>,
+}
+
+impl IntermediateFrameState {
+    fn from_frame(frame: Rect) -> Self {
+        Self {
+            position: Some((frame.x, frame.y)),
+            size: Some((frame.width, frame.height)),
+        }
+    }
+
+    fn frame(&self) -> Option<Rect> {
+        let (x, y) = self.position?;
+        let (width, height) = self.size?;
+        Some(Rect::new(x, y, width, height))
+    }
+}
+
+struct AxIntermediateFrameWriter {
+    element: ffi::AXUIElementRef,
+}
+
+impl IntermediateFrameWriter for AxIntermediateFrameWriter {
+    fn set_position(&mut self, target: Rect) -> ffi::AXError {
+        set_position(
+            self.element,
+            CGPoint {
+                x: target.x,
+                y: target.y,
+            },
+        )
+    }
+
+    fn set_size(&mut self, target: Rect) -> ffi::AXError {
+        set_size(
+            self.element,
+            CGSize {
+                width: target.width,
+                height: target.height,
+            },
+        )
+    }
+}
+
+fn apply_intermediate_frame(
+    writer: &mut impl IntermediateFrameWriter,
+    state: &mut IntermediateFrameState,
+    target: Rect,
+    stats: &mut AxCallStats,
+) -> Result<()> {
+    let position_changed = state
+        .position
+        .map(|position| position != (target.x, target.y))
+        .unwrap_or(true);
+    let size_changed = state
+        .size
+        .map(|size| size != (target.width, target.height))
+        .unwrap_or(true);
+
+    if position_changed {
+        let started = Instant::now();
+        let err = writer.set_position(target);
+        stats.record(FrameAttribute::Position, started.elapsed(), err);
+        if err == ffi::kAXErrorAPIDisabled {
+            return Err(map_ax_error("set position", err));
+        }
+        if err == ffi::kAXErrorSuccess {
+            state.position = Some((target.x, target.y));
+        }
+    }
+
+    if size_changed {
+        let started = Instant::now();
+        let err = writer.set_size(target);
+        stats.record(FrameAttribute::Size, started.elapsed(), err);
+        if err == ffi::kAXErrorAPIDisabled {
+            return Err(map_ax_error("set size", err));
+        }
+        if err == ffi::kAXErrorSuccess {
+            state.size = Some((target.width, target.height));
+        }
+    }
+
+    Ok(())
+}
+
 /// Leaves the native full-screen and minimized states, which silently swallow
 /// position and size changes.
 fn leave_fullscreen_and_minimized(element: ffi::AXUIElementRef) -> Result<()> {
@@ -1024,6 +1174,26 @@ impl WindowBackend for MacWindowBackend {
             }
             return Err(err);
         }
+        let current_frame = match (
+            copy_point(front.element.0, "AXPosition"),
+            copy_size(front.element.0, "AXSize"),
+        ) {
+            (Some(position), Some(size)) => {
+                Some(Rect::new(position.x, position.y, size.width, size.height))
+            }
+            _ => None,
+        };
+
+        if let Some(guard) = &enhanced_ui {
+            if let Err(err) = guard.set_messaging_timeout(ANIMATION_MESSAGING_TIMEOUT) {
+                // SAFETY: the element is still live; no session will exist to
+                // restore this setup timeout on the error path.
+                unsafe {
+                    ffi::AXUIElementSetMessagingTimeout(front.element.0, 0.0);
+                }
+                return Err(err);
+            }
+        }
 
         // Tighten to the frame-loop budget now the slow part is done.
         // SAFETY: as above — the element is still live and owned by `front`.
@@ -1034,6 +1204,10 @@ impl WindowBackend for MacWindowBackend {
         Ok(Some(Box::new(MacAnimationSession {
             element: front.element,
             enhanced_ui,
+            frame_state: current_frame
+                .map(IntermediateFrameState::from_frame)
+                .unwrap_or_default(),
+            stats: AxCallStats::default(),
         })))
     }
 
@@ -1081,12 +1255,12 @@ impl WindowBackend for MacWindowBackend {
 struct MacAnimationSession {
     element: CfOwned,
     enhanced_ui: Option<EnhancedUiGuard<AxEnhancedUiAccess>>,
+    frame_state: IntermediateFrameState,
+    stats: AxCallStats,
 }
 
 impl AnimationSession for MacAnimationSession {
     fn set_intermediate_frame(&mut self, target: Rect) -> Result<()> {
-        let element = self.element.0;
-
         // Position then size, dropping the leading `set_size` of the
         // size/position/size dance. That extra call exists only to beat the
         // window server's clamp-to-current-display when a window moves to
@@ -1099,37 +1273,16 @@ impl AnimationSession for MacAnimationSession {
         // the animation ends. Halving the AX round-trips per frame matters
         // because each one is synchronous IPC into the target app.
         //
-        // As in `set_window_frame`, only `kAXErrorAPIDisabled` (Accessibility
-        // permission revoked mid-flight) is fatal. Everything else — including
-        // the timeout of a briefly busy app — is tolerated, so a single slow
-        // frame drops rather than aborting the whole animation.
-        for (context, err) in [
-            (
-                "set position",
-                set_position(
-                    element,
-                    CGPoint {
-                        x: target.x,
-                        y: target.y,
-                    },
-                ),
-            ),
-            (
-                "set size",
-                set_size(
-                    element,
-                    CGSize {
-                        width: target.width,
-                        height: target.height,
-                    },
-                ),
-            ),
-        ] {
-            if err == ffi::kAXErrorAPIDisabled {
-                return Err(map_ax_error(context, err));
-            }
-        }
-        Ok(())
+        // Only a successful write advances that component of `frame_state`.
+        // Transient failures therefore remain eligible for the next frame.
+        apply_intermediate_frame(
+            &mut AxIntermediateFrameWriter {
+                element: self.element.0,
+            },
+            &mut self.frame_state,
+            target,
+            &mut self.stats,
+        )
     }
 
     fn finish(&mut self, target: Rect) -> Result<Rect> {
@@ -1177,6 +1330,9 @@ impl AnimationSession for MacAnimationSession {
     }
 
     fn current_frame(&self) -> Result<Rect> {
+        if let Some(frame) = self.frame_state.frame() {
+            return Ok(frame);
+        }
         match (
             copy_point(self.element.0, "AXPosition"),
             copy_size(self.element.0, "AXSize"),
@@ -1205,6 +1361,14 @@ impl Drop for MacAnimationSession {
             ffi::AXUIElementSetMessagingTimeout(self.element.0, 0.0);
         }
         drop(self.enhanced_ui.take());
+        log::debug!(
+            "macOS AX animation summary: position_buckets={:?} position_failures={} \
+             size_buckets={:?} size_failures={}",
+            self.stats.position_buckets,
+            self.stats.position_failures,
+            self.stats.size_buckets,
+            self.stats.size_failures
+        );
     }
 }
 
@@ -1218,6 +1382,146 @@ mod enhanced_ui_tests {
     struct FakeAccess {
         state: Rc<Cell<Option<bool>>>,
         writes: Rc<RefCell<Vec<bool>>>,
+        timeouts: Rc<RefCell<Vec<f32>>>,
+    }
+
+    #[cfg(test)]
+    mod intermediate_frame_tests {
+        use crate::macos::{
+            apply_intermediate_frame, ffi, AxCallStats, FrameAttribute, IntermediateFrameState,
+            IntermediateFrameWriter, Rect, Result,
+        };
+
+        #[derive(Default)]
+        struct FakeWriter {
+            position_results: Vec<ffi::AXError>,
+            size_results: Vec<ffi::AXError>,
+            writes: Vec<&'static str>,
+        }
+
+        impl FakeWriter {
+            fn next(results: &mut Vec<ffi::AXError>) -> ffi::AXError {
+                if results.is_empty() {
+                    ffi::kAXErrorSuccess
+                } else {
+                    results.remove(0)
+                }
+            }
+        }
+
+        impl IntermediateFrameWriter for FakeWriter {
+            fn set_position(&mut self, _target: Rect) -> ffi::AXError {
+                self.writes.push("position");
+                Self::next(&mut self.position_results)
+            }
+
+            fn set_size(&mut self, _target: Rect) -> ffi::AXError {
+                self.writes.push("size");
+                Self::next(&mut self.size_results)
+            }
+        }
+
+        fn apply(
+            writer: &mut FakeWriter,
+            state: &mut IntermediateFrameState,
+            target: Rect,
+        ) -> Result<AxCallStats> {
+            let mut stats = AxCallStats::default();
+            apply_intermediate_frame(writer, state, target, &mut stats)?;
+            Ok(stats)
+        }
+
+        #[test]
+        fn an_uninitialized_frame_writes_both_attributes() {
+            let target = Rect::new(10.0, 20.0, 300.0, 200.0);
+            let mut writer = FakeWriter::default();
+            let mut state = IntermediateFrameState::default();
+
+            apply(&mut writer, &mut state, target).unwrap();
+
+            assert_eq!(writer.writes, ["position", "size"]);
+            assert_eq!(state.frame(), Some(target));
+        }
+
+        #[test]
+        fn a_pure_move_skips_the_unchanged_size() {
+            let mut writer = FakeWriter::default();
+            let mut state = IntermediateFrameState::from_frame(Rect::new(0.0, 0.0, 300.0, 200.0));
+
+            apply(&mut writer, &mut state, Rect::new(40.0, 50.0, 300.0, 200.0)).unwrap();
+
+            assert_eq!(writer.writes, ["position"]);
+        }
+
+        #[test]
+        fn a_pure_resize_skips_the_unchanged_position() {
+            let mut writer = FakeWriter::default();
+            let mut state = IntermediateFrameState::from_frame(Rect::new(40.0, 50.0, 300.0, 200.0));
+
+            apply(&mut writer, &mut state, Rect::new(40.0, 50.0, 500.0, 400.0)).unwrap();
+
+            assert_eq!(writer.writes, ["size"]);
+        }
+
+        #[test]
+        fn a_failed_component_remains_retryable() {
+            let start = Rect::new(0.0, 0.0, 300.0, 200.0);
+            let target = Rect::new(40.0, 50.0, 500.0, 400.0);
+            let mut writer = FakeWriter {
+                position_results: vec![ffi::kAXErrorCannotComplete, ffi::kAXErrorSuccess],
+                ..Default::default()
+            };
+            let mut state = IntermediateFrameState::from_frame(start);
+
+            apply(&mut writer, &mut state, target).unwrap();
+            assert_eq!(state.frame(), Some(Rect::new(0.0, 0.0, 500.0, 400.0)));
+
+            writer.writes.clear();
+            apply(&mut writer, &mut state, target).unwrap();
+
+            assert_eq!(writer.writes, ["position"]);
+            assert_eq!(state.frame(), Some(target));
+        }
+
+        #[test]
+        fn an_uninitialized_failed_component_remains_unknown() {
+            let target = Rect::new(40.0, 50.0, 500.0, 400.0);
+            let mut writer = FakeWriter {
+                size_results: vec![ffi::kAXErrorCannotComplete, ffi::kAXErrorSuccess],
+                ..Default::default()
+            };
+            let mut state = IntermediateFrameState::default();
+
+            apply(&mut writer, &mut state, target).unwrap();
+            assert_eq!(state.position, Some((40.0, 50.0)));
+            assert_eq!(state.size, None);
+
+            writer.writes.clear();
+            apply(&mut writer, &mut state, target).unwrap();
+
+            assert_eq!(writer.writes, ["size"]);
+            assert_eq!(state.frame(), Some(target));
+        }
+
+        #[test]
+        fn latency_stats_use_fixed_buckets_and_count_failures() {
+            let mut stats = AxCallStats::default();
+            stats.record(
+                FrameAttribute::Position,
+                std::time::Duration::from_micros(500),
+                ffi::kAXErrorSuccess,
+            );
+            stats.record(
+                FrameAttribute::Size,
+                std::time::Duration::from_millis(40),
+                ffi::kAXErrorCannotComplete,
+            );
+
+            assert_eq!(stats.position_buckets[0], 1);
+            assert_eq!(stats.size_buckets[6], 1);
+            assert_eq!(stats.position_failures, 0);
+            assert_eq!(stats.size_failures, 1);
+        }
     }
 
     impl FakeAccess {
@@ -1225,6 +1529,7 @@ mod enhanced_ui_tests {
             Self {
                 state: Rc::new(Cell::new(state)),
                 writes: Rc::new(RefCell::new(Vec::new())),
+                timeouts: Rc::new(RefCell::new(Vec::new())),
             }
         }
     }
@@ -1238,6 +1543,11 @@ mod enhanced_ui_tests {
             self.state.set(Some(value));
             self.writes.borrow_mut().push(value);
             Ok(true)
+        }
+
+        fn set_messaging_timeout(&self, timeout: f32) -> Result<()> {
+            self.timeouts.borrow_mut().push(timeout);
+            Ok(())
         }
     }
 
@@ -1261,6 +1571,18 @@ mod enhanced_ui_tests {
         drop(guard);
         assert_eq!(state.get(), Some(true));
         assert_eq!(*writes.borrow(), [false, true]);
+    }
+
+    #[test]
+    fn application_timeout_is_tightened_and_restored() {
+        let access = FakeAccess::new(Some(false));
+        let timeouts = access.timeouts.clone();
+        let guard = EnhancedUiGuard::new(access).unwrap();
+
+        guard.set_messaging_timeout(0.2).unwrap();
+        drop(guard);
+
+        assert_eq!(*timeouts.borrow(), [0.2, 0.0]);
     }
 
     #[test]
