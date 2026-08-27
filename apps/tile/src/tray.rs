@@ -9,7 +9,6 @@ use std::sync::Arc;
 use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, Runtime};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 use crate::build_kind::BuildKind;
 use crate::state::AppState;
@@ -203,47 +202,6 @@ pub fn sync_update_state<R: Runtime>(app: &AppHandle<R>, status: &UpdateStatus) 
     }
 }
 
-fn spawn_update_check<R: Runtime>(app: AppHandle<R>) {
-    let manager = app.state::<Arc<UpdateManager>>().inner().clone();
-    tauri::async_runtime::spawn(async move {
-        if let Err(err) = manager.check(&app).await {
-            log::warn!("manual update check failed: {err}");
-        }
-    });
-}
-
-fn request_install<R: Runtime>(app: &AppHandle<R>, version: String) {
-    let message = if cfg!(target_os = "windows") {
-        format!(
-            "Tile {version} is ready to download.\n\nTile will close, install the update, and \
-             reopen automatically. Continue?"
-        )
-    } else {
-        format!(
-            "Tile {version} is ready to download.\n\nTile will install the update and relaunch. \
-             Continue?"
-        )
-    };
-    let app_handle = app.clone();
-    app.dialog()
-        .message(message)
-        .title("Update Tile")
-        .kind(MessageDialogKind::Info)
-        .buttons(MessageDialogButtons::OkCancel)
-        .show(move |confirmed| {
-            if !confirmed {
-                return;
-            }
-            let manager = app_handle.state::<Arc<UpdateManager>>().inner().clone();
-            let install_handle = app_handle.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(err) = manager.install(&install_handle, true).await {
-                    log::error!("could not install Tile update: {err}");
-                }
-            });
-        });
-}
-
 fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str, kind: BuildKind) {
     match id {
         ID_ABOUT => {
@@ -259,10 +217,14 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str, kind: BuildKind) 
         ID_UPDATE => {
             let status = app.state::<Arc<UpdateManager>>().status();
             match status {
-                UpdateStatus::Available { version, .. } => request_install(app, version),
                 #[cfg(target_os = "macos")]
                 UpdateStatus::ReadyToRelaunch { .. } => app.request_restart(),
-                _ => spawn_update_check(app.clone()),
+                _ => {
+                    let check_for_updates = !matches!(status, UpdateStatus::Available { .. });
+                    if let Err(err) = window::open_update_settings(app, kind, check_for_updates) {
+                        log::error!("failed to open update settings: {err}");
+                    }
+                }
             }
         }
         ID_QUIT => {
