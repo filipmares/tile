@@ -2,6 +2,7 @@
 
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getVersion } from "@tauri-apps/api/app";
+import { listen } from "@tauri-apps/api/event";
 import {
   checkForUpdates,
   getBuildInfo,
@@ -37,6 +38,8 @@ const ACCESSIBILITY_URL =
   "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
 const GITHUB_URL = "https://github.com/filipmares/tile";
 const isAboutScreen = new URLSearchParams(window.location.search).has("about");
+const updateIntent = window.sessionStorage.getItem("tile-update-intent");
+window.sessionStorage.removeItem("tile-update-intent");
 
 /** Non-null `querySelector`, throwing at boot if the markup is wrong. */
 function el<T extends HTMLElement>(selector: string): T {
@@ -500,6 +503,12 @@ function describeAboutUpdateStatus(status: UpdateStatus): string {
     }
   }
 
+  function focusUpdatePanel(): void {
+    dom.updatePanel.hidden = false;
+    dom.updatePanel.scrollIntoView({ behavior: "smooth", block: "start" });
+    dom.updatePanel.focus({ preventScroll: true });
+  }
+
   function showUpdateConfirmation(): void {
     if (updateState.status !== "available") return;
     const windows = navigator.userAgent.includes("Windows");
@@ -758,6 +767,20 @@ async function boot(): Promise<void> {
   }
 
   wireEvents();
+  await listen("tile://check-for-updates", () => {
+    focusUpdatePanel();
+    void runUpdateCheck();
+  });
+  await listen("tile://show-updates", () => {
+    focusUpdatePanel();
+    void refreshUpdateStatus().then(scheduleUpdateRefresh);
+  });
+  const initialUpdateStatus = updateIntent === "check"
+    ? runUpdateCheck()
+    : refreshUpdateStatus();
+  if (updateIntent === "check" || updateIntent === "show") {
+    focusUpdatePanel();
+  }
   // Build provenance is fetched first and separately: if it fails, the rest of
   // the settings UI should still load.
   try {
@@ -775,7 +798,7 @@ async function boot(): Promise<void> {
   renderBindings();
   renderBehaviour();
   await refreshPermission(false);
-  scheduleUpdateRefresh(await refreshUpdateStatus());
+  scheduleUpdateRefresh(await initialUpdateStatus);
 }
 
 void boot();
