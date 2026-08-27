@@ -215,10 +215,6 @@ impl<'de> Deserialize<'de> for Gaps {
     }
 }
 
-fn default_true() -> bool {
-    true
-}
-
 /// The default fraction for the [`WindowAction::AlmostMaximize`] size, matching
 /// Rectangle's 90% behaviour.
 fn default_almost_maximize_fraction() -> f64 {
@@ -596,8 +592,6 @@ pub struct Config {
     pub gaps: Gaps,
     /// Start Tile when the user logs in.
     pub launch_on_login: bool,
-    /// Show the tray / menu-bar icon.
-    pub show_tray_icon: bool,
     /// [`WindowAction::AlmostMaximize`] width as a fraction of the work area.
     #[serde(default = "default_almost_maximize_fraction")]
     pub almost_maximize_width: f64,
@@ -635,6 +629,16 @@ pub struct Config {
         deserialize_with = "deserialize_cycle_sizes"
     )]
     pub cycle_sizes: Vec<CycleSize>,
+    /// Whether the one-time first-run orientation has already been handed to
+    /// the user. Set when the settings window claims it, not when the user
+    /// dismisses the panel: nothing else writes the config at startup, so
+    /// waiting for a dismissal would show the orientation again to anyone who
+    /// quit without pressing the button. Absent from every config written
+    /// before orientation existed, which is exactly right: those users have
+    /// already found their way around and are recognised as existing by their
+    /// config file's presence.
+    #[serde(default)]
+    pub orientation_shown: bool,
     /// How a window travels to its new frame. Absent from configs written
     /// before animation existed, hence the serde default.
     #[serde(default)]
@@ -647,7 +651,6 @@ impl Default for Config {
             bindings: default_bindings(),
             gaps: Gaps::default(),
             launch_on_login: false,
-            show_tray_icon: default_true(),
             almost_maximize_width: default_almost_maximize_fraction(),
             almost_maximize_height: default_almost_maximize_fraction(),
             size_step: default_step(),
@@ -657,6 +660,7 @@ impl Default for Config {
             minimum_window_height: default_minimum_fraction(),
             subsequent_execution_mode: SubsequentExecutionMode::default(),
             cycle_sizes: default_cycle_sizes(),
+            orientation_shown: false,
             animation: AnimationConfig::default(),
         }
     }
@@ -1595,7 +1599,9 @@ mod tests {
     #[test]
     fn a_config_predating_cycling_still_loads() {
         // Exactly what an older build would have written: no cycling keys at
-        // all, and the legacy scalar gap for good measure.
+        // all, the legacy scalar gap for good measure, and `showTrayIcon` —
+        // a key that was never wired up and has since been retired. It has to
+        // be ignored rather than rejected, or the upgrade breaks.
         let json = r#"{
             "bindings": {},
             "gap": 8,
@@ -1605,7 +1611,6 @@ mod tests {
         let config = Config::from_json(json).unwrap();
         assert_eq!(config.gaps, Gaps::uniform(8.0));
         assert!(config.launch_on_login);
-        assert!(!config.show_tray_icon);
         // Cycling arrives switched on, with Rectangle's defaults.
         assert_eq!(
             config.subsequent_execution_mode,

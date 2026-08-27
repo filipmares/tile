@@ -31,6 +31,34 @@
       </section>
 
       <section
+        id="orientation-panel"
+        class="panel panel--welcome"
+        hidden
+        aria-labelledby="orientation-heading"
+      >
+        <h2 id="orientation-heading">Tile is running</h2>
+        <p>
+          Tile has no main window — it runs in the background, and its icon is
+          in the <span id="orientation-home">menu bar</span>. Hold the modifier
+          below and press an arrow to place the focused window.
+        </p>
+        <ul class="orientation__keys" id="orientation-keys"></ul>
+        <p class="panel__hint">
+          Press the same arrow again to change the size. Every other action is
+          in Shortcuts below, ready to bind to keys of your own.
+        </p>
+        <div class="panel__actions">
+          <button
+            id="orientation-dismiss"
+            type="button"
+            class="button button--primary"
+          >
+            Got it
+          </button>
+        </div>
+      </section>
+
+      <section
         id="development-panel"
         class="panel panel--development"
         hidden
@@ -102,7 +130,7 @@
         <h2>Accessibility permission needed</h2>
         <p>
           Tile needs macOS Accessibility permission to move other apps'
-          windows. Until it is granted, hotkeys and menu actions do nothing.
+          windows. Until it is granted, its keyboard shortcuts do nothing.
         </p>
         <div class="panel__actions">
           <button id="grant-permission" type="button" class="button button--primary">
@@ -126,6 +154,35 @@
             </p>
           </div>
         </div>
+
+        <details class="settings-group">
+          <summary class="settings-group__summary">Repeating shortcuts</summary>
+          <div class="settings-group__content">
+          <p class="panel__hint">
+            Pressing the same shortcut again changes the size instead of
+            repeating the move. The left and right arrows cycle half, then two
+            thirds, then a third, then back to half. The cycle restarts when
+            you run a different action, switch to another window, or move the
+            window yourself.
+          </p>
+          <div class="field">
+            <label class="field__label" for="subsequent-mode">
+              Repeating a shortcut
+            </label>
+            <div class="field__control">
+              <select id="subsequent-mode">
+                <option value="cycle-sizes">Cycles through sizes</option>
+                <option value="do-nothing">Does nothing</option>
+              </select>
+            </div>
+          </div>
+
+          <fieldset class="field field--group" id="cycle-sizes">
+            <legend class="field__label">Sizes to cycle through</legend>
+            <div class="field__grid" id="cycle-sizes-grid"></div>
+          </fieldset>
+          </div>
+        </details>
 
         <details class="settings-group">
           <summary class="settings-group__summary">Window spacing</summary>
@@ -204,34 +261,35 @@
           </div>
         </details>
 
-        <details class="settings-group">
-          <summary class="settings-group__summary">Repeating shortcuts</summary>
-          <div class="settings-group__content">
-          <div class="field">
-            <label class="field__label" for="subsequent-mode">
-              Repeating a shortcut
-            </label>
-            <div class="field__control">
-              <select id="subsequent-mode">
-                <option value="cycle-sizes">Cycles through sizes</option>
-                <option value="do-nothing">Does nothing</option>
-              </select>
-            </div>
-          </div>
-
-          <fieldset class="field field--group" id="cycle-sizes">
-            <legend class="field__label">Sizes to cycle through</legend>
-            <div class="field__grid" id="cycle-sizes-grid"></div>
-          </fieldset>
-          </div>
-        </details>
-
         <div class="settings-group settings-group--last">
           <h3 class="settings-group__title">Motion</h3>
           <label class="field field--inline">
             <input type="checkbox" id="animate-moves" name="animate-moves" />
             <span class="field__label">Animate window movement</span>
           </label>
+          <div class="field">
+            <label class="field__label" for="animation-duration">
+              How long a snap takes
+            </label>
+            <div class="field__control">
+              <input
+                type="range"
+                id="animation-duration"
+                min="40"
+                max="1000"
+                step="10"
+              />
+              <input
+                type="number"
+                id="animation-duration-number"
+                min="40"
+                max="1000"
+                step="10"
+                aria-label="Animation duration in milliseconds"
+              />
+              <span class="field__unit">ms</span>
+            </div>
+          </div>
         </div>
 
         <div class="settings-group settings-group--last">
@@ -271,6 +329,18 @@
             <span>All available shortcuts</span>
             <span class="all-shortcuts__count" id="all-shortcuts-count"></span>
           </summary>
+          <div class="all-shortcuts__filter">
+            <label class="field__label" for="shortcut-filter">
+              Find a shortcut
+            </label>
+            <input
+              type="search"
+              id="shortcut-filter"
+              placeholder="Search by name…"
+              autocomplete="off"
+              spellcheck="false"
+            />
+          </div>
           <ul class="bindings" id="bindings"></ul>
         </details>
       </section>

@@ -33,33 +33,64 @@ pub fn config_file_path(dir: &Path) -> PathBuf {
     dir.join(CONFIG_FILE_NAME)
 }
 
+/// How a config load turned out, alongside the resulting [`Config`].
+///
+/// The distinction matters for first-run detection. Every outcome yields a
+/// usable config, but only [`ConfigOrigin::Missing`] means Tile has genuinely
+/// never run here. A corrupt or unreadable config belongs to someone who has
+/// used Tile before, and re-onboarding them would be wrong.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigOrigin {
+    /// No config file exists. This is a first run.
+    Missing,
+    /// A config file was read and parsed.
+    Loaded,
+    /// A config file exists but could not be read or parsed.
+    Corrupt,
+}
+
+/// A loaded [`Config`] and the [`ConfigOrigin`] it came from.
+#[derive(Debug, Clone)]
+pub struct LoadedConfig {
+    pub config: Config,
+    pub origin: ConfigOrigin,
+}
+
+impl LoadedConfig {
+    /// Whether this load represents a genuine first run.
+    pub fn is_first_run(&self) -> bool {
+        self.origin == ConfigOrigin::Missing
+    }
+}
+
 /// Loads the config from `dir`, returning [`Config::default`] when the file is
-/// absent or cannot be parsed. Never fails.
-pub fn load_from_dir(dir: &Path) -> Config {
+/// absent or cannot be parsed, along with which of those happened. Never fails.
+pub fn load_from_dir(dir: &Path) -> LoadedConfig {
     let path = config_file_path(dir);
-    match fs::read_to_string(&path) {
+    let (config, origin) = match fs::read_to_string(&path) {
         Ok(contents) => match Config::from_json(&contents) {
-            Ok(config) => config,
+            Ok(config) => (config, ConfigOrigin::Loaded),
             Err(err) => {
                 log::warn!(
                     "config at {} is corrupt ({err}); falling back to defaults",
                     path.display()
                 );
-                Config::default()
+                (Config::default(), ConfigOrigin::Corrupt)
             }
         },
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
             log::info!("no config at {}; using defaults", path.display());
-            Config::default()
+            (Config::default(), ConfigOrigin::Missing)
         }
         Err(err) => {
             log::warn!(
                 "could not read config at {} ({err}); using defaults",
                 path.display()
             );
-            Config::default()
+            (Config::default(), ConfigOrigin::Corrupt)
         }
-    }
+    };
+    LoadedConfig { config, origin }
 }
 
 /// Serializes `config` and writes it atomically into `dir`, creating the
@@ -113,14 +144,58 @@ mod tests {
     #[test]
     fn missing_file_yields_defaults() {
         let dir = TempDir::new();
-        assert_eq!(load_from_dir(&dir.0), Config::default());
+        assert_eq!(load_from_dir(&dir.0).config, Config::default());
     }
 
     #[test]
     fn corrupt_file_yields_defaults() {
         let dir = TempDir::new();
         fs::write(config_file_path(&dir.0), b"{ not json ]").unwrap();
-        assert_eq!(load_from_dir(&dir.0), Config::default());
+        assert_eq!(load_from_dir(&dir.0).config, Config::default());
+    }
+
+    /// Only a genuinely absent config means Tile has never run here.
+    #[test]
+    fn a_missing_config_is_a_first_run() {
+        let dir = TempDir::new();
+        let loaded = load_from_dir(&dir.0);
+        assert_eq!(loaded.origin, ConfigOrigin::Missing);
+        assert!(loaded.is_first_run());
+    }
+
+    #[test]
+    fn an_existing_config_is_not_a_first_run() {
+        let dir = TempDir::new();
+        save_to_dir(&dir.0, &Config::default()).unwrap();
+        let loaded = load_from_dir(&dir.0);
+        assert_eq!(loaded.origin, ConfigOrigin::Loaded);
+        assert!(!loaded.is_first_run());
+    }
+
+    /// A user whose config broke has still used Tile before. Re-onboarding
+    /// them would be worse than showing nothing.
+    #[test]
+    fn a_corrupt_config_is_not_a_first_run() {
+        let dir = TempDir::new();
+        fs::write(config_file_path(&dir.0), b"{ not json ]").unwrap();
+        let loaded = load_from_dir(&dir.0);
+        assert_eq!(loaded.origin, ConfigOrigin::Corrupt);
+        assert!(!loaded.is_first_run());
+    }
+
+    /// An older config written before orientation existed must not trigger it.
+    #[test]
+    fn a_legacy_config_without_the_marker_is_not_a_first_run() {
+        let dir = TempDir::new();
+        fs::write(
+            config_file_path(&dir.0),
+            br#"{"bindings":{},"gap":8,"launchOnLogin":true}"#,
+        )
+        .unwrap();
+        let loaded = load_from_dir(&dir.0);
+        assert_eq!(loaded.origin, ConfigOrigin::Loaded);
+        assert!(!loaded.is_first_run());
+        assert!(!loaded.config.orientation_shown);
     }
 
     #[test]
@@ -132,7 +207,7 @@ mod tests {
             ..Default::default()
         };
         save_to_dir(&dir.0, &config).unwrap();
-        assert_eq!(load_from_dir(&dir.0), config);
+        assert_eq!(load_from_dir(&dir.0).config, config);
     }
 
     #[test]
@@ -160,7 +235,10 @@ mod tests {
             ..Default::default()
         };
         save_to_dir(&dir.0, &config).unwrap();
-        assert_eq!(load_from_dir(&dir.0).gaps, tile_core::Gaps::uniform(99.0));
+        assert_eq!(
+            load_from_dir(&dir.0).config.gaps,
+            tile_core::Gaps::uniform(99.0)
+        );
     }
 
     #[test]

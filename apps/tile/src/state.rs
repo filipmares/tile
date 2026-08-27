@@ -33,6 +33,7 @@
 //! [`AppState::perform_action_preemptible`].
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -66,6 +67,10 @@ pub struct AppState {
     config_dir: Option<PathBuf>,
     hotkey_failures: Mutex<Vec<HotkeyFailure>>,
     permission_dialog_limiter: Mutex<RateLimiter>,
+    /// Whether the one-time first-run orientation is still owed to the user.
+    /// Set once at startup and cleared as soon as the settings UI claims it,
+    /// so a reopened settings window never shows it twice in one session.
+    orientation_pending: AtomicBool,
 }
 
 impl AppState {
@@ -75,6 +80,7 @@ impl AppState {
         config: Config,
         build_kind: BuildKind,
         config_dir: Option<PathBuf>,
+        orientation_pending: bool,
     ) -> Self {
         Self {
             backend: Mutex::new(backend),
@@ -84,7 +90,34 @@ impl AppState {
             config_dir,
             hotkey_failures: Mutex::new(Vec::new()),
             permission_dialog_limiter: Mutex::new(RateLimiter::new(PERMISSION_DIALOG_COOLDOWN)),
+            orientation_pending: AtomicBool::new(orientation_pending),
         }
+    }
+
+    /// Whether the first-run orientation still needs showing, without
+    /// consuming it.
+    pub fn orientation_pending(&self) -> bool {
+        self.orientation_pending.load(Ordering::Relaxed)
+    }
+
+    /// Claims the pending orientation, returning whether the caller won it.
+    /// Only the first caller gets `true`.
+    ///
+    /// Winning the claim persists `orientation_shown` immediately rather than
+    /// waiting for the user to dismiss the panel. Nothing else writes the
+    /// config at startup, so deferring would mean a user who quits without
+    /// touching a setting is shown the orientation again on the next launch.
+    ///
+    /// This deliberately saves without going through `update_config`: recording
+    /// that a welcome panel appeared is not a settings change and must not
+    /// re-register the OS hotkeys or disturb the recorded hotkey failures.
+    pub fn take_orientation(&self) -> bool {
+        let won = self.orientation_pending.swap(false, Ordering::Relaxed);
+        if won {
+            lock(&self.engine).config.orientation_shown = true;
+            self.save_config();
+        }
+        won
     }
 
     /// Whether this binary is a local development build or an installed one.
@@ -547,6 +580,8 @@ mod tests {
     use std::cell::RefCell;
     use std::collections::VecDeque;
     use std::rc::Rc;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::Arc;
     use std::time::Duration;
 
     use tile_core::{AnimationConfig, Screen};
@@ -1289,5 +1324,167 @@ mod tests {
 
         assert_eq!(backend.frames.borrow().len(), 1);
         assert_eq!(backend.last_frame(), Rect::new(0.0, 0.0, 960.0, 1080.0));
+    }
+
+    /// Minimal backends so `AppState` can be built in a test. Neither is
+    /// exercised here: the orientation claim never touches a window or a
+    /// hotkey, it only decides whether to persist a flag.
+    struct InertWindowBackend;
+
+    impl WindowBackend for InertWindowBackend {
+        fn focused_window(&self) -> tile_platform::Result<Option<WindowSnapshot>> {
+            Ok(None)
+        }
+
+        fn screens(&self) -> tile_platform::Result<Vec<Screen>> {
+            Ok(Vec::new())
+        }
+
+        fn set_window_frame(&self, _id: WindowId, target: Rect) -> tile_platform::Result<Rect> {
+            Ok(target)
+        }
+
+        fn permission_status(&self, _prompt: bool) -> tile_platform::Result<PermissionStatus> {
+            Ok(PermissionStatus::NotRequired)
+        }
+    }
+
+    /// Counts `apply` calls through a shared handle, so a test can prove that
+    /// recording a UI flag did not re-register the OS hotkeys.
+    #[derive(Default)]
+    struct CountingHotkeyBackend {
+        applies: Arc<AtomicUsize>,
+    }
+
+    impl HotkeyBackend for CountingHotkeyBackend {
+        fn apply(
+            &mut self,
+            _bindings: &[(tile_core::Hotkey, WindowAction)],
+        ) -> tile_platform::Result<Vec<HotkeyFailure>> {
+            self.applies.fetch_add(1, Ordering::Relaxed);
+            Ok(Vec::new())
+        }
+
+        fn shutdown(&mut self) {}
+    }
+
+    fn state_with_orientation(dir: &std::path::Path, pending: bool) -> AppState {
+        state_counting_applies(dir, pending).0
+    }
+
+    fn state_counting_applies(
+        dir: &std::path::Path,
+        pending: bool,
+    ) -> (AppState, Arc<AtomicUsize>) {
+        let applies = Arc::new(AtomicUsize::new(0));
+        let state = AppState::new(
+            Box::new(InertWindowBackend),
+            Box::new(CountingHotkeyBackend {
+                applies: Arc::clone(&applies),
+            }),
+            Config::default(),
+            BuildKind::Development,
+            Some(dir.to_path_buf()),
+            pending,
+        );
+        (state, applies)
+    }
+
+    /// The orientation must record itself the moment it is claimed. Nothing
+    /// else writes the config at startup, so a user who quits without touching
+    /// a setting would otherwise be shown it again on the next launch.
+    #[test]
+    fn claiming_the_orientation_persists_it_immediately() {
+        let dir = std::env::temp_dir().join(format!(
+            "tile-orientation-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let state = state_with_orientation(&dir, true);
+        assert!(state.take_orientation(), "the first claim wins");
+        assert!(
+            state.config().orientation_shown,
+            "claiming must set the flag"
+        );
+
+        // The point of the test: it survives a restart, without any dismissal.
+        let reloaded = crate::config_store::load_from_dir(&dir);
+        assert!(
+            reloaded.config.orientation_shown,
+            "the flag must be on disk, not only in memory"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_orientation_can_only_be_claimed_once() {
+        let dir = std::env::temp_dir().join(format!(
+            "tile-orientation-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let state = state_with_orientation(&dir, true);
+        assert!(state.take_orientation());
+        assert!(!state.take_orientation(), "a second claim must lose");
+        assert!(!state.orientation_pending());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An existing user is never owed an orientation, and claiming must not
+    /// write a config on their behalf.
+    #[test]
+    fn a_returning_user_is_never_owed_an_orientation() {
+        let dir = std::env::temp_dir().join(format!(
+            "tile-orientation-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let state = state_with_orientation(&dir, false);
+        assert!(!state.take_orientation());
+        assert!(
+            !crate::config_store::config_file_path(&dir).exists(),
+            "nothing should have been written"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Recording that a welcome panel appeared is not a settings change, so it
+    /// must not re-register the OS hotkeys or disturb the recorded failures.
+    #[test]
+    fn claiming_the_orientation_does_not_reapply_hotkeys() {
+        let dir = std::env::temp_dir().join(format!(
+            "tile-orientation-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let (state, applies) = state_counting_applies(&dir, true);
+        assert_eq!(applies.load(Ordering::Relaxed), 0);
+
+        assert!(state.take_orientation());
+
+        assert_eq!(
+            applies.load(Ordering::Relaxed),
+            0,
+            "claiming the orientation must not touch the hotkey backend"
+        );
+        // The flag still reached disk through the save-only path.
+        assert!(
+            crate::config_store::load_from_dir(&dir)
+                .config
+                .orientation_shown
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

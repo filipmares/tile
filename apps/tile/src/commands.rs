@@ -71,12 +71,19 @@ pub fn set_cycling(
 
 /// Turns the animated snap on or off.
 ///
-/// Only the on/off choice is exposed: it is the one that matters to someone
-/// who finds the motion distracting or is working over a remote-desktop
-/// session. The timing knobs stay in `config.json`.
+/// The on/off choice matters most to someone who finds the motion distracting
+/// or is working over a remote-desktop session. Duration has its own control
+/// alongside it; only the frame-rate pacing knob stays in `config.json`.
 #[tauri::command]
 pub fn set_animation(state: State<'_, Shared>, enabled: bool) -> Config {
     state.update_config(|config| config.animation.enabled = enabled)
+}
+
+/// Sets how long a snap takes. `update_config` normalizes afterwards, so an
+/// out-of-range value clamps exactly as a hand-edited one does.
+#[tauri::command]
+pub fn set_animation_duration(state: State<'_, Shared>, duration_ms: u32) -> Config {
+    state.update_config(|config| config.animation.duration_ms = duration_ms)
 }
 
 #[tauri::command]
@@ -88,6 +95,14 @@ pub fn set_launch_on_login<R: Runtime>(
     let config = state.update_config(|config| config.launch_on_login = enabled);
     sync_autostart(&app, &state, config.launch_on_login);
     config
+}
+
+/// Claims the one-time first-run orientation. Returns `true` at most once per
+/// installation, and records that fact before returning, so reopening Settings
+/// or relaunching never repeats it.
+#[tauri::command]
+pub fn take_orientation(state: State<'_, Shared>) -> bool {
+    state.take_orientation()
 }
 
 #[tauri::command]
