@@ -17,6 +17,12 @@ use crate::window;
 
 const TRAY_ID: &str = "tile-tray";
 
+/// Monochrome menu bar glyph. macOS tints template images to match the menu
+/// bar appearance, so the icon stays black on light and white on dark instead
+/// of showing the blue app icon.
+#[cfg(target_os = "macos")]
+const MENU_BAR_TEMPLATE: &[u8] = include_bytes!("../icons/menubar-template.png");
+
 /// Menu item id for the "Settings…" entry.
 const ID_SETTINGS: &str = "settings";
 /// Menu item id for the "About Tile" entry.
@@ -42,6 +48,11 @@ pub fn build_tray<R: Runtime>(app: &AppHandle<R>, kind: BuildKind) -> tauri::Res
 
     if let Some(icon) = tray_icon(app, kind, &status) {
         builder = builder.icon(icon);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.icon_as_template(true);
     }
 
     builder.build(app)?;
@@ -84,7 +95,15 @@ fn build_menu<R: Runtime>(
     Menu::with_items(app, &items)
 }
 
+/// Whether the tray icon should carry a status badge.
+fn needs_badge(kind: BuildKind, status: &UpdateStatus) -> bool {
+    kind.is_development()
+        || matches!(status, UpdateStatus::Available { .. })
+        || ready_version(status).is_some()
+}
+
 /// Adds a status badge to the normal icon without requiring another asset.
+#[cfg(not(target_os = "macos"))]
 fn badged_icon(color: [u8; 4]) -> tauri::Result<tauri::image::Image<'static>> {
     let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png"))?;
     let width = icon.width();
@@ -117,17 +136,74 @@ fn badged_icon(color: [u8; 4]) -> tauri::Result<tauri::image::Image<'static>> {
     Ok(tauri::image::Image::new_owned(pixels, width, height))
 }
 
+/// Adds a status badge to the template glyph. Template images are tinted by
+/// macOS, so the badge is carved out with alpha rather than colour: a solid dot
+/// separated from the glyph by a transparent ring.
+#[cfg(target_os = "macos")]
+fn template_badged_icon() -> tauri::Result<tauri::image::Image<'static>> {
+    let icon = tauri::image::Image::from_bytes(MENU_BAR_TEMPLATE)?;
+    let width = icon.width();
+    let height = icon.height();
+    let mut pixels = icon.rgba().to_vec();
+
+    let badge_radius = f64::from(width.min(height)) / 8.0;
+    let gap = 1.5;
+    let center_x = f64::from(width) - badge_radius - 1.0;
+    let center_y = f64::from(height) - badge_radius - 1.0;
+    let outer_radius = badge_radius + gap;
+
+    // Antialiased coverage: fully covered a half pixel inside the radius,
+    // fully clear a half pixel outside it.
+    let coverage = |distance: f64, radius: f64| (radius + 0.5 - distance).clamp(0.0, 1.0);
+
+    for y in 0..height {
+        for x in 0..width {
+            let dx = f64::from(x) - center_x;
+            let dy = f64::from(y) - center_y;
+            let distance = dx.hypot(dy);
+            if distance > outer_radius + 1.0 {
+                continue;
+            }
+            let offset = ((y * width + x) * 4) as usize;
+            let previous = f64::from(pixels[offset + 3]);
+            let alpha = (previous * (1.0 - coverage(distance, outer_radius)))
+                .max(coverage(distance, badge_radius) * 255.0);
+            pixels[offset..offset + 4].copy_from_slice(&[0, 0, 0, alpha.round() as u8]);
+        }
+    }
+
+    Ok(tauri::image::Image::new_owned(pixels, width, height))
+}
+
+#[cfg(target_os = "macos")]
 fn tray_icon<R: Runtime>(
     _app: &AppHandle<R>,
     kind: BuildKind,
     status: &UpdateStatus,
 ) -> Option<tauri::image::Image<'static>> {
-    let badge = if kind.is_development() {
-        Some([245, 145, 35, 255])
-    } else if matches!(status, UpdateStatus::Available { .. }) || ready_version(status).is_some() {
-        Some([37, 99, 235, 255])
+    if needs_badge(kind, status) {
+        template_badged_icon()
+            .map_err(|err| log::warn!("could not create badged tray icon: {err}"))
+            .ok()
     } else {
+        tauri::image::Image::from_bytes(MENU_BAR_TEMPLATE)
+            .map_err(|err| log::warn!("could not load tray icon: {err}"))
+            .ok()
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn tray_icon<R: Runtime>(
+    _app: &AppHandle<R>,
+    kind: BuildKind,
+    status: &UpdateStatus,
+) -> Option<tauri::image::Image<'static>> {
+    let badge = if !needs_badge(kind, status) {
         None
+    } else if kind.is_development() {
+        Some([245, 145, 35, 255])
+    } else {
+        Some([37, 99, 235, 255])
     };
     match badge {
         Some(color) => badged_icon(color)
@@ -199,6 +275,10 @@ pub fn sync_update_state<R: Runtime>(app: &AppHandle<R>, status: &UpdateStatus) 
         if let Err(err) = tray.set_icon(Some(icon)) {
             log::warn!("could not update tray icon: {err}");
         }
+        #[cfg(target_os = "macos")]
+        if let Err(err) = tray.set_icon_as_template(true) {
+            log::warn!("could not keep tray icon as a template: {err}");
+        }
     }
 }
 
@@ -269,5 +349,97 @@ mod tests {
             ),
             "Tile — 1.2.3 available"
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn menu_bar_glyph_carries_its_shape_in_alpha_only() {
+        let icon = tauri::image::Image::from_bytes(MENU_BAR_TEMPLATE).expect("template loads");
+        assert!(
+            icon.rgba()
+                .chunks_exact(4)
+                .all(|pixel| pixel[0] == 0 && pixel[1] == 0 && pixel[2] == 0),
+            "template images must carry shape in alpha only"
+        );
+        assert!(
+            icon.rgba().chunks_exact(4).any(|pixel| pixel[3] > 0),
+            "template must not be fully transparent"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn badge_is_opaque_and_confined_to_the_lower_right_corner() {
+        let icon = tauri::image::Image::from_bytes(MENU_BAR_TEMPLATE).expect("template loads");
+        let (width, height) = (icon.width(), icon.height());
+        let plain = icon.rgba().to_vec();
+
+        let badged = template_badged_icon().expect("badged template renders");
+        assert_eq!((badged.width(), badged.height()), (width, height));
+        let badged = badged.rgba();
+
+        // Same geometry the badge is drawn with, so the test pins the region
+        // rather than restating the drawing code's arithmetic.
+        let badge_radius = f64::from(width.min(height)) / 8.0;
+        let center_x = f64::from(width) - badge_radius - 1.0;
+        let center_y = f64::from(height) - badge_radius - 1.0;
+        let touched_radius = badge_radius + 1.5 + 1.0;
+
+        let mut badge_centre_alpha = None;
+        for y in 0..height {
+            for x in 0..width {
+                let offset = ((y * width + x) * 4) as usize;
+                let pixel = &badged[offset..offset + 4];
+                assert_eq!(
+                    (pixel[0], pixel[1], pixel[2]),
+                    (0, 0, 0),
+                    "badging must keep the image a template"
+                );
+
+                let distance = (f64::from(x) - center_x).hypot(f64::from(y) - center_y);
+                if distance > touched_radius {
+                    assert_eq!(
+                        pixel[3],
+                        plain[offset + 3],
+                        "badge changed pixel ({x}, {y}) outside its own region"
+                    );
+                } else if distance < 1.0 {
+                    badge_centre_alpha = Some(pixel[3]);
+                }
+            }
+        }
+
+        assert_eq!(
+            badge_centre_alpha,
+            Some(255),
+            "the badge dot itself must be solid"
+        );
+    }
+
+    #[test]
+    fn badges_only_appear_for_development_or_pending_updates() {
+        assert!(needs_badge(BuildKind::Development, &UpdateStatus::Current));
+        assert!(needs_badge(
+            BuildKind::Installed,
+            &UpdateStatus::Available {
+                version: "1.2.3".into(),
+                notes: None,
+                date: None,
+            }
+        ));
+        assert!(!needs_badge(BuildKind::Installed, &UpdateStatus::Current));
+    }
+
+    /// A downloaded update waiting on a relaunch still deserves a badge, so the
+    /// tray keeps nudging until the user restarts.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn updates_waiting_on_a_relaunch_keep_their_badge() {
+        assert!(needs_badge(
+            BuildKind::Installed,
+            &UpdateStatus::ReadyToRelaunch {
+                version: "1.2.3".into(),
+            }
+        ));
     }
 }
