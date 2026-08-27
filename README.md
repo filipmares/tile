@@ -9,9 +9,10 @@ last move — all from the arrow keys.
 > **Status: early days.** Tile implements 76 window actions — halves, thirds,
 > two-thirds, fourths, corner thirds, sixths, ninths, corners, maximize,
 > maximize-height, almost-maximize, center, restore, display throws, and
-> incremental move, resize and halve/double — but only six ship bound to keys,
-> with a settings UI and a tray/menu-bar icon for the rest. Per-app rules and
-> drag-snapping are not built yet. This
+> incremental move, resize and halve/double — but only six ship bound to keys.
+> The other seventy are reachable by binding them yourself in Settings; the
+> tray/menu-bar icon opens Settings rather than offering the actions directly.
+> Per-app rules and drag-snapping are not built yet. This
 > README documents only what actually works today.
 
 ## Default keyboard shortcuts
@@ -130,7 +131,8 @@ animation before. Turn it off in Settings ▸ Behaviour ▸ Motion for the insta
 snapping Tile used to do; that is also the setting to reach for over a remote
 desktop session, or if you would rather have no motion at all.
 
-The timing lives in `config.json` under `animation` and has no settings UI:
+How long a snap takes is a slider in the same place, **Settings ▸ Behaviour ▸
+Motion**, from 40 ms to 1000 ms. The frame rate remains `config.json`-only:
 
 ```jsonc
 "animation": {
@@ -140,10 +142,10 @@ The timing lives in `config.json` under `animation` and has no settings UI:
 }
 ```
 
-`durationMs` is the end-to-end duration of the rigid ease-out. The default is
-250 ms on macOS and 220 ms on Windows and other platforms. The frame rate is a
-config-file-only pacing knob; the platform profile supplies the native-feeling
-ease-out tuning.
+`durationMs` is the end-to-end duration of the rigid ease-out, and is the value
+behind the Motion slider. The default is 250 ms on macOS and 220 ms on Windows
+and other platforms. The frame rate is a config-file-only pacing knob; the
+platform profile supplies the native-feeling ease-out tuning.
 
 ### Windows shortcut notes
 

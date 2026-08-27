@@ -60,8 +60,10 @@ pub fn run() {
             commands::set_gaps,
             commands::set_cycling,
             commands::set_animation,
+            commands::set_animation_duration,
             commands::set_launch_on_login,
             commands::reset_to_defaults,
+            commands::take_orientation,
             commands::perform_action,
             commands::get_permission_status,
             commands::get_hotkey_failures,
@@ -127,13 +129,21 @@ fn setup_app<R: Runtime>(
     }
 
     let config_dir = config_store::resolve_config_dir(build_kind);
-    let config = match &config_dir {
+    let loaded = match &config_dir {
         Some(dir) => config_store::load_from_dir(dir),
         None => {
             log::warn!("could not resolve a config directory; using defaults in memory only");
-            Config::default()
+            // Without a config directory there is nowhere to record that
+            // orientation was shown, so showing it would repeat on every
+            // launch. Treat this as already-onboarded rather than nag.
+            config_store::LoadedConfig {
+                config: Config::default(),
+                origin: config_store::ConfigOrigin::Corrupt,
+            }
         }
     };
+    let show_orientation = loaded.is_first_run() && !loaded.config.orientation_shown;
+    let config = loaded.config;
     let launch_on_login = config.launch_on_login;
 
     let state = Arc::new(AppState::new(
@@ -142,6 +152,7 @@ fn setup_app<R: Runtime>(
         config,
         build_kind,
         config_dir,
+        show_orientation,
     ));
     app.manage(state.clone());
     let updates = Arc::new(UpdateManager::new(build_kind));
@@ -184,10 +195,19 @@ fn setup_app<R: Runtime>(
 
 /// Checks permission and applies hotkeys, or waits for the user to grant
 /// Accessibility on macOS before applying.
+///
+/// This is also where the one-time first-run orientation surfaces. On macOS
+/// with permission denied the settings window already opens, so the
+/// orientation rides along with it. Everywhere else — every Windows launch,
+/// and macOS once permission is granted — nothing would otherwise open a
+/// window at all, so a genuine first run opens Settings for the one moment it
+/// is owed. `state.orientation_pending()` is false on every later launch, so
+/// this cannot become a recurring interruption.
 fn begin_permission_flow<R: Runtime>(app: &AppHandle<R>, state: Arc<AppState>) {
     match state.permission_status(false) {
         Ok(PermissionStatus::Granted) | Ok(PermissionStatus::NotRequired) => {
             state.apply_hotkeys();
+            open_settings_for_first_run(app, &state);
         }
         Ok(PermissionStatus::Denied) => {
             log::info!("accessibility permission denied; opening settings and polling");
@@ -199,7 +219,21 @@ fn begin_permission_flow<R: Runtime>(app: &AppHandle<R>, state: Arc<AppState>) {
         Err(err) => {
             log::error!("could not read permission status: {err}; applying hotkeys anyway");
             state.apply_hotkeys();
+            open_settings_for_first_run(app, &state);
         }
+    }
+}
+
+/// Opens Settings only when a first-run orientation is still owed. Does not
+/// claim the orientation: the settings UI does that, so a failure to open the
+/// window leaves the orientation owed for next time rather than losing it.
+fn open_settings_for_first_run<R: Runtime>(app: &AppHandle<R>, state: &AppState) {
+    if !state.orientation_pending() {
+        return;
+    }
+    log::info!("first run; opening settings to introduce the default shortcuts");
+    if let Err(err) = window::open_settings(app, state.build_kind()) {
+        log::error!("failed to open settings window for first run: {err}");
     }
 }
 

@@ -35,11 +35,18 @@ export const setCycling = (
 export const setAnimation = (enabled: boolean): Promise<Config> =>
   invoke("set_animation", { enabled });
 
+export const setAnimationDuration = (durationMs: number): Promise<Config> =>
+  invoke("set_animation_duration", { durationMs });
+
 export const setLaunchOnLogin = (enabled: boolean): Promise<Config> =>
   invoke("set_launch_on_login", { enabled });
 
 export const resetToDefaults = (): Promise<Config> =>
   invoke("reset_to_defaults");
+
+/** Claims the one-time first-run orientation. True at most once, ever. */
+export const takeOrientation = (): Promise<boolean> =>
+  invoke("take_orientation");
 
 export const performAction = (action: WindowAction): Promise<void> =>
   invoke("perform_action", { action });

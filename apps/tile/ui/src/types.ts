@@ -79,10 +79,20 @@ export type WindowAction =
   | "third-display"
   | "fourth-display";
 
-/** Presentation families, mirroring `WindowFamily::ALL` and its labels. */
-export const FAMILIES: { id: string; label: string }[] = [
+/**
+ * Presentation families, mirroring `WindowFamily::ALL` and its labels.
+ *
+ * `description` is optional and explains behaviour a label cannot carry. Only
+ * families whose behaviour is genuinely surprising should have one.
+ */
+export const FAMILIES: { id: string; label: string; description?: string }[] = [
   { id: "halves", label: "Halves" },
-  { id: "displays", label: "Displays" },
+  {
+    id: "displays",
+    label: "Displays",
+    description:
+      "Moving a window to another display keeps its slot where it can — a left third stays a left third. A window that is not in a recognisable slot keeps its relative place instead, measured against each display's own work area, so mixed-resolution setups behave.",
+  },
   { id: "corners", label: "Corners" },
   { id: "horizontal-thirds", label: "Horizontal Thirds" },
   { id: "vertical-thirds", label: "Vertical Thirds" },
@@ -451,7 +461,6 @@ export interface Config {
   bindings: Partial<Record<WindowAction, Hotkey | null>>;
   gap: Gaps;
   launchOnLogin: boolean;
-  showTrayIcon: boolean;
   almostMaximizeWidth: number;
   almostMaximizeHeight: number;
   sizeStep: number;

@@ -13,10 +13,12 @@ import {
   installUpdate,
   resetToDefaults,
   setAnimation,
+  setAnimationDuration,
   setBinding,
   setCycling,
   setGaps,
   setLaunchOnLogin,
+  takeOrientation,
 } from "./api";
 import { formatHotkey, interpret } from "./hotkey";
 import {
@@ -58,6 +60,7 @@ const dom = {
   bindings: el<HTMLUListElement>("#bindings"),
   assignedBindings: el<HTMLUListElement>("#assigned-bindings"),
   allShortcutsCount: el<HTMLSpanElement>("#all-shortcuts-count"),
+  shortcutFilter: el<HTMLInputElement>("#shortcut-filter"),
   recordingStatus: el<HTMLParagraphElement>("#recording-status"),
   gapWindow: el<HTMLInputElement>("#gap-window"),
   gapWindowNumber: el<HTMLInputElement>("#gap-window-number"),
@@ -71,9 +74,14 @@ const dom = {
   cycleSizes: el<HTMLFieldSetElement>("#cycle-sizes"),
   cycleSizesGrid: el<HTMLDivElement>("#cycle-sizes-grid"),
   animate: el<HTMLInputElement>("#animate-moves"),
+  animationDuration: el<HTMLInputElement>("#animation-duration"),
+  animationDurationNumber: el<HTMLInputElement>("#animation-duration-number"),
   launch: el<HTMLInputElement>("#launch-on-login"),
   reset: el<HTMLButtonElement>("#reset"),
   permissionPanel: el<HTMLElement>("#permission-panel"),
+  orientationPanel: el<HTMLElement>("#orientation-panel"),
+  orientationKeys: el<HTMLUListElement>("#orientation-keys"),
+  orientationDismiss: el<HTMLButtonElement>("#orientation-dismiss"),
   grant: el<HTMLButtonElement>("#grant-permission"),
   openAccessibility: el<HTMLButtonElement>("#open-accessibility"),
   developmentPanel: el<HTMLElement>("#development-panel"),
@@ -97,6 +105,10 @@ const dom = {
 let config: Config | null = null;
 let failures: HotkeyFailure[] = [];
 let recording: WindowAction | null = null;
+/** Current text in the shortcut filter. Empty means "show everything". */
+let shortcutFilter = "";
+/** The user's family open/closed state, stashed while a filter is active. */
+let openBeforeFilter: Set<string> | null = null;
 let permissionTimer: number | null = null;
 let updatePollTimer: number | null = null;
 let updateState: UpdateStatus = { status: "idle" };
@@ -145,17 +157,39 @@ function renderBindings(): void {
     }
   }
 
+  const filter = shortcutFilter.trim().toLowerCase();
+  const matchesFilter = (label: string): boolean =>
+    label.toLowerCase().includes(filter);
+
   const hasRendered = dom.bindings.childElementCount > 0;
-  const openFamilies = new Set(
+  const currentlyOpen = new Set(
     [...dom.bindings.querySelectorAll<HTMLDetailsElement>("details[open]")]
       .map((details) => details.dataset.family)
       .filter((family): family is string => family !== undefined),
   );
+
+  // Filtering force-opens every matching family, which would otherwise
+  // overwrite the user's own open/closed state. Stash it on the way in and
+  // put it back when the filter clears. The stash has to be read into a local
+  // first: clearing it before the read would silently discard it.
+  const restore = filter ? null : openBeforeFilter;
+  if (filter && openBeforeFilter === null) {
+    openBeforeFilter = currentlyOpen;
+  } else if (!filter) {
+    openBeforeFilter = null;
+  }
+  const openFamilies = filter ? currentlyOpen : (restore ?? currentlyOpen);
+
   dom.bindings.replaceChildren();
+  let shown = 0;
 
   for (const family of FAMILIES) {
     const actions = ACTIONS.filter((a) => a.family === family.id);
     if (actions.length === 0) continue;
+
+    const matches = filter ? actions.filter((a) => matchesFilter(a.label)) : actions;
+    // A family with nothing to show is noise while filtering.
+    if (matches.length === 0) continue;
 
     const group = document.createElement("li");
     group.className = "binding-group";
@@ -163,9 +197,14 @@ function renderBindings(): void {
     const disclosure = document.createElement("details");
     disclosure.className = "binding-group__disclosure";
     disclosure.dataset.family = family.id;
-    disclosure.open = hasRendered
-      ? openFamilies.has(family.id)
-      : family.id === "halves" || actions.some(({ id }) => cfg.bindings[id]);
+    // While filtering, every surviving family opens: a match hidden inside a
+    // collapsed group is the one thing a filter must never do. The user's own
+    // open/closed state is restored as soon as the filter is cleared.
+    disclosure.open = filter
+      ? true
+      : hasRendered
+        ? openFamilies.has(family.id)
+        : family.id === "halves" || actions.some(({ id }) => cfg.bindings[id]);
 
     const summary = document.createElement("summary");
     summary.className = "binding-group__summary";
@@ -174,6 +213,8 @@ function renderBindings(): void {
     heading.className = "binding-group__title";
     heading.textContent = family.label;
 
+    // Counts describe the family, not the filter. A number that moved while
+    // typing would read as a bug rather than as information.
     const assignedCount = actions.filter(({ id }) => cfg.bindings[id]).length;
     const count = document.createElement("span");
     count.className = "binding-group__count";
@@ -182,16 +223,69 @@ function renderBindings(): void {
     summary.append(heading, count);
     disclosure.append(summary);
 
+    if (family.description) {
+      const description = document.createElement("p");
+      description.className = "binding-group__description";
+      description.textContent = family.description;
+      disclosure.append(description);
+    }
+
     const list = document.createElement("ul");
     list.className = "binding-group__list";
 
-    for (const { id, label } of actions) {
+    for (const { id, label } of matches) {
       list.append(renderBinding(cfg, conflicts, id, label, "all"));
     }
 
     disclosure.append(list);
     group.append(disclosure);
     dom.bindings.append(group);
+    shown += matches.length;
+  }
+
+  if (filter && shown === 0) {
+    const empty = document.createElement("li");
+    empty.className = "shortcut-empty";
+    empty.textContent = `No shortcuts match \u201c${shortcutFilter.trim()}\u201d.`;
+    dom.bindings.append(empty);
+  }
+}
+
+/**
+ * The actions the orientation introduces: the four arrows that do the everyday
+ * work, then the two display throws. Read from the live config rather than
+ * hard-coded keys, so a customised binding is never described wrongly.
+ */
+const ORIENTATION_ACTIONS: { id: WindowAction; summary: string }[] = [
+  { id: "left-half", summary: "Left half of the screen" },
+  { id: "right-half", summary: "Right half of the screen" },
+  { id: "maximize", summary: "Fill the screen" },
+  { id: "restore", summary: "Put it back where it was" },
+  { id: "previous-display", summary: "Throw to the display on the left" },
+  { id: "next-display", summary: "Throw to the display on the right" },
+];
+
+/** Renders the first-run orientation from whatever is currently bound. */
+function renderOrientation(cfg: Config): void {
+  dom.orientationKeys.replaceChildren();
+  for (const { id, summary } of ORIENTATION_ACTIONS) {
+    const hk = cfg.bindings[id];
+    // An unbound action has nothing to teach, so it is simply left out.
+    if (!hk) continue;
+
+    const row = document.createElement("li");
+    row.className = "orientation__key";
+
+    const combo = document.createElement("kbd");
+    combo.className = "orientation__combo";
+    combo.textContent = formatHotkey(hk);
+
+    const what = document.createElement("span");
+    what.className = "orientation__summary";
+    what.textContent = summary;
+
+    row.append(combo, what);
+    dom.orientationKeys.append(row);
   }
 }
 
@@ -339,6 +433,8 @@ function renderBehaviour(): void {
   dom.subsequentMode.value = config.subsequentExecutionMode;
   renderCycleSizes(config);
   dom.animate.checked = config.animation.enabled;
+  mirrorAnimationDuration(String(config.animation.durationMs));
+  setAnimationDurationEnabled(config.animation.enabled);
   dom.launch.checked = config.launchOnLogin;
 }
 
@@ -624,13 +720,47 @@ function mirrorWindowGap(raw: string): void {
   dom.gapWindowNumber.value = String(gap);
 }
 
-async function refreshPermission(prompt: boolean): Promise<void> {
+/**
+ * Mirrors the animation-duration slider and number field. These bounds match
+ * `MIN_ANIMATION_DURATION_MS` and `MAX_ANIMATION_DURATION_MS`; the core crate
+ * clamps again on save, so this is presentation only, never the real guard.
+ */
+function mirrorAnimationDuration(raw: string): void {
+  const parsed = Number(raw);
+  const ms = Number.isFinite(parsed)
+    ? Math.round(Math.min(1000, Math.max(40, parsed)))
+    : 220;
+  dom.animationDuration.value = String(ms);
+  dom.animationDurationNumber.value = String(ms);
+}
+
+/** Duration is meaningless while animation is off, so it follows the toggle. */
+function setAnimationDurationEnabled(enabled: boolean): void {
+  dom.animationDuration.disabled = !enabled;
+  dom.animationDurationNumber.disabled = !enabled;
+}
+
+async function commitAnimationDuration(): Promise<void> {
+  try {
+    config = await setAnimationDuration(Number(dom.animationDuration.value));
+    mirrorAnimationDuration(String(config.animation.durationMs));
+  } catch (err) {
+    setRecordingStatus(`Could not update animation duration: ${String(err)}`);
+    if (config) mirrorAnimationDuration(String(config.animation.durationMs));
+  }
+}
+
+/** Refreshes the permission panel, returning whether permission is denied. */
+async function refreshPermission(prompt: boolean): Promise<boolean> {
   let status;
   try {
     status = await getPermissionStatus(prompt);
   } catch (err) {
+    // An unreadable status is not a denial. The Rust side applies hotkeys
+    // anyway in this case, so treating it as denied here would strand the
+    // orientation forever.
     console.error("permission check failed", err);
-    return;
+    return false;
   }
 
   const denied = status === "denied";
@@ -644,7 +774,12 @@ async function refreshPermission(prompt: boolean): Promise<void> {
     // Permission just became available: surface any late hotkey failures.
     failures = await getHotkeyFailures();
     renderBindings();
+    // This is also the moment the orientation was waiting for. The shortcuts
+    // it describes only started working just now.
+    await maybeShowOrientation(false);
   }
+
+  return denied;
 }
 
 function wireEvents(): void {
@@ -687,6 +822,7 @@ function wireEvents(): void {
   dom.animate.addEventListener("change", async () => {
     try {
       config = await setAnimation(dom.animate.checked);
+      setAnimationDurationEnabled(config.animation.enabled);
     } catch (err) {
       setRecordingStatus(`Could not update animation: ${String(err)}`);
       // Put the checkbox back where the saved config says it is, so it never
@@ -695,6 +831,21 @@ function wireEvents(): void {
     }
   });
 
+  dom.animationDuration.addEventListener("input", () =>
+    mirrorAnimationDuration(dom.animationDuration.value),
+  );
+  dom.animationDuration.addEventListener(
+    "change",
+    () => void commitAnimationDuration(),
+  );
+  dom.animationDurationNumber.addEventListener("input", () =>
+    mirrorAnimationDuration(dom.animationDurationNumber.value),
+  );
+  dom.animationDurationNumber.addEventListener(
+    "change",
+    () => void commitAnimationDuration(),
+  );
+
   dom.launch.addEventListener("change", async () => {
     try {
       config = await setLaunchOnLogin(dom.launch.checked);
@@ -702,6 +853,11 @@ function wireEvents(): void {
       setRecordingStatus(`Could not update launch-on-login: ${String(err)}`);
       dom.launch.checked = config?.launchOnLogin ?? false;
     }
+  });
+
+  dom.shortcutFilter.addEventListener("input", () => {
+    shortcutFilter = dom.shortcutFilter.value;
+    renderBindings();
   });
 
   dom.reset.addEventListener("click", async () => {
@@ -723,6 +879,38 @@ function wireEvents(): void {
     } catch (err) {
       console.error("could not open Accessibility settings", err);
     }
+  });
+}
+
+/**
+ * Shows the one-time first-run orientation, unless Accessibility permission is
+ * still missing.
+ *
+ * The gate matters because the claim is consumed permanently. Showing
+ * "hold this modifier and press an arrow" directly above a panel saying those
+ * shortcuts do nothing would contradict itself, and would spend the single
+ * orientation at the one moment Tile cannot actually do anything. When
+ * permission is denied the claim is left untouched, and `refreshPermission`
+ * retries as soon as the user grants it.
+ */
+async function maybeShowOrientation(permissionDenied: boolean): Promise<void> {
+  if (!config || permissionDenied) return;
+  let owed = false;
+  try {
+    owed = await takeOrientation();
+  } catch (err) {
+    // Orientation is a nicety; never let it stop the settings UI loading.
+    console.error("could not check first-run orientation", err);
+    return;
+  }
+  if (!owed) return;
+
+  renderOrientation(config);
+  dom.orientationPanel.hidden = false;
+  // Claiming already recorded that orientation was shown, so dismissal is
+  // purely visual.
+  dom.orientationDismiss.addEventListener("click", () => {
+    dom.orientationPanel.hidden = true;
   });
 }
 
@@ -797,7 +985,10 @@ async function boot(): Promise<void> {
   }
   renderBindings();
   renderBehaviour();
-  await refreshPermission(false);
+  // Permission is resolved first: the orientation must not appear while the
+  // shortcuts it describes are still inert.
+  const permissionDenied = await refreshPermission(false);
+  await maybeShowOrientation(permissionDenied);
   scheduleUpdateRefresh(await initialUpdateStatus);
 }
 
