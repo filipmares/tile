@@ -44,9 +44,19 @@ export const setLaunchOnLogin = (enabled: boolean): Promise<Config> =>
 export const resetToDefaults = (): Promise<Config> =>
   invoke("reset_to_defaults");
 
-/** Claims the one-time first-run orientation. True at most once, ever. */
+/**
+ * Claims the one-time first-run orientation, and records that it happened.
+ * True at most once, ever. The welcome screen claims it as it renders, so a
+ * window that never opened leaves the first run owed for next launch.
+ */
 export const takeOrientation = (): Promise<boolean> =>
   invoke("take_orientation");
+
+/** Opens the settings window, from a window that is not it. */
+export const openSettings = (): Promise<void> => invoke("open_settings");
+
+/** Reopens the welcome screen on demand. */
+export const openWelcome = (): Promise<void> => invoke("open_welcome");
 
 export const performAction = (action: WindowAction): Promise<void> =>
   invoke("perform_action", { action });

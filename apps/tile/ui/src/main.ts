@@ -3,6 +3,7 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   checkForUpdates,
   getBuildInfo,
@@ -11,6 +12,8 @@ import {
   getPermissionStatus,
   getUpdateStatus,
   installUpdate,
+  openSettings,
+  openWelcome,
   resetToDefaults,
   setAnimation,
   setAnimationDuration,
@@ -40,6 +43,9 @@ const ACCESSIBILITY_URL =
   "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
 const GITHUB_URL = "https://github.com/filipmares/tile";
 const isAboutScreen = new URLSearchParams(window.location.search).has("about");
+const isWelcomeScreen = new URLSearchParams(window.location.search).has(
+  "welcome",
+);
 const updateIntent = window.sessionStorage.getItem("tile-update-intent");
 window.sessionStorage.removeItem("tile-update-intent");
 
@@ -78,11 +84,14 @@ const dom = {
   animationDurationNumber: el<HTMLInputElement>("#animation-duration-number"),
   launch: el<HTMLInputElement>("#launch-on-login"),
   reset: el<HTMLButtonElement>("#reset"),
+  showWelcome: el<HTMLButtonElement>("#show-welcome"),
   permissionPanel: el<HTMLElement>("#permission-panel"),
-  orientationPanel: el<HTMLElement>("#orientation-panel"),
-  orientationHome: el<HTMLSpanElement>("#orientation-home"),
-  orientationKeys: el<HTMLUListElement>("#orientation-keys"),
-  orientationDismiss: el<HTMLButtonElement>("#orientation-dismiss"),
+  welcome: el<HTMLElement>("#welcome"),
+  welcomeHome: el<HTMLSpanElement>("#welcome-home"),
+  welcomeKeys: el<HTMLUListElement>("#welcome-keys"),
+  welcomeActionCount: el<HTMLSpanElement>("#welcome-action-count"),
+  welcomeSettings: el<HTMLButtonElement>("#welcome-settings"),
+  welcomeDismiss: el<HTMLButtonElement>("#welcome-dismiss"),
   grant: el<HTMLButtonElement>("#grant-permission"),
   openAccessibility: el<HTMLButtonElement>("#open-accessibility"),
   developmentPanel: el<HTMLElement>("#development-panel"),
@@ -224,13 +233,6 @@ function renderBindings(): void {
     summary.append(heading, count);
     disclosure.append(summary);
 
-    if (family.description) {
-      const description = document.createElement("p");
-      description.className = "binding-group__description";
-      description.textContent = family.description;
-      disclosure.append(description);
-    }
-
     const list = document.createElement("ul");
     list.className = "binding-group__list";
 
@@ -253,11 +255,11 @@ function renderBindings(): void {
 }
 
 /**
- * The actions the orientation introduces: the four arrows that do the everyday
+ * The actions the welcome screen introduces: the four that do the everyday
  * work, then the two display throws. Read from the live config rather than
  * hard-coded keys, so a customised binding is never described wrongly.
  */
-const ORIENTATION_ACTIONS: { id: WindowAction; summary: string }[] = [
+const WELCOME_ACTIONS: { id: WindowAction; summary: string }[] = [
   { id: "left-half", summary: "Left half of the screen" },
   { id: "right-half", summary: "Right half of the screen" },
   { id: "maximize", summary: "Fill the screen" },
@@ -266,30 +268,37 @@ const ORIENTATION_ACTIONS: { id: WindowAction; summary: string }[] = [
   { id: "next-display", summary: "Throw to the display on the right" },
 ];
 
-/** Renders the first-run orientation from whatever is currently bound. */
-function renderOrientation(cfg: Config): void {
-  // Windows puts the icon in the system tray, macOS in the menu bar. This is
-  // onboarding copy, so naming the wrong one sends the user hunting.
-  dom.orientationHome.textContent = isMac() ? "menu bar" : "system tray";
-  dom.orientationKeys.replaceChildren();
-  for (const { id, summary } of ORIENTATION_ACTIONS) {
-    const hk = cfg.bindings[id];
+/** Renders the welcome key list from whatever is currently bound. */
+function renderWelcomeKeys(cfg: Config | null): void {
+  dom.welcomeKeys.replaceChildren();
+  for (const { id, summary } of WELCOME_ACTIONS) {
+    const hk = cfg?.bindings[id];
     // An unbound action has nothing to teach, so it is simply left out.
     if (!hk) continue;
 
     const row = document.createElement("li");
-    row.className = "orientation__key";
+    row.className = "welcome__key";
 
     const combo = document.createElement("kbd");
-    combo.className = "orientation__combo";
+    combo.className = "welcome__combo";
     combo.textContent = formatHotkey(hk);
 
     const what = document.createElement("span");
-    what.className = "orientation__summary";
+    what.className = "welcome__summary";
     what.textContent = summary;
 
     row.append(combo, what);
-    dom.orientationKeys.append(row);
+    dom.welcomeKeys.append(row);
+  }
+
+  // Every one of these can be unbound by hand, and the config may have failed
+  // to load entirely. Saying so beats an empty gap where the keys should be.
+  if (dom.welcomeKeys.childElementCount === 0) {
+    const empty = document.createElement("li");
+    empty.className = "welcome__empty";
+    empty.textContent =
+      "None of the default shortcuts are bound. Open Settings to assign your own.";
+    dom.welcomeKeys.append(empty);
   }
 }
 
@@ -765,17 +774,16 @@ async function commitAnimationDuration(): Promise<void> {
   }
 }
 
-/** Refreshes the permission panel, returning whether permission is denied. */
-async function refreshPermission(prompt: boolean): Promise<boolean> {
+/** Refreshes the permission panel, polling while permission is denied. */
+async function refreshPermission(prompt: boolean): Promise<void> {
   let status;
   try {
     status = await getPermissionStatus(prompt);
   } catch (err) {
-    // An unreadable status is not a denial. The Rust side applies hotkeys
-    // anyway in this case, so treating it as denied here would strand the
-    // orientation forever.
+    // An unreadable status is not a denial: the Rust side applies hotkeys
+    // anyway in that case, so the panel stays quiet rather than accusing.
     console.error("permission check failed", err);
-    return false;
+    return;
   }
 
   const denied = status === "denied";
@@ -789,12 +797,7 @@ async function refreshPermission(prompt: boolean): Promise<boolean> {
     // Permission just became available: surface any late hotkey failures.
     failures = await getHotkeyFailures();
     renderBindings();
-    // This is also the moment the orientation was waiting for. The shortcuts
-    // it describes only started working just now.
-    await maybeShowOrientation(false);
   }
-
-  return denied;
 }
 
 function wireEvents(): void {
@@ -897,6 +900,11 @@ function wireEvents(): void {
   });
 
   dom.grant.addEventListener("click", () => void refreshPermission(true));
+  dom.showWelcome.addEventListener("click", () => {
+    void openWelcome().catch((err) =>
+      console.error("could not open the welcome window", err),
+    );
+  });
   dom.openAccessibility.addEventListener("click", async () => {
     try {
       await openUrl(ACCESSIBILITY_URL);
@@ -907,38 +915,57 @@ function wireEvents(): void {
 }
 
 /**
- * Shows the one-time first-run orientation, unless Accessibility permission is
- * still missing.
- *
- * The gate matters because the claim is consumed permanently. Showing
- * "hold this modifier and press an arrow" directly above a panel saying those
- * shortcuts do nothing would contradict itself, and would spend the single
- * orientation at the one moment Tile cannot actually do anything. When
- * permission is denied the claim is left untouched, and `refreshPermission`
- * retries as soon as the user grants it.
+ * Boots the welcome screen: its own window, and the only place Tile explains
+ * its defaults. Settings carries the controls and links back here.
  */
-async function maybeShowOrientation(permissionDenied: boolean): Promise<void> {
-  if (!config || permissionDenied) return;
-  let owed = false;
-  try {
-    owed = await takeOrientation();
-  } catch (err) {
-    // Orientation is a nicety; never let it stop the settings UI loading.
-    console.error("could not check first-run orientation", err);
-    return;
+async function bootWelcome(): Promise<void> {
+  dom.app.classList.add("app--welcome");
+  for (const child of dom.app.children) {
+    if (child !== dom.welcome) (child as HTMLElement).hidden = true;
   }
-  if (!owed) return;
+  dom.welcome.hidden = false;
+  // Windows puts the icon in the system tray, macOS in the menu bar. This is
+  // onboarding copy, so naming the wrong one sends the user hunting.
+  dom.welcomeHome.textContent = isMac() ? "menu bar" : "system tray";
+  dom.welcomeActionCount.textContent = String(ACTIONS.length);
 
-  renderOrientation(config);
-  dom.orientationPanel.hidden = false;
-  // Claiming already recorded that orientation was shown, so dismissal is
-  // purely visual.
-  dom.orientationDismiss.addEventListener("click", () => {
-    dom.orientationPanel.hidden = true;
+  // Wire the actions before awaiting anything, so a slow or failing config
+  // load can never leave the buttons dead.
+  dom.welcomeSettings.addEventListener("click", () => {
+    void openSettings().catch((err) =>
+      console.error("could not open settings", err),
+    );
   });
+  dom.welcomeDismiss.addEventListener("click", () => {
+    void getCurrentWindow()
+      .close()
+      .catch((err) => console.error("could not close the welcome window", err));
+  });
+
+  let cfg: Config | null = null;
+  try {
+    cfg = await getConfig();
+  } catch (err) {
+    console.error("could not load settings for the welcome screen", err);
+  }
+  renderWelcomeKeys(cfg);
+
+  // Claim last, so the first run is only spent once the screen it owes has
+  // actually been rendered. Claiming records itself immediately, so quitting
+  // without dismissing does not bring the window back.
+  try {
+    await takeOrientation();
+  } catch (err) {
+    console.error("could not record the first-run welcome", err);
+  }
 }
 
 async function boot(): Promise<void> {
+  if (isWelcomeScreen) {
+    await bootWelcome();
+    return;
+  }
+
   if (isAboutScreen) {
     dom.app.classList.add("app--about");
     for (const child of dom.app.children) {
@@ -1009,10 +1036,7 @@ async function boot(): Promise<void> {
   }
   renderBindings();
   renderBehaviour();
-  // Permission is resolved first: the orientation must not appear while the
-  // shortcuts it describes are still inert.
-  const permissionDenied = await refreshPermission(false);
-  await maybeShowOrientation(permissionDenied);
+  await refreshPermission(false);
   scheduleUpdateRefresh(await initialUpdateStatus);
 }
 

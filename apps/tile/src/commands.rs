@@ -98,11 +98,27 @@ pub fn set_launch_on_login<R: Runtime>(
 }
 
 /// Claims the one-time first-run orientation. Returns `true` at most once per
-/// installation, and records that fact before returning, so reopening Settings
-/// or relaunching never repeats it.
+/// installation, and records that fact before returning, so reopening the
+/// welcome screen or relaunching never re-triggers a first run.
 #[tauri::command]
 pub fn take_orientation(state: State<'_, Shared>) -> bool {
     state.take_orientation()
+}
+
+/// Opens the settings window. Used by the welcome screen, which is a window of
+/// its own and so cannot simply scroll the user to the controls.
+#[tauri::command]
+pub fn open_settings<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, Shared>,
+) -> Result<(), String> {
+    crate::window::open_settings(&app, state.build_kind()).map_err(|err| err.to_string())
+}
+
+/// Reopens the welcome screen on demand, from the settings footer.
+#[tauri::command]
+pub fn open_welcome<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    crate::window::open_welcome(&app).map_err(|err| err.to_string())
 }
 
 #[tauri::command]

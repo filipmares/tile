@@ -327,14 +327,6 @@ body {
   font-size: 12px;
 }
 
-.binding-group__description {
-  margin: 0;
-  padding: 8px 12px 4px;
-  color: var(--text-dim);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
 .binding-group__list {
   list-style: none;
   margin: 0;
@@ -607,42 +599,121 @@ select {
   width: 100%;
 }
 
-/* First-run only: a one-time welcome, styled as a positive moment rather than
-   a warning. It is never shown again once dismissed. */
-.panel--welcome {
+/* The welcome screen: its own window, and the only place Tile explains what
+   its defaults do. Centred like About, but tall enough to read. */
+.app.app--welcome {
+  min-height: 100vh;
+  padding: 28px;
   background: var(--surface-2);
-  border-color: var(--accent);
 }
 
-.orientation__keys {
+.welcome {
+  width: min(100%, 460px);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: 28px 26px 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 8%, transparent),
+    0 8px 20px color-mix(in srgb, var(--text) 7%, transparent);
+  animation: about-fade-in 240ms ease-out both;
+}
+
+.welcome__header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.welcome__mark {
+  display: block;
+  flex: 0 0 auto;
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  filter: drop-shadow(0 5px 10px color-mix(in srgb, var(--accent) 22%, transparent));
+}
+
+.welcome__title {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.15;
+  letter-spacing: -0.03em;
+}
+
+.welcome__lead {
+  margin: 6px 0 0;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.welcome__step {
+  display: grid;
+  gap: 6px;
+}
+
+.welcome__step-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.welcome__step-body {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.welcome__keys {
   list-style: none;
-  margin: 12px 0;
+  margin: 4px 0 0;
   padding: 0;
   display: grid;
   gap: 6px;
 }
 
-.orientation__key {
+.welcome__key {
   display: grid;
   grid-template-columns: minmax(0, auto) 1fr;
   align-items: baseline;
   gap: 10px;
 }
 
-.orientation__combo {
+.welcome__combo {
   justify-self: start;
   padding: 3px 8px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--surface);
+  background: var(--surface-2);
   font-family: inherit;
   font-size: 12px;
   white-space: nowrap;
 }
 
-.orientation__summary {
+.welcome__summary,
+.welcome__empty {
   color: var(--text-dim);
   font-size: 13px;
+}
+
+.welcome__actions {
+  display: flex;
+  gap: 10px;
+}
+
+.welcome__actions .button {
+  flex: 1;
+}
+
+.welcome__meta {
+  margin: -12px 0 0;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-align: center;
 }
 
 /* Development builds only: a quiet, unmistakable marker that this is not the
@@ -732,7 +803,8 @@ select {
 
 .app__footer {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  gap: 12px;
   padding-top: 2px;
 }
 

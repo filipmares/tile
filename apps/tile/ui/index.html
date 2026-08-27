@@ -31,31 +31,95 @@
       </section>
 
       <section
-        id="orientation-panel"
-        class="panel panel--welcome"
+        id="welcome"
+        class="welcome"
         hidden
-        aria-labelledby="orientation-heading"
+        aria-labelledby="welcome-heading"
       >
-        <h2 id="orientation-heading">Tile is running</h2>
-        <p>
-          Tile has no main window — it runs in the background, and its icon is
-          in the <span id="orientation-home">menu bar</span>. Hold the modifier
-          below and press an arrow to place the focused window.
-        </p>
-        <ul class="orientation__keys" id="orientation-keys"></ul>
-        <p class="panel__hint">
-          Press the same arrow again to change the size. Every other action is
-          in Shortcuts below, ready to bind to keys of your own.
-        </p>
-        <div class="panel__actions">
+        <header class="welcome__header">
+          <img
+            class="welcome__mark"
+            src="./icon.png"
+            alt=""
+            width="56"
+            height="56"
+          />
+          <div>
+            <h1 id="welcome-heading" class="welcome__title">Welcome to Tile</h1>
+            <p class="welcome__lead">
+              Tile has no main window. It runs in the background, and its icon
+              is in the <span id="welcome-home">menu bar</span>.
+            </p>
+          </div>
+        </header>
+
+        <section class="welcome__step" aria-labelledby="welcome-keys-heading">
+          <h2 id="welcome-keys-heading" class="welcome__step-title">
+            Try it now
+          </h2>
+          <p class="welcome__step-body">
+            Click any window to focus it, then hold the modifier and press one
+            of these.
+          </p>
+          <ul class="welcome__keys" id="welcome-keys"></ul>
+        </section>
+
+        <section class="welcome__step" aria-labelledby="welcome-repeat-heading">
+          <h2 id="welcome-repeat-heading" class="welcome__step-title">
+            Press the same shortcut again
+          </h2>
+          <p class="welcome__step-body">
+            Repeating a shortcut changes the size instead of repeating the
+            move. The left and right arrows cycle half, then two thirds, then a
+            third, then back to half. The cycle restarts when you run a
+            different action, switch to another window, or move the window
+            yourself.
+          </p>
+        </section>
+
+        <section
+          class="welcome__step"
+          aria-labelledby="welcome-displays-heading"
+        >
+          <h2 id="welcome-displays-heading" class="welcome__step-title">
+            Moving between displays
+          </h2>
+          <p class="welcome__step-body">
+            Throwing a window to another display keeps its slot where it can —
+            a left third stays a left third. A window that is not in a
+            recognisable slot keeps its relative place instead, measured
+            against each display's own work area, so mixed-resolution setups
+            behave.
+          </p>
+        </section>
+
+        <section class="welcome__step" aria-labelledby="welcome-more-heading">
+          <h2 id="welcome-more-heading" class="welcome__step-title">
+            Everything else
+          </h2>
+          <p class="welcome__step-body">
+            Tile has <span id="welcome-action-count">more</span> window actions
+            in total. The ones above are bound out of the box; the rest are
+            waiting in Settings for keys of your own, next to window spacing,
+            motion and startup.
+          </p>
+        </section>
+
+        <div class="welcome__actions">
           <button
-            id="orientation-dismiss"
+            id="welcome-settings"
             type="button"
             class="button button--primary"
           >
-            Got it
+            Open Settings
+          </button>
+          <button id="welcome-dismiss" type="button" class="button">
+            Done
           </button>
         </div>
+        <p class="welcome__meta">
+          You can reopen this from the bottom of Settings.
+        </p>
       </section>
 
       <section
@@ -158,13 +222,6 @@
         <details class="settings-group">
           <summary class="settings-group__summary">Repeating shortcuts</summary>
           <div class="settings-group__content">
-          <p class="panel__hint">
-            Pressing the same shortcut again changes the size instead of
-            repeating the move. The left and right arrows cycle half, then two
-            thirds, then a third, then back to half. The cycle restarts when
-            you run a different action, switch to another window, or move the
-            window yourself.
-          </p>
           <div class="field">
             <label class="field__label" for="subsequent-mode">
               Repeating a shortcut
@@ -346,6 +403,9 @@
       </section>
 
       <footer class="app__footer">
+        <button id="show-welcome" type="button" class="button">
+          Show welcome guide
+        </button>
         <button id="reset" type="button" class="button button--danger">
           Restore defaults
         </button>

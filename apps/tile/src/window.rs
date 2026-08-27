@@ -13,6 +13,8 @@ use crate::build_kind::BuildKind;
 pub const SETTINGS_LABEL: &str = "settings";
 /// Stable label for the about window.
 pub const ABOUT_LABEL: &str = "about";
+/// Stable label for the welcome window.
+pub const WELCOME_LABEL: &str = "welcome";
 /// Requests that an open settings window start and surface an update check.
 const CHECK_FOR_UPDATES_EVENT: &str = "tile://check-for-updates";
 /// Requests that an open settings window surface the current update state.
@@ -67,6 +69,32 @@ pub fn open_update_settings<R: Runtime>(
         .resizable(true)
         .visible(true)
         .build()?;
+    Ok(())
+}
+
+/// Opens the welcome window, focusing it if it already exists.
+///
+/// This is the onboarding screen: it is what a first run opens, and the only
+/// place the defaults are explained. Settings carries controls, not tuition.
+pub fn open_welcome<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
+    if let Some(window) = app.get_webview_window(WELCOME_LABEL) {
+        window.show()?;
+        window.unminimize().ok();
+        window.set_focus()?;
+        return Ok(());
+    }
+
+    WebviewWindowBuilder::new(
+        app,
+        WELCOME_LABEL,
+        WebviewUrl::App("index.html?welcome".into()),
+    )
+    .title("Welcome to Tile")
+    .inner_size(520.0, 680.0)
+    .min_inner_size(420.0, 480.0)
+    .resizable(true)
+    .visible(true)
+    .build()?;
     Ok(())
 }
 

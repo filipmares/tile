@@ -64,6 +64,8 @@ pub fn run() {
             commands::set_launch_on_login,
             commands::reset_to_defaults,
             commands::take_orientation,
+            commands::open_settings,
+            commands::open_welcome,
             commands::perform_action,
             commands::get_permission_status,
             commands::get_hotkey_failures,
@@ -196,51 +198,54 @@ fn setup_app<R: Runtime>(
 /// Checks permission and applies hotkeys, or waits for the user to grant
 /// Accessibility on macOS before applying.
 ///
-/// This is also where the one-time first-run orientation surfaces. On macOS
-/// with permission denied the settings window already opens, so the
-/// orientation rides along with it. Everywhere else — every Windows launch,
-/// and macOS once permission is granted — nothing would otherwise open a
-/// window at all, so a genuine first run opens Settings for the one moment it
-/// is owed. `state.orientation_pending()` is false on every later launch, so
+/// This is also where the one-time first-run welcome surfaces. A genuine first
+/// run opens the welcome window for the one moment it is owed; nothing else
+/// would open a window at all on Windows, or on macOS once permission is
+/// granted. `state.orientation_pending()` is false on every later launch, so
 /// this cannot become a recurring interruption.
+///
+/// With permission denied the welcome waits: settings opens for its permission
+/// panel, and "hold this modifier and press an arrow" would be a lie until the
+/// user grants access. The permission poll opens the welcome the moment it
+/// stops being one.
 fn begin_permission_flow<R: Runtime>(app: &AppHandle<R>, state: Arc<AppState>) {
     match state.permission_status(false) {
         Ok(PermissionStatus::Granted) | Ok(PermissionStatus::NotRequired) => {
             state.apply_hotkeys();
-            open_settings_for_first_run(app, &state);
+            open_welcome_for_first_run(app, &state);
         }
         Ok(PermissionStatus::Denied) => {
             log::info!("accessibility permission denied; opening settings and polling");
             if let Err(err) = window::open_settings(app, state.build_kind()) {
                 log::error!("failed to open settings window: {err}");
             }
-            poll_until_granted(state);
+            poll_until_granted(app.clone(), state);
         }
         Err(err) => {
             log::error!("could not read permission status: {err}; applying hotkeys anyway");
             state.apply_hotkeys();
-            open_settings_for_first_run(app, &state);
+            open_welcome_for_first_run(app, &state);
         }
     }
 }
 
-/// Opens Settings only when a first-run orientation is still owed. Does not
-/// claim the orientation: the settings UI does that, so a failure to open the
-/// window leaves the orientation owed for next time rather than losing it.
-fn open_settings_for_first_run<R: Runtime>(app: &AppHandle<R>, state: &AppState) {
+/// Opens the welcome screen only when a first run is still owed. Does not claim
+/// the orientation: the welcome UI does that, so a failure to open the window
+/// leaves it owed for next time rather than losing it.
+fn open_welcome_for_first_run<R: Runtime>(app: &AppHandle<R>, state: &AppState) {
     if !state.orientation_pending() {
         return;
     }
-    log::info!("first run; opening settings to introduce the default shortcuts");
-    if let Err(err) = window::open_settings(app, state.build_kind()) {
-        log::error!("failed to open settings window for first run: {err}");
+    log::info!("first run; opening the welcome screen to introduce the default shortcuts");
+    if let Err(err) = window::open_welcome(app) {
+        log::error!("failed to open welcome window for first run: {err}");
     }
 }
 
 /// Background poll: applies hotkeys as soon as permission is granted. Only
 /// calls the non-prompting `permission_status(false)`, so it is safe off the
 /// main thread.
-fn poll_until_granted(state: Arc<AppState>) {
+fn poll_until_granted<R: Runtime>(app: AppHandle<R>, state: Arc<AppState>) {
     thread::Builder::new()
         .name("tile-permission-poll".into())
         .spawn(move || loop {
@@ -249,6 +254,15 @@ fn poll_until_granted(state: Arc<AppState>) {
                 Ok(PermissionStatus::Granted) | Ok(PermissionStatus::NotRequired) => {
                     log::info!("accessibility permission granted; applying hotkeys");
                     state.apply_hotkeys();
+                    // The shortcuts the welcome describes only started working
+                    // just now, so this is the first honest moment to show it.
+                    let handle = app.clone();
+                    let state = state.clone();
+                    if let Err(err) = app.run_on_main_thread(move || {
+                        open_welcome_for_first_run(&handle, &state);
+                    }) {
+                        log::error!("could not open the welcome window: {err}");
+                    }
                     break;
                 }
                 Ok(PermissionStatus::Denied) => continue,
