@@ -38,12 +38,8 @@ const ACCESSIBILITY_URL =
   "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
 const GITHUB_URL = "https://github.com/filipmares/tile";
 const isAboutScreen = new URLSearchParams(window.location.search).has("about");
-const checkForUpdatesOnOpen = new URLSearchParams(window.location.search).has(
-  "check-for-updates",
-);
-const showUpdatesOnOpen = new URLSearchParams(window.location.search).has(
-  "show-updates",
-);
+const updateIntent = window.sessionStorage.getItem("tile-update-intent");
+window.sessionStorage.removeItem("tile-update-intent");
 
 /** Non-null `querySelector`, throwing at boot if the markup is wrong. */
 function el<T extends HTMLElement>(selector: string): T {
@@ -508,6 +504,7 @@ function describeAboutUpdateStatus(status: UpdateStatus): string {
   }
 
   function focusUpdatePanel(): void {
+    dom.updatePanel.hidden = false;
     dom.updatePanel.scrollIntoView({ behavior: "smooth", block: "start" });
     dom.updatePanel.focus({ preventScroll: true });
   }
@@ -778,10 +775,10 @@ async function boot(): Promise<void> {
     focusUpdatePanel();
     void refreshUpdateStatus().then(scheduleUpdateRefresh);
   });
-  const initialUpdateStatus = checkForUpdatesOnOpen
+  const initialUpdateStatus = updateIntent === "check"
     ? runUpdateCheck()
     : refreshUpdateStatus();
-  if (checkForUpdatesOnOpen || showUpdatesOnOpen) {
+  if (updateIntent === "check" || updateIntent === "show") {
     focusUpdatePanel();
   }
   // Build provenance is fetched first and separately: if it fails, the rest of

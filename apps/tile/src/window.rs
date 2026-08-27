@@ -56,12 +56,11 @@ pub fn open_update_settings<R: Runtime>(
         return Ok(());
     }
 
-    let route = if check_for_updates {
-        "index.html?check-for-updates"
-    } else {
-        "index.html?show-updates"
-    };
-    WebviewWindowBuilder::new(app, SETTINGS_LABEL, WebviewUrl::App(route.into()))
+    let update_intent = if check_for_updates { "check" } else { "show" };
+    let initialization_script =
+        format!("window.sessionStorage.setItem('tile-update-intent', '{update_intent}');");
+    WebviewWindowBuilder::new(app, SETTINGS_LABEL, WebviewUrl::default())
+        .initialization_script(initialization_script)
         .title(kind.window_title())
         .inner_size(560.0, 640.0)
         .min_inner_size(460.0, 480.0)
