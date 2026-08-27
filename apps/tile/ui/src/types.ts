@@ -470,6 +470,8 @@ export interface Config {
   minimumWindowHeight: number;
   subsequentExecutionMode: SubsequentExecutionMode;
   cycleSizes: CycleSize[];
+  /** Set once the settings window has claimed the first-run orientation. */
+  orientationShown: boolean;
   animation: AnimationConfig;
 }
 

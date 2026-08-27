@@ -20,7 +20,7 @@ import {
   setLaunchOnLogin,
   takeOrientation,
 } from "./api";
-import { formatHotkey, interpret } from "./hotkey";
+import { formatHotkey, interpret, isMac } from "./hotkey";
 import {
   ACTIONS,
   BuildInfo,
@@ -80,6 +80,7 @@ const dom = {
   reset: el<HTMLButtonElement>("#reset"),
   permissionPanel: el<HTMLElement>("#permission-panel"),
   orientationPanel: el<HTMLElement>("#orientation-panel"),
+  orientationHome: el<HTMLSpanElement>("#orientation-home"),
   orientationKeys: el<HTMLUListElement>("#orientation-keys"),
   orientationDismiss: el<HTMLButtonElement>("#orientation-dismiss"),
   grant: el<HTMLButtonElement>("#grant-permission"),
@@ -267,6 +268,9 @@ const ORIENTATION_ACTIONS: { id: WindowAction; summary: string }[] = [
 
 /** Renders the first-run orientation from whatever is currently bound. */
 function renderOrientation(cfg: Config): void {
+  // Windows puts the icon in the system tray, macOS in the menu bar. This is
+  // onboarding copy, so naming the wrong one sends the user hunting.
+  dom.orientationHome.textContent = isMac() ? "menu bar" : "system tray";
   dom.orientationKeys.replaceChildren();
   for (const { id, summary } of ORIENTATION_ACTIONS) {
     const hk = cfg.bindings[id];
@@ -721,17 +725,28 @@ function mirrorWindowGap(raw: string): void {
 }
 
 /**
- * Mirrors the animation-duration slider and number field. These bounds match
- * `MIN_ANIMATION_DURATION_MS` and `MAX_ANIMATION_DURATION_MS`; the core crate
- * clamps again on save, so this is presentation only, never the real guard.
+ * Clamps a typed or dragged duration into the range the core crate enforces on
+ * save. These bounds match `MIN_ANIMATION_DURATION_MS` and
+ * `MAX_ANIMATION_DURATION_MS`, but this is presentation only: `normalize`
+ * clamps again on the way to disk and remains the real guard.
+ *
+ * An empty or unparseable field falls back to the saved value rather than the
+ * minimum, so clearing the box and tabbing away restores what was there
+ * instead of silently snapping to 40 ms.
  */
+function clampAnimationDuration(raw: string): number {
+  const parsed = Number(raw.trim());
+  if (raw.trim() === "" || !Number.isFinite(parsed)) {
+    return config?.animation.durationMs ?? 220;
+  }
+  return Math.round(Math.min(1000, Math.max(40, parsed)));
+}
+
+/** Puts a settled duration into both controls. */
 function mirrorAnimationDuration(raw: string): void {
-  const parsed = Number(raw);
-  const ms = Number.isFinite(parsed)
-    ? Math.round(Math.min(1000, Math.max(40, parsed)))
-    : 220;
-  dom.animationDuration.value = String(ms);
-  dom.animationDurationNumber.value = String(ms);
+  const ms = String(clampAnimationDuration(raw));
+  dom.animationDuration.value = ms;
+  dom.animationDurationNumber.value = ms;
 }
 
 /** Duration is meaningless while animation is off, so it follows the toggle. */
@@ -831,6 +846,8 @@ function wireEvents(): void {
     }
   });
 
+  // Dragging the slider only ever produces an in-range value, so both controls
+  // can track it live.
   dom.animationDuration.addEventListener("input", () =>
     mirrorAnimationDuration(dom.animationDuration.value),
   );
@@ -838,13 +855,20 @@ function wireEvents(): void {
     "change",
     () => void commitAnimationDuration(),
   );
-  dom.animationDurationNumber.addEventListener("input", () =>
-    mirrorAnimationDuration(dom.animationDurationNumber.value),
-  );
-  dom.animationDurationNumber.addEventListener(
-    "change",
-    () => void commitAnimationDuration(),
-  );
+
+  // Typing is different. Rewriting the field on every keystroke would turn "2"
+  // into "40" before the user could finish typing "200", so while the edit is
+  // in progress only the slider follows along. The field itself is normalized
+  // once the edit is committed on blur or Enter.
+  dom.animationDurationNumber.addEventListener("input", () => {
+    dom.animationDuration.value = String(
+      clampAnimationDuration(dom.animationDurationNumber.value),
+    );
+  });
+  dom.animationDurationNumber.addEventListener("change", () => {
+    mirrorAnimationDuration(dom.animationDurationNumber.value);
+    void commitAnimationDuration();
+  });
 
   dom.launch.addEventListener("change", async () => {
     try {

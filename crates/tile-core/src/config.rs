@@ -629,10 +629,14 @@ pub struct Config {
         deserialize_with = "deserialize_cycle_sizes"
     )]
     pub cycle_sizes: Vec<CycleSize>,
-    /// Whether the one-time first-run orientation has been shown and
-    /// dismissed. Absent from every config written before orientation existed,
-    /// which is exactly right: those users have already found their way around
-    /// and are recognised as existing by their config file's presence.
+    /// Whether the one-time first-run orientation has already been handed to
+    /// the user. Set when the settings window claims it, not when the user
+    /// dismisses the panel: nothing else writes the config at startup, so
+    /// waiting for a dismissal would show the orientation again to anyone who
+    /// quit without pressing the button. Absent from every config written
+    /// before orientation existed, which is exactly right: those users have
+    /// already found their way around and are recognised as existing by their
+    /// config file's presence.
     #[serde(default)]
     pub orientation_shown: bool,
     /// How a window travels to its new frame. Absent from configs written
