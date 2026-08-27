@@ -81,8 +81,7 @@ pub fn open_about<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 
     WebviewWindowBuilder::new(app, ABOUT_LABEL, WebviewUrl::App("index.html?about".into()))
         .title("About Tile")
-        .inner_size(420.0, 360.0)
-        .min_inner_size(380.0, 340.0)
+        .inner_size(420.0, 420.0)
         .resizable(false)
         .visible(true)
         .build()?;
