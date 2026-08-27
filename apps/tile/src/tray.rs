@@ -353,19 +353,67 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn menu_bar_glyph_is_monochrome_and_badges_stay_inside_it() {
+    fn menu_bar_glyph_carries_its_shape_in_alpha_only() {
         let icon = tauri::image::Image::from_bytes(MENU_BAR_TEMPLATE).expect("template loads");
-        let (width, height) = (icon.width(), icon.height());
         assert!(
             icon.rgba()
                 .chunks_exact(4)
                 .all(|pixel| pixel[0] == 0 && pixel[1] == 0 && pixel[2] == 0),
             "template images must carry shape in alpha only"
         );
+        assert!(
+            icon.rgba().chunks_exact(4).any(|pixel| pixel[3] > 0),
+            "template must not be fully transparent"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn badge_is_opaque_and_confined_to_the_lower_right_corner() {
+        let icon = tauri::image::Image::from_bytes(MENU_BAR_TEMPLATE).expect("template loads");
+        let (width, height) = (icon.width(), icon.height());
+        let plain = icon.rgba().to_vec();
 
         let badged = template_badged_icon().expect("badged template renders");
         assert_eq!((badged.width(), badged.height()), (width, height));
-        assert_ne!(badged.rgba(), icon.rgba());
+        let badged = badged.rgba();
+
+        // Same geometry the badge is drawn with, so the test pins the region
+        // rather than restating the drawing code's arithmetic.
+        let badge_radius = f64::from(width.min(height)) / 8.0;
+        let center_x = f64::from(width) - badge_radius - 1.0;
+        let center_y = f64::from(height) - badge_radius - 1.0;
+        let touched_radius = badge_radius + 1.5 + 1.0;
+
+        let mut badge_centre_alpha = None;
+        for y in 0..height {
+            for x in 0..width {
+                let offset = ((y * width + x) * 4) as usize;
+                let pixel = &badged[offset..offset + 4];
+                assert_eq!(
+                    (pixel[0], pixel[1], pixel[2]),
+                    (0, 0, 0),
+                    "badging must keep the image a template"
+                );
+
+                let distance = (f64::from(x) - center_x).hypot(f64::from(y) - center_y);
+                if distance > touched_radius {
+                    assert_eq!(
+                        pixel[3],
+                        plain[offset + 3],
+                        "badge changed pixel ({x}, {y}) outside its own region"
+                    );
+                } else if distance < 1.0 {
+                    badge_centre_alpha = Some(pixel[3]);
+                }
+            }
+        }
+
+        assert_eq!(
+            badge_centre_alpha,
+            Some(255),
+            "the badge dot itself must be solid"
+        );
     }
 
     #[test]
@@ -380,5 +428,18 @@ mod tests {
             }
         ));
         assert!(!needs_badge(BuildKind::Installed, &UpdateStatus::Current));
+    }
+
+    /// A downloaded update waiting on a relaunch still deserves a badge, so the
+    /// tray keeps nudging until the user restarts.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn updates_waiting_on_a_relaunch_keep_their_badge() {
+        assert!(needs_badge(
+            BuildKind::Installed,
+            &UpdateStatus::ReadyToRelaunch {
+                version: "1.2.3".into(),
+            }
+        ));
     }
 }
