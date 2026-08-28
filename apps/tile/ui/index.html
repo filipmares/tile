@@ -47,56 +47,59 @@
           <div>
             <h1 id="welcome-heading" class="welcome__title">Welcome to Tile</h1>
             <p class="welcome__lead">
-              Tile has no window of its own. It waits in the
-              <span id="welcome-home">menu bar</span> and moves whatever window
-              you are working in.
+              It lives in the <span id="welcome-home">menu bar</span> and moves
+              the window you were last in.
             </p>
           </div>
         </header>
 
-        <!-- A miniature of your desk. The pane inside it moves when Tile moves
-             a real window, so the walkthrough below shows its work. -->
+        <!-- A miniature of your desk. The dashed outline is where the next
+             press will put the window; the pane moves only once it really
+             has. -->
         <div class="stage" id="welcome-stage" aria-hidden="true">
           <div class="stage__screens" id="welcome-screens"></div>
+          <div class="stage__ghost" id="welcome-ghost" hidden></div>
           <div class="stage__pane" id="welcome-pane">
             <span class="stage__pane-bar"></span>
           </div>
         </div>
 
-        <section class="walk" aria-labelledby="welcome-walk-heading">
-          <div class="walk__head">
-            <h2 id="welcome-walk-heading" class="walk__title">
-              A few presses and you know Tile
-            </h2>
-            <p class="walk__count" id="welcome-progress" aria-live="polite">
-              0 of 3
-            </p>
+        <!-- One shortcut per slide. The deck advances when the shortcut is
+             actually pressed, so the slides are built in main.ts from the
+             bindings that exist on this machine. -->
+        <div class="deck">
+          <div class="deck__track" id="welcome-track">
+            <div class="slide slide--end" id="welcome-end">
+              <p class="slide__line" id="welcome-end-line">That is Tile.</p>
+              <p class="slide__aside">
+                <span id="welcome-action-count">75</span> more actions —
+                thirds, corners, nudges.
+              </p>
+              <div class="slide__actions">
+                <button id="welcome-settings" type="button" class="button">
+                  All shortcuts
+                </button>
+                <button
+                  id="welcome-dismiss"
+                  type="button"
+                  class="button button--primary"
+                >
+                  Start using Tile
+                </button>
+              </div>
+            </div>
           </div>
-          <ol class="walk__steps" id="welcome-steps"></ol>
-          <p class="walk__note" id="welcome-note" role="status" hidden></p>
-        </section>
-
-        <p class="welcome__more">
-          They are the start of
-          <span id="welcome-action-count">75</span> actions — thirds, quarters,
-          corners, nudges — all waiting for keys of your own.
-        </p>
-
-        <div class="welcome__actions">
-          <button id="welcome-settings" type="button" class="button">
-            All shortcuts
-          </button>
-          <button
-            id="welcome-dismiss"
-            type="button"
-            class="button button--primary"
-          >
-            Start using Tile
-          </button>
         </div>
-        <p class="welcome__meta">
-          You can reopen this from the bottom of Settings.
-        </p>
+
+        <p class="welcome__note" id="welcome-note" role="status" hidden></p>
+
+        <footer class="welcome__foot">
+          <div class="dots" id="welcome-dots" aria-hidden="true"></div>
+          <p class="sr-only" id="welcome-progress" aria-live="polite"></p>
+          <button id="welcome-skip" type="button" class="welcome__skip">
+            Skip
+          </button>
+        </footer>
       </section>
 
       <section

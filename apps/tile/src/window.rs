@@ -119,8 +119,8 @@ pub fn open_welcome<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         WebviewUrl::App("index.html?welcome".into()),
     )
     .title("Welcome to Tile")
-    .inner_size(520.0, 680.0)
-    .min_inner_size(460.0, 520.0)
+    .inner_size(520.0, 560.0)
+    .min_inner_size(460.0, 500.0)
     .resizable(true)
     .visible(true)
     .focused(true)

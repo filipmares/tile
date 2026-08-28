@@ -34,3 +34,6 @@ Thumbs.db
 
 # Copilot workflow artifacts
 .copilot-tracking/
+
+# Impeccable design-hook scratch state
+.impeccable/hook.cache.json

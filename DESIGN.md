@@ -95,12 +95,14 @@ components:
     backgroundColor: "{colors.surface}"
     rounded: "{rounded.card}"
     padding: "26px 24px 22px"
-  step:
-    backgroundColor: "transparent"
-    rounded: "{rounded.inner}"
-    padding: "9px 10px"
-  step-done:
+  slide-key:
+    backgroundColor: "{colors.surface-sunken}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.control}"
+    padding: "7px 13px"
+  slide-key-done:
     backgroundColor: "{colors.accent}"
+    textColor: "{colors.accent-ink}"
   keycap:
     backgroundColor: "{colors.surface-sunken}"
     textColor: "{colors.ink}"
@@ -151,7 +153,8 @@ colours that appear only when something is wrong or needs care.
 ### Primary
 
 - **Signal Blue** (`#2563eb`; `#3b82f6` in dark): the only accent. It marks the
-  focus ring, the recording state of a shortcut, a completed walkthrough step,
+  focus ring, the recording state of a shortcut, the keycaps of a shortcut the
+  app just watched work,
   the tinted window in the welcome stage, the primary button, and the
   development-build panel border. It never decorates a heading, a divider, or a
   background field.
@@ -175,7 +178,7 @@ colours that appear only when something is wrong or needs care.
 - **Fault Red** (`#b42318`; `#f97066` dark): conflict notes, destructive
   actions, the clear-binding button on hover. Text only — never a fill.
 - **Caution Sand** (`#fff9eb` fill / `#f1c56b` border; `#332a16` / `#6b5520`
-  dark): the warning panel and the walkthrough's "nothing to move" note.
+  dark): the warning panel and the welcome deck's "nothing to move" note.
 
 ### Named Rules
 
@@ -267,9 +270,13 @@ surface, and it is the only place the rule bends.
 
 ### Shadow Vocabulary
 
-- **Floating window** (`box-shadow: 0 8px 16px -6px color-mix(in srgb, var(--text) 45%, transparent)`):
+Both are black, never `--text`. A foreground-tinted shadow inverts with the
+theme, and in dark mode a window would wear a white halo — a glow, not a window
+lifted off a desk.
+
+- **Floating window** (`box-shadow: 0 7px 14px -6px rgb(0 0 0 / 55%)`):
   the stage's pane before it is snapped.
-- **Snapped window** (`box-shadow: 0 2px 5px -2px color-mix(in srgb, var(--text) 35%, transparent)`):
+- **Snapped window** (`box-shadow: 0 2px 4px -2px rgb(0 0 0 / 40%)`):
   the same pane once Tile has placed it.
 
 A focus ring (`box-shadow: 0 0 0 2px` of 30% accent, on a recording shortcut) is
@@ -284,18 +291,19 @@ information a tone cannot.
 ## Shapes
 
 One radius family, scaled to the size of the thing: 6px for controls (buttons,
-inputs, selects, keycaps, shortcut keys), 8px for inner blocks (walkthrough
-steps, notes, the stage's screens), 10px — the `--radius` token — for every card,
+inputs, selects, keycaps, shortcut keys), 8px for inner blocks (notes, the
+deck, the stage's screens), 10px — the `--radius` token — for every card,
 panel and grouped list, and 13–14px for the app mark, which is the icon's own
 squircle and not a UI radius.
 
 Borders are always exactly 1px and always the hairline colour; the one deviation
-is the keycap, whose bottom border is 2px so it reads as a physical key. Grouped
+is the settings keycap, whose bottom border is 2px so it reads as a physical
+key. Grouped
 lists share a single outer border and separate their rows with internal
 hairlines rather than gaps, so a list of shortcuts reads as one object.
 
-Nothing is circular except the walkthrough's step marker (18px), which is a
-checkbox and looks like one.
+Nothing is circular except the welcome deck's progress dots (6px), which stretch
+to a 16px pill on the slide the user is on.
 
 ## Components
 
@@ -344,14 +352,15 @@ conflict and dim for information. Rows never move or resize between states — o
 their colour changes — so recording a shortcut cannot reflow the list under the
 user's cursor.
 
-### Signature Component — the walkthrough step
+### Signature Component — the shortcut slide
 
-The welcome screen's live checklist row: an 18px circular marker, the
-instruction, its shortcut keycaps on the same line, and a full-width hint
-beneath. Completing it fills the marker with accent, draws a check with a 320ms
-exponential ease-out, and tints the whole row 8% accent. The row is built once
-and mutated in place — re-rendering it would produce an element born complete,
-and the tick would never play.
+The welcome deck deals one shortcut at a time: large keycaps, one short line
+under them, nothing else. The keyboard is the only way forward — the slide is
+left behind when the backend reports that its shortcut really moved a window,
+never on a click. Proving it fills the keycaps with accent, and after a 900ms
+hold the track slides on, long enough for the pane above to arrive first. Slides
+are laid out but `visibility: hidden` off-screen, so the track is as tall as its
+tallest slide and advancing never resizes the card under the user.
 
 ### Signature Component — the stage
 
@@ -359,8 +368,10 @@ A miniature of the user's desk: one 16:10 mini display per real display, each
 with a menu-bar strip (flipped to the bottom on Windows) and a single accent dot
 standing for Tile itself. A tinted pane inside is positioned against the
 measured boxes of those displays and travels to its new slot in 420ms whenever
-the real window moves. It is a mirror, not an illustration: it may only ever show
-what actually happened.
+the real window moves. A dashed hairline outline, drawn in dim ink and never in
+accent, shows where the current slide's shortcut would put it. The outline is a
+promise about the next press and the pane is a report of the last one; the pane
+may only ever show what actually happened.
 
 ## Do's and Don'ts
 
@@ -389,8 +400,8 @@ what actually happened.
 - **Don't** fill anything with red. Red is text.
 - **Don't** add a fourth neutral tone or a second radius family.
 - **Don't** animate an entrance on more than one element per window; one
-  authored moment, and on the welcome screen it is already spent on the tick and
-  the travelling pane.
+  authored moment, and on the welcome screen it is already spent on the payoff
+  of a press — the pane travels, the keycaps light, the deck advances.
 - **Don't** let a state change reflow a list. Colour changes; geometry holds.
 - **Don't** show a control, count, or claim the app cannot verify — the UI is
   bound by the product's honesty rule as tightly as by its palette.

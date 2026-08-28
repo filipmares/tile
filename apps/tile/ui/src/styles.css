@@ -597,9 +597,9 @@ select {
 }
 
 /* The welcome screen: its own window, and the only place Tile teaches its
-   defaults. The walkthrough is live — the steps tick themselves off when the
-   user presses the real shortcuts, and the stage mirrors the window that
-   actually moved. Centred like About, but tall enough to work through. */
+   defaults. It is a deck, dealt one shortcut at a time. The keyboard is the
+   only way forward — a slide is left behind when its shortcut really moves a
+   window — and the stage above shows where the next press will land. */
 .app.app--welcome {
   min-height: 100vh;
   padding: 24px;
@@ -615,7 +615,7 @@ select {
   display: flex;
   flex-direction: column;
   gap: 20px;
-  padding: 26px 24px 22px;
+  padding: 26px 24px 20px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -710,6 +710,18 @@ select {
   bottom: 4%;
 }
 
+/* Where the shortcut on the current slide will put the window. An outline,
+   never a fill: it is a promise about the next press, not a report. */
+.stage__ghost {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  border: 1px dashed color-mix(in srgb, var(--text-dim) 55%, transparent);
+  border-radius: 5px;
+}
+
 .stage__pane {
   position: absolute;
   left: 0;
@@ -719,7 +731,9 @@ select {
   border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
   border-radius: 5px;
   background: color-mix(in srgb, var(--accent) 20%, var(--surface));
-  box-shadow: 0 8px 16px -6px color-mix(in srgb, var(--text) 45%, transparent);
+  /* Black, not `--text`: in dark mode a foreground-tinted shadow becomes a
+     white halo, which is a glow rather than a window lifted off a desk. */
+  box-shadow: 0 7px 14px -6px rgb(0 0 0 / 55%);
   overflow: hidden;
 }
 
@@ -727,7 +741,7 @@ select {
    the desktop. The shadow carries that difference, so the stage reads as a
    before and after rather than two arbitrary rectangles. */
 .stage__pane--snapped {
-  box-shadow: 0 2px 5px -2px color-mix(in srgb, var(--text) 35%, transparent);
+  box-shadow: 0 2px 4px -2px rgb(0 0 0 / 40%);
 }
 
 .stage__pane-bar {
@@ -737,131 +751,96 @@ select {
   border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
 }
 
-.walk {
-  display: grid;
-  gap: 8px;
+/* The deck. Every slide is the full width of the window it sits in, and the
+   track is as tall as its tallest slide, so advancing never resizes the card
+   under the user. */
+.deck {
+  overflow: hidden;
 }
 
-.walk__head {
+.deck__track {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
+  align-items: stretch;
+}
+
+.slide {
+  flex: 0 0 100%;
+  min-height: 132px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   gap: 12px;
+  text-align: center;
+  padding: 4px 0;
 }
 
-.walk__title {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 650;
+.slide[aria-hidden="true"] {
+  /* Off-screen slides stay laid out — the track measures them — but they are
+     not in the tab order or the accessibility tree. */
+  visibility: hidden;
 }
 
-.walk__count {
-  margin: 0;
-  flex: 0 0 auto;
-  color: var(--text-dim);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-
-.walk__steps {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 2px;
-}
-
-.step {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
-  /* The keys sit on the label's line and the hint runs the full width under
-     both, so a two-shortcut step cannot squeeze its own explanation into a
-     column three words wide. */
-  grid-template-areas:
-    "marker label keys"
-    ".      hint  hint";
-  align-items: start;
-  column-gap: 10px;
-  row-gap: 3px;
-  padding: 9px 10px;
-  border-radius: 8px;
-  background: transparent;
-}
-
-.step[data-state="done"] {
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-}
-
-.step__marker {
-  grid-area: marker;
-  width: 18px;
-  height: 18px;
-  margin-top: 1px;
-  border: 1.5px solid color-mix(in srgb, var(--text-dim) 60%, transparent);
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  color: var(--accent-text);
-}
-
-.step[data-state="done"] .step__marker {
-  border-color: var(--accent);
-  background: var(--accent);
-}
-
-.step__check {
-  width: 11px;
-  height: 11px;
-  opacity: 0;
-  transform: scale(0.55);
-}
-
-.step[data-state="done"] .step__check {
-  opacity: 1;
-  transform: scale(1);
-}
-
-.step__label {
-  grid-area: label;
-  margin: 0;
-  font-size: 13px;
-  font-weight: 550;
-}
-
-.step__hint {
-  grid-area: hint;
-  margin: 0;
-  color: var(--text-dim);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.step__keys {
-  grid-area: keys;
+.slide__keys {
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding-top: 1px;
+  gap: 8px;
+  margin: 0;
 }
 
-.step__key {
-  padding: 2px 7px;
+.slide__key {
+  padding: 7px 13px;
   border: 1px solid var(--border);
-  border-bottom-width: 2px;
   border-radius: 6px;
   background: var(--surface-2);
+  color: var(--text);
   font-family: inherit;
-  font-size: 12px;
+  font-size: 15px;
+  font-weight: 550;
   white-space: nowrap;
 }
 
-.step__or {
-  color: var(--text-dim);
-  font-size: 11px;
+/* Pressed, and proved: the only thing on this screen that turns blue by
+   itself, because it is the only thing the app just watched happen. */
+.slide[data-state="done"] .slide__key {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
 }
 
-.walk__note {
-  margin: 2px 0 0;
+.slide__or {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.slide__line {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 550;
+}
+
+.slide__aside {
+  margin: 0;
+  max-width: 42ch;
+  text-wrap: balance;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.slide__actions {
+  display: flex;
+  gap: 10px;
+  align-self: stretch;
+  margin-top: 2px;
+}
+
+.slide__actions .button {
+  flex: 1;
+}
+
+.welcome__note {
+  margin: -8px 0 0;
   padding: 8px 10px;
   border: 1px solid var(--warning-border);
   border-radius: 8px;
@@ -871,46 +850,61 @@ select {
   line-height: 1.45;
 }
 
-.walk__note--done {
-  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-}
-
-.welcome__more {
-  margin: -4px 0 0;
-  color: var(--text-dim);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.welcome__empty {
-  margin: 0;
-  color: var(--text-dim);
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.welcome__actions {
+.welcome__foot {
   display: flex;
-  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 20px;
+  margin-top: -6px;
 }
 
-.welcome__actions .button {
-  flex: 1;
+.dots {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
-.welcome__meta {
-  margin: -12px 0 0;
+.dots__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--text-dim) 35%, transparent);
+}
+
+.dots__dot[data-state="at"] {
+  width: 16px;
+  background: var(--accent);
+}
+
+.dots__dot[data-state="done"] {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.welcome__skip {
+  margin-left: auto;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
   color: var(--text-dim);
-  font-size: 11px;
-  text-align: center;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
 }
 
-/* One authored moment, and it is the moment that matters: the tick when Tile
-   proves it did what the step promised, and the pane travelling to its new
-   slot alongside it. Everything else here is still. */
+.welcome__skip:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+/* One authored moment, and it is the moment the whole screen is built around:
+   the press pays off. The pane travels to its new slot, the keys light up to
+   say Tile watched it happen, and the deck deals the next shortcut. Nothing
+   else on this screen moves. */
 @media (prefers-reduced-motion: no-preference) {
-  .stage__pane {
+  .stage__pane,
+  .stage__ghost {
     transition: left 420ms cubic-bezier(0.22, 1, 0.36, 1),
       top 420ms cubic-bezier(0.22, 1, 0.36, 1),
       width 420ms cubic-bezier(0.22, 1, 0.36, 1),
@@ -918,20 +912,24 @@ select {
       box-shadow 420ms ease-out;
   }
 
-  .step,
-  .step__marker {
-    transition: background-color 220ms ease-out, border-color 220ms ease-out;
+  .deck__track {
+    transition: transform 480ms cubic-bezier(0.22, 1, 0.36, 1);
   }
 
-  .step__check {
-    transition: opacity 160ms ease-out 60ms,
-      transform 320ms cubic-bezier(0.22, 1, 0.36, 1) 60ms;
+  .slide__key {
+    transition: background-color 220ms ease-out, border-color 220ms ease-out,
+      color 220ms ease-out;
+  }
+
+  .dots__dot {
+    transition: background-color 220ms ease-out;
   }
 }
 
 /* Measuring the stage mid-transition would fight the animation, so a resize
    re-places the pane with motion switched off for that frame. */
-.stage--measuring .stage__pane {
+.stage--measuring .stage__pane,
+.stage--measuring .stage__ghost {
   transition: none;
 }
 

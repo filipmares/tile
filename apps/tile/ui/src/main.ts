@@ -92,9 +92,13 @@ const dom = {
   welcomeHome: el<HTMLSpanElement>("#welcome-home"),
   welcomeStage: el<HTMLDivElement>("#welcome-stage"),
   welcomeScreens: el<HTMLDivElement>("#welcome-screens"),
+  welcomeGhost: el<HTMLDivElement>("#welcome-ghost"),
   welcomePane: el<HTMLDivElement>("#welcome-pane"),
-  welcomeWalkHeading: el<HTMLHeadingElement>("#welcome-walk-heading"),
-  welcomeSteps: el<HTMLOListElement>("#welcome-steps"),
+  welcomeTrack: el<HTMLDivElement>("#welcome-track"),
+  welcomeEnd: el<HTMLDivElement>("#welcome-end"),
+  welcomeEndLine: el<HTMLParagraphElement>("#welcome-end-line"),
+  welcomeDots: el<HTMLDivElement>("#welcome-dots"),
+  welcomeSkip: el<HTMLButtonElement>("#welcome-skip"),
   welcomeProgress: el<HTMLParagraphElement>("#welcome-progress"),
   welcomeNote: el<HTMLParagraphElement>("#welcome-note"),
   welcomeActionCount: el<HTMLSpanElement>("#welcome-action-count"),
@@ -263,14 +267,14 @@ function renderBindings(): void {
 }
 
 /* ---------------------------------------------------------------------- *\
- * The welcome walkthrough.
+ * The welcome deck.
  *
  * Tile cannot be explained faster than it can be tried, so the welcome screen
- * does not describe the shortcuts — it waits for them. The backend reports
- * every action it performs (see `tile://action-performed`), each step ticks
- * itself off when the matching action really moves a window, and the stage
- * mirrors where that window went. Nothing here claims anything Tile did not
- * just do.
+ * does not describe the shortcuts — it deals them one at a time and waits.
+ * The keyboard is the only way forward: the backend reports every action it
+ * performs (see `tile://action-performed`), and a slide is only left behind
+ * once the shortcut on it really moved a window. The stage above shows where
+ * the next press will land, then where the window actually went.
 \* ---------------------------------------------------------------------- */
 
 /** A rectangle in work-area fractions: 0..1 of one mini display. */
@@ -339,27 +343,27 @@ const CYCLING_ACTIONS: WindowAction[] = [
 
 const DISPLAY_ACTIONS: WindowAction[] = ["previous-display", "next-display"];
 
-/** Small numbers read better as words in a heading. */
-const COUNT_WORDS: Record<number, string> = { 2: "Two", 3: "Three" };
+/** How long the pane and the tick are given before the deck moves on. */
+const ADVANCE_DELAY = 900;
 
-/** One thing to try, and the actions that count as having tried it. */
-interface WalkStep {
+/** One slide: a shortcut to try, and what counts as having tried it. */
+interface Slide {
   id: "snap" | "cycle" | "display";
-  label: string;
-  hint: string;
+  line: string;
   combos: string[];
-  /** Satisfied by any of these, or by a repeat of one for the cycle step. */
+  /** Satisfied by any of these, or by a repeat of one for the cycle slide. */
   actions: WindowAction[];
   needsRepeat: boolean;
   done: boolean;
-  row?: HTMLLIElement;
-  /** The screen-reader-only state text inside `row`, kept in sync with it. */
-  state?: HTMLSpanElement;
+  card?: HTMLDivElement;
+  dot?: HTMLSpanElement;
 }
 
-/** Everything the live walkthrough needs to remember between key presses. */
+/** Everything the deck needs to remember between key presses. */
 const walk = {
-  steps: [] as WalkStep[],
+  slides: [] as Slide[],
+  /** Which slide is showing; `slides.length` is the closing one. */
+  at: 0,
   cycleSizes: [] as CycleSize[],
   cycles: false,
   screens: [] as HTMLElement[],
@@ -368,16 +372,18 @@ const walk = {
   lastAction: null as WindowAction | null,
   /** Where in the configured size cycle that action currently sits. */
   sizeIndex: -1,
-  celebrated: false,
+  /** Set once the user skips: presses still mirror, but nothing advances. */
+  skipped: false,
+  timer: 0,
 };
 
 /**
- * Builds the steps this machine can actually complete. A shortcut nobody has
+ * Builds the slides this machine can actually complete. A shortcut nobody has
  * bound, a size cycle the user switched off and a second display that is not
  * plugged in are all left out rather than taught and then disproved.
  */
-function buildWalkSteps(cfg: Config | null, screenCount: number): WalkStep[] {
-  const steps: WalkStep[] = [];
+function buildSlides(cfg: Config | null, screenCount: number): Slide[] {
+  const slides: Slide[] = [];
   const combo = (action: WindowAction): string | null => {
     const hk = cfg?.bindings[action];
     return hk ? formatHotkey(hk) : null;
@@ -385,10 +391,9 @@ function buildWalkSteps(cfg: Config | null, screenCount: number): WalkStep[] {
 
   const halves = (["left-half", "right-half"] as WindowAction[]).filter(combo);
   if (halves.length > 0) {
-    steps.push({
+    slides.push({
       id: "snap",
-      label: "Snap a window to one side",
-      hint: "Click any window behind this one first — Tile moves whatever you were last using.",
+      line: "Snap the window to one side.",
       combos: halves.map((a) => combo(a) as string),
       actions: halves,
       needsRepeat: false,
@@ -396,14 +401,9 @@ function buildWalkSteps(cfg: Config | null, screenCount: number): WalkStep[] {
     });
 
     if (walk.cycles) {
-      const sizes = walk.cycleSizes
-        .map((size) => CYCLE_SIZES.find((s) => s.id === size)?.label)
-        .filter(Boolean)
-        .join(" \u2192 ");
-      steps.push({
+      slides.push({
         id: "cycle",
-        label: "Press the very same keys again",
-        hint: `The window resizes instead of moving: ${sizes}, then round again.`,
+        line: "Again. Same keys, new size.",
         combos: halves.map((a) => combo(a) as string),
         actions: halves,
         needsRepeat: true,
@@ -414,10 +414,9 @@ function buildWalkSteps(cfg: Config | null, screenCount: number): WalkStep[] {
 
   const throws = DISPLAY_ACTIONS.filter(combo);
   if (screenCount > 1 && throws.length > 0) {
-    steps.push({
+    slides.push({
       id: "display",
-      label: "Throw it to your other display",
-      hint: "It keeps its slot on the way over — a left half lands as a left half.",
+      line: "Send it to the other display.",
       combos: throws.map((a) => combo(a) as string),
       actions: throws,
       needsRepeat: false,
@@ -425,7 +424,7 @@ function buildWalkSteps(cfg: Config | null, screenCount: number): WalkStep[] {
     });
   }
 
-  return steps;
+  return slides;
 }
 
 /** Draws the mini displays. More than three would be scenery, not a mirror. */
@@ -447,28 +446,79 @@ function renderStage(screenCount: number): void {
 const STAGE_BAR = 0.1;
 
 /**
- * Positions the pane over the mini display it belongs to, measuring the real
- * boxes the browser laid out so one display and three behave identically.
+ * Positions `el` over the mini display it belongs to, measuring the real boxes
+ * the browser laid out so one display and three behave identically.
  */
-function placePane(): void {
-  const screen = walk.screens[walk.pane.screen] ?? walk.screens[0];
+function placeOnStage(el: HTMLElement, frame: PaneFrame): void {
+  const screen = walk.screens[frame.screen] ?? walk.screens[0];
   if (!screen) return;
 
   const workY =
     screen.offsetTop + (isMac() ? screen.offsetHeight * STAGE_BAR : 0);
   const workH = screen.offsetHeight * (1 - STAGE_BAR);
-  const { style } = dom.welcomePane;
-  style.left = `${screen.offsetLeft + walk.pane.x * screen.offsetWidth}px`;
-  style.top = `${workY + walk.pane.y * workH}px`;
-  style.width = `${walk.pane.w * screen.offsetWidth}px`;
-  style.height = `${walk.pane.h * workH}px`;
+  const { style } = el;
+  style.left = `${screen.offsetLeft + frame.x * screen.offsetWidth}px`;
+  style.top = `${workY + frame.y * workH}px`;
+  style.width = `${frame.w * screen.offsetWidth}px`;
+  style.height = `${frame.h * workH}px`;
 }
 
-/** Moves the pane to `frame`, or re-places it in silence after a resize. */
+/** Re-places the pane and the outline, in silence, after a resize. */
+function placePane(): void {
+  placeOnStage(dom.welcomePane, walk.pane);
+  renderGhost();
+}
+
+/** Moves the pane to `frame`, then re-aims the outline at what comes next. */
 function movePane(frame: PaneFrame, snapped: boolean): void {
   walk.pane = frame;
   dom.welcomePane.classList.toggle("stage__pane--snapped", snapped);
-  placePane();
+  placeOnStage(dom.welcomePane, frame);
+  renderGhost();
+}
+
+/**
+ * Where the current slide's shortcut would put the window. This is a promise
+ * the engine keeps: the same shapes, the same cycle order, the same wrap.
+ */
+function ghostFrame(): PaneFrame | null {
+  const slide = walk.slides[walk.at];
+  if (!slide || slide.done) return null;
+
+  if (slide.id === "display") {
+    const count = walk.screens.length;
+    if (count < 2) return null;
+    return { ...walk.pane, screen: (walk.pane.screen + 1) % count };
+  }
+
+  const action = slide.actions[0];
+  if (!action) return null;
+  const shape = PANE_SHAPES[action];
+  if (!shape) return null;
+
+  if (slide.id === "cycle") {
+    const sizes = walk.cycleSizes;
+    if (sizes.length === 0 || walk.sizeIndex < 0) return null;
+    const next = sizes[(walk.sizeIndex + 1) % sizes.length];
+    if (!next) return null;
+    // The cycle resizes whichever side the window is already on, so follow the
+    // action that put it there rather than the first one on the slide.
+    const last = walk.lastAction;
+    const cycling = last && CYCLING_ACTIONS.includes(last) ? last : action;
+    const cycleShape = PANE_SHAPES[cycling];
+    if (!cycleShape) return null;
+    return { screen: walk.pane.screen, ...cycleShape(CYCLE_FRACTIONS[next]) };
+  }
+
+  // A first press is always a half, whatever the cycle is configured to do.
+  return { screen: walk.pane.screen, ...shape(0.5) };
+}
+
+/** Draws — or hides — the outline showing where the next press will land. */
+function renderGhost(): void {
+  const frame = ghostFrame();
+  dom.welcomeGhost.hidden = frame === null;
+  if (frame) placeOnStage(dom.welcomeGhost, frame);
 }
 
 /**
@@ -482,11 +532,11 @@ function reflectOnStage(action: WindowAction): void {
   if (DISPLAY_ACTIONS.includes(action)) {
     const count = walk.screens.length;
     const step = action === "next-display" ? 1 : count - 1;
+    walk.lastAction = action;
     movePane(
       { ...walk.pane, screen: (walk.pane.screen + step) % count },
       walk.pane !== FLOATING,
     );
-    walk.lastAction = action;
     return;
   }
 
@@ -508,101 +558,93 @@ function reflectOnStage(action: WindowAction): void {
   if (shape) movePane({ screen: walk.pane.screen, ...shape(fraction) }, true);
 }
 
-/** Renders the steps, their state, and the count above them. */
-function renderWalk(): void {
-  dom.welcomeSteps.replaceChildren();
+/** Builds the deck: one card per slide, ahead of the closing one. */
+function renderDeck(): void {
+  dom.welcomeDots.replaceChildren();
 
-  if (walk.steps.length === 0) {
-    const empty = document.createElement("li");
-    empty.className = "welcome__empty";
-    empty.textContent =
-      "None of the default shortcuts are bound on this machine. Open All shortcuts to assign your own, then come back.";
-    dom.welcomeSteps.append(empty);
-    dom.welcomeProgress.hidden = true;
-    dom.welcomeWalkHeading.textContent = "Tile is waiting for keys";
-    return;
-  }
+  for (const slide of walk.slides) {
+    const card = document.createElement("div");
+    card.className = "slide";
+    card.dataset.state = "waiting";
 
-  // The heading counts the steps that actually survived: a single display or
-  // an unbound shortcut removes one, and promising three would be a lie.
-  dom.welcomeWalkHeading.textContent =
-    walk.steps.length === 1
-      ? "One press and you know Tile"
-      : `${COUNT_WORDS[walk.steps.length] ?? walk.steps.length} presses and you know Tile`;
-
-  for (const step of walk.steps) {
-    const row = document.createElement("li");
-    row.className = "step";
-    row.dataset.state = step.done ? "done" : "waiting";
-
-    const marker = document.createElement("span");
-    marker.className = "step__marker";
-    marker.innerHTML =
-      '<svg class="step__check" viewBox="0 0 12 12" aria-hidden="true">' +
-      '<path d="M2.5 6.4 4.7 8.6 9.5 3.6" fill="none" stroke="currentColor" ' +
-      'stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-
-    const label = document.createElement("p");
-    label.className = "step__label";
-    label.textContent = step.label;
-    const hint = document.createElement("p");
-    hint.className = "step__hint";
-    hint.textContent = step.hint;
-    const state = document.createElement("span");
-    state.className = "sr-only";
-    label.append(state);
-    step.state = state;
-
-    const keys = document.createElement("span");
-    keys.className = "step__keys";
-    step.combos.forEach((text, i) => {
+    const keys = document.createElement("p");
+    keys.className = "slide__keys";
+    slide.combos.forEach((text, i) => {
       if (i > 0) {
         const or = document.createElement("span");
-        or.className = "step__or";
+        or.className = "slide__or";
         or.textContent = "or";
         keys.append(or);
       }
       const kbd = document.createElement("kbd");
-      kbd.className = "step__key";
+      kbd.className = "slide__key";
       kbd.textContent = text;
       keys.append(kbd);
     });
 
-    row.append(marker, label, keys, hint);
-    step.row = row;
-    dom.welcomeSteps.append(row);
+    const line = document.createElement("p");
+    line.className = "slide__line";
+    line.textContent = slide.line;
+
+    card.append(keys, line);
+    dom.welcomeTrack.insertBefore(card, dom.welcomeEnd);
+    slide.card = card;
+
+    const dot = document.createElement("span");
+    dot.className = "dots__dot";
+    dom.welcomeDots.append(dot);
+    slide.dot = dot;
   }
 
-  dom.welcomeProgress.hidden = false;
-  syncWalk();
+  if (walk.slides.length === 0) {
+    // Nothing to try means nothing to promise. The closing slide says so and
+    // sends the user to the one screen that can fix it.
+    dom.welcomeEndLine.textContent = "Tile is waiting for keys.";
+    dom.welcomeSkip.hidden = true;
+  }
+  showSlide(0);
 }
 
-/**
- * Reflects the current step states onto the rows that are already on screen.
- *
- * Deliberately not a re-render: replacing the row would hand the browser a
- * brand-new element that is *born* complete, and the tick — the one piece of
- * motion this screen has — would never play.
- */
-function syncWalk(): void {
-  for (const step of walk.steps) {
-    if (step.row) step.row.dataset.state = step.done ? "done" : "waiting";
-    if (step.state) {
-      step.state.textContent = step.done ? " \u2014 done" : " \u2014 not tried yet";
+/** Moves the deck to `index` and reflects it in the dots and the outline. */
+function showSlide(index: number): void {
+  walk.at = Math.min(Math.max(index, 0), walk.slides.length);
+  dom.welcomeTrack.style.transform = `translateX(${walk.at * -100}%)`;
+
+  const last = walk.at === walk.slides.length;
+  walk.slides.forEach((slide, i) => {
+    if (slide.card) slide.card.setAttribute("aria-hidden", String(i !== walk.at));
+    if (slide.dot) {
+      slide.dot.dataset.state = slide.done
+        ? "done"
+        : i === walk.at
+          ? "at"
+          : "ahead";
     }
-  }
-  const done = walk.steps.filter((s) => s.done).length;
+  });
+  dom.welcomeEnd.setAttribute("aria-hidden", String(!last));
+  dom.welcomeSkip.hidden = last || walk.slides.length === 0;
+
   dom.welcomeProgress.textContent =
-    done === walk.steps.length
-      ? `All ${walk.steps.length} \u2014 you're set`
-      : `${done} of ${walk.steps.length}`;
+    walk.slides.length === 0
+      ? ""
+      : last
+        ? "Done"
+        : `Step ${walk.at + 1} of ${walk.slides.length}`;
+  renderGhost();
 }
 
-/** Shows, replaces or clears the line under the steps. */
-function setWalkNote(text: string | null, done = false): void {
+/** Shows, replaces or clears the line under the deck. */
+function setWalkNote(text: string | null): void {
   dom.welcomeNote.hidden = text === null;
   dom.welcomeNote.textContent = text ?? "";
-  dom.welcomeNote.classList.toggle("walk__note--done", done);
+}
+
+/** Leaves the deck where it is: the user asked to stop being taught. */
+function skipDeck(): void {
+  walk.skipped = true;
+  window.clearTimeout(walk.timer);
+  setWalkNote(null);
+  showSlide(walk.slides.length);
 }
 
 /**
@@ -617,34 +659,41 @@ function onActionPerformed(event: ActionPerformed): void {
     return;
   }
   if (!event.moved) return;
+  setWalkNote(null);
 
   const repeat = event.action === walk.lastAction;
   reflectOnStage(event.action);
+  if (walk.skipped) return;
 
-  for (const step of walk.steps) {
-    if (step.done || !step.actions.includes(event.action)) continue;
-    if (step.needsRepeat && !repeat) continue;
-    // A repeat also proves the first step, for anyone who pressed twice
-    // before reading. Never the other way round.
-    step.done = true;
-    if (step.needsRepeat) {
-      const first = walk.steps.find((s) => s.id === "snap");
+  const current = walk.slides[walk.at];
+  let satisfied = false;
+  for (const slide of walk.slides) {
+    if (slide.done || !slide.actions.includes(event.action)) continue;
+    if (slide.needsRepeat && !repeat) continue;
+    // A repeat also proves the snap, for anyone who pressed twice before
+    // reading. Never the other way round.
+    slide.done = true;
+    if (slide.needsRepeat) {
+      const first = walk.slides.find((s) => s.id === "snap");
       if (first) first.done = true;
     }
+    satisfied = slide === current || (current?.done ?? false);
     break;
   }
+  if (!satisfied || !current) return;
 
-  const remaining = walk.steps.filter((s) => !s.done).length;
-  if (remaining === 0 && !walk.celebrated) {
-    walk.celebrated = true;
-    setWalkNote(
-      "That is Tile. Everything else it does is a variation on those presses.",
-      true,
-    );
-  } else if (remaining > 0) {
-    setWalkNote(null);
-  }
-  syncWalk();
+  if (current.card) current.card.dataset.state = "done";
+  if (current.dot) current.dot.dataset.state = "done";
+  renderGhost();
+
+  // Hold long enough for the pane to arrive and the keys to light up. Being
+  // dealt the next slide mid-animation would read as a glitch, not a reward.
+  const next = walk.slides.findIndex((s, i) => i > walk.at && !s.done);
+  window.clearTimeout(walk.timer);
+  walk.timer = window.setTimeout(
+    () => showSlide(next === -1 ? walk.slides.length : next),
+    ADVANCE_DELAY,
+  );
 }
 
 function renderBinding(
@@ -1288,6 +1337,7 @@ async function bootWelcome(): Promise<void> {
       .close()
       .catch((err) => console.error("could not close the welcome window", err));
   });
+  dom.welcomeSkip.addEventListener("click", skipDeck);
 
   // A resized window relays out the mini displays under a pane that is
   // positioned in pixels, so re-measure — without animating a move the user
@@ -1328,10 +1378,10 @@ async function bootWelcome(): Promise<void> {
   }
 
   renderStage(status.screenCount);
+  walk.slides = buildSlides(cfg, status.screenCount);
+  renderDeck();
   movePane(FLOATING, false);
-  walk.steps = buildWalkSteps(cfg, status.screenCount);
-  renderWalk();
-  if (!status.hasMovableWindow && walk.steps.length > 0) {
+  if (!status.hasMovableWindow && walk.slides.length > 0) {
     setWalkNote(
       "Open a window first — a browser, Finder, anything. Tile skips its own windows, so there is nothing to move yet.",
     );

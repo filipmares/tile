@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-08-28T04:36:56Z",
+  "generatedAt": "2026-08-28T05:00:16Z",
   "title": "Design System: Tile",
   "extensions": {
     "colorMeta": {
@@ -116,12 +116,12 @@
     "shadows": [
       {
         "name": "stage-window-floating",
-        "value": "0 8px 16px -6px color-mix(in srgb, var(--text) 45%, transparent)",
-        "purpose": "Inside the welcome stage only: the miniature window before Tile has placed it. Encodes state, not elevation."
+        "value": "0 7px 14px -6px rgb(0 0 0 / 55%)",
+        "purpose": "Inside the welcome stage only: the miniature window before Tile has placed it. Encodes state, not elevation. Black, never `--text`, or dark mode turns it into a white halo."
       },
       {
         "name": "stage-window-snapped",
-        "value": "0 2px 5px -2px color-mix(in srgb, var(--text) 35%, transparent)",
+        "value": "0 2px 4px -2px rgb(0 0 0 / 40%)",
         "purpose": "Inside the welcome stage only: the same window once snapped flush to an edge."
       },
       {
@@ -213,20 +213,28 @@
       "css": ".ds-panel-warning { padding: 16px 18px; background: #fff9eb; border: 1px solid #f1c56b; border-radius: 10px; color: #1f2937; font-size: 13px; line-height: 1.45; }"
     },
     {
-      "name": "Walkthrough Step",
+      "name": "Shortcut Slide",
       "kind": "custom",
-      "refersTo": "step",
-      "description": "The welcome screen's live checklist row, shown completed. Built once and mutated in place so the tick can play.",
-      "html": "<li class=\"ds-step\" data-state=\"done\"><span class=\"ds-step__marker\"><svg class=\"ds-step__check\" viewBox=\"0 0 12 12\" aria-hidden=\"true\"><path d=\"M2.5 6.4 4.7 8.6 9.5 3.6\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.9\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg></span><p class=\"ds-step__label\">Snap a window to one side</p><span class=\"ds-step__keys\"><kbd class=\"ds-step__key\">^\\u2325Left</kbd></span><p class=\"ds-step__hint\">Click any window behind this one first.</p></li>",
-      "css": ".ds-step { list-style: none; display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; grid-template-areas: \"marker label keys\" \". hint hint\"; align-items: start; column-gap: 10px; row-gap: 3px; padding: 9px 10px; border-radius: 8px; background: color-mix(in srgb, #2563eb 8%, transparent); color: #1f2937; font: inherit; } .ds-step__marker { grid-area: marker; width: 18px; height: 18px; margin-top: 1px; display: grid; place-items: center; border: 1.5px solid #2563eb; border-radius: 50%; background: #2563eb; color: #ffffff; } .ds-step__check { width: 11px; height: 11px; } .ds-step__label { grid-area: label; margin: 0; font-size: 13px; font-weight: 550; } .ds-step__hint { grid-area: hint; margin: 0; color: #667085; font-size: 12px; line-height: 1.45; } .ds-step__keys { grid-area: keys; display: flex; align-items: center; gap: 5px; padding-top: 1px; } .ds-step__key { padding: 2px 7px; background: #f1f3f6; border: 1px solid #dfe3e8; border-bottom-width: 2px; border-radius: 6px; font-family: inherit; font-size: 12px; white-space: nowrap; }"
+      "refersTo": "slide-key",
+      "description": "One card of the welcome deck, shown proved. Large keycaps, one short line, nothing else. The keyboard is the only way forward: the keycaps fill with accent when the backend reports that the shortcut really moved a window.",
+      "html": "<div class=\"ds-slide\" data-state=\"done\"><p class=\"ds-slide__keys\"><kbd class=\"ds-slide__key\">^⌥Left</kbd><span class=\"ds-slide__or\">or</span><kbd class=\"ds-slide__key\">^⌥Right</kbd></p><p class=\"ds-slide__line\">Snap the window to one side.</p></div>",
+      "css": ".ds-slide { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; min-height: 132px; text-align: center; color: #1f2937; font: inherit; } .ds-slide__keys { display: flex; align-items: center; gap: 8px; margin: 0; } .ds-slide__key { padding: 7px 13px; background: #f1f3f6; border: 1px solid #dfe3e8; border-radius: 6px; color: #1f2937; font-family: inherit; font-size: 15px; font-weight: 550; white-space: nowrap; transition: background-color 220ms ease-out, border-color 220ms ease-out, color 220ms ease-out; } .ds-slide[data-state=\"done\"] .ds-slide__key { background: #2563eb; border-color: #2563eb; color: #ffffff; } .ds-slide__or { color: #667085; font-size: 12px; } .ds-slide__line { margin: 0; font-size: 14px; font-weight: 550; }"
     },
     {
       "name": "Desk Stage",
       "kind": "custom",
       "refersTo": "card",
-      "description": "A miniature of the user's desk: a 16:10 display with its menu-bar strip, the Tile dot, and a snapped window. A mirror of what really happened, never an illustration.",
-      "html": "<div class=\"ds-stage\"><div class=\"ds-stage__screen\"><span class=\"ds-stage__pane\"><span class=\"ds-stage__pane-bar\"></span></span></div></div>",
-      "css": ".ds-stage { display: flex; justify-content: center; height: 132px; } .ds-stage__screen { position: relative; height: 100%; aspect-ratio: 16 / 10; background: #f1f3f6; border: 1px solid #dfe3e8; border-radius: 7px; overflow: hidden; } .ds-stage__screen::before { content: \"\"; position: absolute; inset-inline: 0; top: 0; height: 10%; background: color-mix(in srgb, #1f2937 12%, transparent); border-bottom: 1px solid #dfe3e8; } .ds-stage__screen::after { content: \"\"; position: absolute; top: 4%; right: 6px; width: 4px; height: 4px; border-radius: 50%; background: #2563eb; } .ds-stage__pane { position: absolute; left: 0; top: 10%; width: 50%; height: 90%; background: color-mix(in srgb, #2563eb 20%, #ffffff); border: 1px solid color-mix(in srgb, #2563eb 45%, #dfe3e8); border-radius: 5px; box-shadow: 0 2px 5px -2px color-mix(in srgb, #1f2937 35%, transparent); overflow: hidden; } .ds-stage__pane-bar { display: block; height: 7px; background: color-mix(in srgb, #2563eb 42%, #ffffff); border-bottom: 1px solid color-mix(in srgb, #2563eb 35%, #dfe3e8); }"
+      "description": "A miniature of the user's desk: a 16:10 display with its menu-bar strip, the Tile dot, a snapped window, and a dashed outline showing where the next press will put it. The pane is a mirror of what really happened; the outline is a promise about what comes next.",
+      "html": "<div class=\"ds-stage\"><div class=\"ds-stage__screen\"><span class=\"ds-stage__ghost\"></span><span class=\"ds-stage__pane\"><span class=\"ds-stage__pane-bar\"></span></span></div></div>",
+      "css": ".ds-stage { display: flex; justify-content: center; height: 132px; } .ds-stage__screen { position: relative; height: 100%; aspect-ratio: 16 / 10; background: #f1f3f6; border: 1px solid #dfe3e8; border-radius: 7px; overflow: hidden; } .ds-stage__screen::before { content: \"\"; position: absolute; inset-inline: 0; top: 0; height: 10%; background: color-mix(in srgb, #1f2937 12%, transparent); border-bottom: 1px solid #dfe3e8; } .ds-stage__screen::after { content: \"\"; position: absolute; top: 4%; right: 6px; width: 4px; height: 4px; border-radius: 50%; background: #2563eb; } .ds-stage__pane { position: absolute; left: 0; top: 10%; width: 50%; height: 90%; background: color-mix(in srgb, #2563eb 20%, #ffffff); border: 1px solid color-mix(in srgb, #2563eb 45%, #dfe3e8); border-radius: 5px; box-shadow: 0 2px 4px -2px rgb(0 0 0 / 40%); overflow: hidden; } .ds-stage__pane-bar { display: block; height: 7px; background: color-mix(in srgb, #2563eb 42%, #ffffff); border-bottom: 1px solid color-mix(in srgb, #2563eb 35%, #dfe3e8); } .ds-stage__ghost { position: absolute; left: 50%; top: 10%; width: 50%; height: 90%; border: 1px dashed color-mix(in srgb, #667085 55%, transparent); border-radius: 5px; }"
+    },
+    {
+      "name": "Progress Dots",
+      "kind": "custom",
+      "refersTo": "slide-key",
+      "description": "The welcome deck's rail: one dot per shortcut, stretched to a pill on the slide the user is on, dimmed accent once proved. An indicator, never a control — the deck only advances on a real keypress.",
+      "html": "<div class=\"ds-dots\"><span class=\"ds-dots__dot\" data-state=\"done\"></span><span class=\"ds-dots__dot\" data-state=\"at\"></span><span class=\"ds-dots__dot\"></span></div>",
+      "css": ".ds-dots { display: flex; align-items: center; gap: 6px; } .ds-dots__dot { width: 6px; height: 6px; border-radius: 3px; background: color-mix(in srgb, #667085 35%, transparent); transition: background-color 220ms ease-out; } .ds-dots__dot[data-state=\"at\"] { width: 16px; background: #2563eb; } .ds-dots__dot[data-state=\"done\"] { background: color-mix(in srgb, #2563eb 45%, transparent); }"
     }
   ],
   "narrative": {
