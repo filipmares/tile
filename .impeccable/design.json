@@ -161,7 +161,7 @@
       "kind": "button",
       "refersTo": "button",
       "description": "The default button: every action that is not the window's exit or a destructive one.",
-      "html": "<button class=\"ds-btn\">All shortcuts</button>",
+      "html": "<button class=\"ds-btn\">Show welcome guide</button>",
       "css": ".ds-btn { padding: 8px 14px; font: inherit; color: #1f2937; background: #f1f3f6; border: 1px solid #dfe3e8; border-radius: 6px; cursor: pointer; } .ds-btn:hover { background: #dfe3e8; } .ds-btn:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }"
     },
     {

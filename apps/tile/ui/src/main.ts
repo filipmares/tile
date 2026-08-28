@@ -13,7 +13,6 @@ import {
   getUpdateStatus,
   getWelcomeStatus,
   installUpdate,
-  openSettings,
   openWelcome,
   resetToDefaults,
   setAnimation,
@@ -97,12 +96,12 @@ const dom = {
   welcomeTrack: el<HTMLDivElement>("#welcome-track"),
   welcomeEnd: el<HTMLDivElement>("#welcome-end"),
   welcomeEndLine: el<HTMLParagraphElement>("#welcome-end-line"),
+  welcomeEndAside: el<HTMLParagraphElement>("#welcome-end-aside"),
   welcomeDots: el<HTMLDivElement>("#welcome-dots"),
   welcomeSkip: el<HTMLButtonElement>("#welcome-skip"),
   welcomeProgress: el<HTMLParagraphElement>("#welcome-progress"),
   welcomeNote: el<HTMLParagraphElement>("#welcome-note"),
   welcomeActionCount: el<HTMLSpanElement>("#welcome-action-count"),
-  welcomeSettings: el<HTMLButtonElement>("#welcome-settings"),
   welcomeDismiss: el<HTMLButtonElement>("#welcome-dismiss"),
   grant: el<HTMLButtonElement>("#grant-permission"),
   openAccessibility: el<HTMLButtonElement>("#open-accessibility"),
@@ -600,6 +599,8 @@ function renderDeck(): void {
     // Nothing to try means nothing to promise. The closing slide says so and
     // sends the user to the one screen that can fix it.
     dom.welcomeEndLine.textContent = "Tile is waiting for keys.";
+    dom.welcomeEndAside.textContent =
+      `None of the default shortcuts are bound. Assign your own in Settings, from the ${isMac() ? "menu bar" : "system tray"}.`;
     dom.welcomeSkip.hidden = true;
   }
   showSlide(0);
@@ -1327,11 +1328,6 @@ async function bootWelcome(): Promise<void> {
   dom.welcomeHome.textContent = isMac() ? "menu bar" : "system tray";
   dom.welcomeActionCount.textContent = String(ACTIONS.length);
 
-  dom.welcomeSettings.addEventListener("click", () => {
-    void openSettings().catch((err) =>
-      console.error("could not open settings", err),
-    );
-  });
   dom.welcomeDismiss.addEventListener("click", () => {
     void getCurrentWindow()
       .close()
