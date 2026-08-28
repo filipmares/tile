@@ -156,7 +156,10 @@ body {
   animation: about-fade-in 240ms ease-out both;
 }
 
-.updates:focus {
+/* Opening the window focuses the card so it is announced as the whole screen.
+   That programmatic focus needs no ring, but a keyboard user who focuses it
+   still gets the global :focus-visible outline. */
+.updates:focus:not(:focus-visible) {
   outline: none;
 }
 
