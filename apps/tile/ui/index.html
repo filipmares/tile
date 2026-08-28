@@ -74,25 +74,26 @@
       </section>
 
       <section
-        id="update-panel"
-        class="panel"
+        id="updates"
+        class="updates"
         hidden
         tabindex="-1"
         aria-labelledby="update-heading"
       >
-        <h2 id="update-heading">Updates</h2>
-        <p id="update-status" aria-live="polite"></p>
-        <p class="panel__hint" id="update-notes" hidden></p>
+        <img class="updates__mark" src="./icon.png" alt="" width="48" height="48" />
+        <h1 id="update-heading" class="updates__title">Software Update</h1>
+        <p class="updates__version" id="update-version" aria-live="polite">
+          Loading version…
+        </p>
+        <p class="updates__status" id="update-status" aria-live="polite"></p>
+        <p class="panel__hint updates__notes" id="update-notes" hidden></p>
         <progress
           id="update-progress"
           aria-label="Update download progress"
           hidden
         ></progress>
         <p class="panel__hint" id="update-progress-detail" hidden></p>
-        <div class="panel__actions">
-          <button id="check-update" type="button" class="button">
-            Check for updates
-          </button>
+        <div class="panel__actions updates__actions">
           <button
             id="install-update"
             type="button"
@@ -100,6 +101,9 @@
             hidden
           >
             Update now
+          </button>
+          <button id="check-update" type="button" class="button">
+            Check for updates
           </button>
         </div>
         <dialog

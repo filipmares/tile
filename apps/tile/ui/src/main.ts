@@ -11,6 +11,7 @@ import {
   getPermissionStatus,
   getUpdateStatus,
   installUpdate,
+  openUpdateWindow,
   resetToDefaults,
   setAnimation,
   setAnimationDuration,
@@ -40,6 +41,9 @@ const ACCESSIBILITY_URL =
   "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
 const GITHUB_URL = "https://github.com/filipmares/tile";
 const isAboutScreen = new URLSearchParams(window.location.search).has("about");
+const isUpdateScreen = new URLSearchParams(window.location.search).has(
+  "updates",
+);
 const updateIntent = window.sessionStorage.getItem("tile-update-intent");
 window.sessionStorage.removeItem("tile-update-intent");
 
@@ -88,7 +92,8 @@ const dom = {
   developmentPanel: el<HTMLElement>("#development-panel"),
   developmentConfigDir: el<HTMLParagraphElement>("#development-config-dir"),
   launchDevelopmentNote: el<HTMLParagraphElement>("#launch-development-note"),
-  updatePanel: el<HTMLElement>("#update-panel"),
+  updates: el<HTMLElement>("#updates"),
+  updateVersion: el<HTMLParagraphElement>("#update-version"),
   updateStatus: el<HTMLParagraphElement>("#update-status"),
   updateNotes: el<HTMLParagraphElement>("#update-notes"),
   updateProgress: el<HTMLProgressElement>("#update-progress"),
@@ -460,7 +465,6 @@ function renderUpdateStatus(status: UpdateStatus): void {
     if (status.status !== "available" && dom.updateConfirmation.open) {
       dom.updateConfirmation.close();
     }
-    dom.updatePanel.hidden = false;
     dom.updateProgress.hidden = true;
     dom.updateProgressDetail.hidden = true;
     dom.updateProgress.removeAttribute("value");
@@ -538,26 +542,6 @@ function setUpdateAnnouncement(text: string): void {
   }
 }
 
-function describeAboutUpdateStatus(status: UpdateStatus): string {
-  switch (status.status) {
-    case "unavailable":
-      return "Update checks are unavailable in this development build.";
-    case "idle":
-      return "Tile has not checked for updates yet.";
-    case "checking":
-      return "Tile is already checking for updates.";
-    case "current":
-      return "Tile is up to date.";
-    case "available":
-      return `Tile ${status.version} is available. Open Settings or the tray menu to update.`;
-    case "downloading":
-      return `Tile ${status.version} is downloading.`;
-    case "ready-to-relaunch":
-      return `Tile ${status.version} is installed and ready to relaunch.`;
-    case "error":
-      return `Could not check for updates: ${status.message}`;
-  }
-}
 
   async function refreshUpdateStatus(): Promise<UpdateStatus> {
     try {
@@ -603,10 +587,9 @@ function describeAboutUpdateStatus(status: UpdateStatus): string {
     }
   }
 
-  function focusUpdatePanel(): void {
-    dom.updatePanel.hidden = false;
-    dom.updatePanel.scrollIntoView({ behavior: "smooth", block: "start" });
-    dom.updatePanel.focus({ preventScroll: true });
+  function focusUpdateScreen(): void {
+    dom.updates.hidden = false;
+    dom.updates.focus({ preventScroll: true });
   }
 
   function showUpdateConfirmation(): void {
@@ -797,7 +780,7 @@ async function refreshPermission(prompt: boolean): Promise<boolean> {
   return denied;
 }
 
-function wireEvents(): void {
+function wireUpdateEvents(): void {
   dom.checkUpdate.addEventListener("click", () => void runUpdateCheck());
   dom.installUpdate.addEventListener("click", () => {
     if (updateState.status === "ready-to-relaunch") {
@@ -814,6 +797,9 @@ function wireEvents(): void {
   dom.updateConfirmation.addEventListener("cancel", () => {
     dom.installUpdate.focus();
   });
+}
+
+function wireEvents(): void {
   dom.gapWindow.addEventListener("input", () =>
     mirrorWindowGap(dom.gapWindow.value),
   );
@@ -938,61 +924,96 @@ async function maybeShowOrientation(permissionDenied: boolean): Promise<void> {
   });
 }
 
+/** Hides every screen except `screen`, which becomes the whole window. */
+function showOnly(screen: HTMLElement, modifier: string): void {
+  dom.app.classList.add(modifier);
+  for (const child of dom.app.children) {
+    if (child !== screen) (child as HTMLElement).hidden = true;
+  }
+  screen.hidden = false;
+}
+
+async function bootAbout(): Promise<void> {
+  showOnly(dom.about, "app--about");
+  // Wire the actions before awaiting anything, so a slow or failing
+  // version lookup can never leave a button dead.
+  dom.github.addEventListener("click", () => {
+    void openUrl(GITHUB_URL).catch((err) =>
+      console.error("could not open the source repository", err),
+    );
+  });
+  // About never updates anything itself: it hands over to the window that
+  // owns the whole flow, and asks it to start a check on arrival.
+  dom.aboutCheckUpdate.addEventListener("click", async () => {
+    dom.aboutCheckUpdate.disabled = true;
+    dom.aboutUpdateStatus.textContent = "";
+    try {
+      await openUpdateWindow(true);
+    } catch (err) {
+      dom.aboutUpdateStatus.textContent = `Could not open the update window: ${String(err)}`;
+    } finally {
+      dom.aboutCheckUpdate.disabled = false;
+    }
+  });
+  try {
+    dom.aboutVersion.textContent = await getVersion();
+  } catch (err) {
+    console.error("could not read app version", err);
+    dom.aboutVersion.textContent = "Unavailable";
+  } finally {
+    dom.aboutVersion.removeAttribute("aria-busy");
+  }
+}
+
+/**
+ * The dedicated update screen: check, download, install, relaunch. It is the
+ * only place any of that happens, so it re-runs a check whenever the tray
+ * asks for one, even if the window was already open.
+ */
+async function bootUpdates(): Promise<void> {
+  showOnly(dom.updates, "app--updates");
+  wireUpdateEvents();
+  focusUpdateScreen();
+  // Opening the screen at all is a request to update, so an unknown intent
+  // still checks rather than sitting on a stale "not checked yet".
+  const initialUpdateStatus =
+    updateIntent === "show" ? refreshUpdateStatus() : runUpdateCheck();
+  getVersion()
+    .then((version) => {
+      dom.updateVersion.textContent = `Tile ${version}`;
+    })
+    .catch((err) => {
+      console.error("could not read app version", err);
+      dom.updateVersion.textContent = "Tile";
+    });
+  // Re-entry from the tray while the window is already open. A failure here
+  // must not cost the check that is already running.
+  try {
+    await listen("tile://check-for-updates", () => {
+      focusUpdateScreen();
+      void runUpdateCheck();
+    });
+    await listen("tile://show-updates", () => {
+      focusUpdateScreen();
+      void refreshUpdateStatus().then(scheduleUpdateRefresh);
+    });
+  } catch (err) {
+    console.error("could not listen for update requests", err);
+  }
+  scheduleUpdateRefresh(await initialUpdateStatus);
+}
+
 async function boot(): Promise<void> {
   if (isAboutScreen) {
-    dom.app.classList.add("app--about");
-    for (const child of dom.app.children) {
-      if (child !== dom.about) (child as HTMLElement).hidden = true;
-    }
-    dom.about.hidden = false;
-    // Wire the action before awaiting anything, so a slow or failing
-    // version lookup can never leave the button dead.
-    dom.github.addEventListener("click", () => {
-      void openUrl(GITHUB_URL).catch((err) =>
-        console.error("could not open the source repository", err),
-      );
-    });
-    dom.aboutCheckUpdate.addEventListener("click", async () => {
-      dom.aboutCheckUpdate.disabled = true;
-      dom.aboutUpdateStatus.textContent = "Checking for updates…";
-      try {
-        dom.aboutUpdateStatus.textContent = describeAboutUpdateStatus(
-          await checkForUpdates(),
-        );
-      } catch (err) {
-        dom.aboutUpdateStatus.textContent =
-          `Could not check for updates: ${String(err)}`;
-      } finally {
-        dom.aboutCheckUpdate.disabled = false;
-      }
-    });
-    try {
-      const version = await getVersion();
-      dom.aboutVersion.textContent = version;
-    } catch (err) {
-      console.error("could not read app version", err);
-      dom.aboutVersion.textContent = "Unavailable";
-    } finally {
-      dom.aboutVersion.removeAttribute("aria-busy");
-    }
+    await bootAbout();
+    return;
+  }
+  if (isUpdateScreen) {
+    await bootUpdates();
     return;
   }
 
   wireEvents();
-  await listen("tile://check-for-updates", () => {
-    focusUpdatePanel();
-    void runUpdateCheck();
-  });
-  await listen("tile://show-updates", () => {
-    focusUpdatePanel();
-    void refreshUpdateStatus().then(scheduleUpdateRefresh);
-  });
-  const initialUpdateStatus = updateIntent === "check"
-    ? runUpdateCheck()
-    : refreshUpdateStatus();
-  if (updateIntent === "check" || updateIntent === "show") {
-    focusUpdatePanel();
-  }
   // Build provenance is fetched first and separately: if it fails, the rest of
   // the settings UI should still load.
   try {
@@ -1013,7 +1034,6 @@ async function boot(): Promise<void> {
   // shortcuts it describes are still inert.
   const permissionDenied = await refreshPermission(false);
   await maybeShowOrientation(permissionDenied);
-  scheduleUpdateRefresh(await initialUpdateStatus);
 }
 
 void boot();

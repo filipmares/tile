@@ -142,6 +142,17 @@ pub fn get_update_status(manager: State<'_, Arc<UpdateManager>>) -> UpdateStatus
     manager.status().into()
 }
 
+/// Opens the dedicated update window, optionally starting a check on arrival.
+/// Used by the About window, whose only update affordance is to hand the user
+/// over to the screen that can actually install one.
+#[tauri::command]
+pub fn open_update_window<R: Runtime>(
+    app: AppHandle<R>,
+    check_for_updates: bool,
+) -> Result<(), String> {
+    crate::window::open_updates(&app, check_for_updates).map_err(|err| err.to_string())
+}
+
 #[tauri::command]
 pub async fn check_for_updates<R: Runtime>(
     app: AppHandle<R>,

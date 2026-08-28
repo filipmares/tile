@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Permissions for the Tile settings and about windows.",
-  "windows": ["settings", "about"],
+  "description": "Permissions for the Tile settings, about, and update windows.",
+  "windows": ["settings", "about", "updates"],
   "permissions": ["core:default", "opener:default"]
 }
