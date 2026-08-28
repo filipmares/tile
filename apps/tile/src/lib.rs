@@ -68,6 +68,7 @@ pub fn run() {
             commands::get_permission_status,
             commands::get_hotkey_failures,
             commands::get_update_status,
+            commands::open_update_window,
             commands::check_for_updates,
             commands::install_update,
         ])

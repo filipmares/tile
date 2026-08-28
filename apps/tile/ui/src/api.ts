@@ -68,3 +68,8 @@ export const installUpdate = (
   relaunchAfterInstall: boolean,
 ): Promise<UpdateStatus> =>
   invoke("install_update", { relaunchAfterInstall });
+
+/** Opens the dedicated update window, optionally checking on arrival. */
+export const openUpdateWindow = (
+  checkForUpdates: boolean,
+): Promise<void> => invoke("open_update_window", { checkForUpdates });
