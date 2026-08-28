@@ -76,8 +76,6 @@ body {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 8%, transparent),
-    0 8px 20px color-mix(in srgb, var(--text) 7%, transparent);
   animation: about-fade-in 240ms ease-out both;
 }
 
@@ -94,7 +92,6 @@ body {
   width: 56px;
   height: 56px;
   border-radius: 14px;
-  filter: drop-shadow(0 5px 10px color-mix(in srgb, var(--accent) 22%, transparent));
 }
 
 .about__name {
@@ -622,8 +619,6 @@ select {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 8%, transparent),
-    0 8px 20px color-mix(in srgb, var(--text) 7%, transparent);
   animation: about-fade-in 240ms ease-out both;
 }
 
@@ -639,7 +634,6 @@ select {
   width: 52px;
   height: 52px;
   border-radius: 13px;
-  filter: drop-shadow(0 5px 10px color-mix(in srgb, var(--accent) 22%, transparent));
 }
 
 .welcome__title {

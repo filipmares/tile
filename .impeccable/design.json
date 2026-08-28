@@ -1,0 +1,294 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-28T04:36:56Z",
+  "title": "Design System: Tile",
+  "extensions": {
+    "colorMeta": {
+      "accent": {
+        "role": "primary",
+        "displayName": "Signal Blue",
+        "canonical": "#2563eb",
+        "darkValue": "#3b82f6",
+        "tonalRamp": [
+          "#0b1d47",
+          "#122c6b",
+          "#193b90",
+          "#1f4cb8",
+          "#2563eb",
+          "#5b8bf2",
+          "#9ab6f7",
+          "#dbe6fd"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "#1f2937",
+        "darkValue": "#f3f4f6",
+        "tonalRamp": [
+          "#0d1218",
+          "#151c25",
+          "#1f2937",
+          "#374357",
+          "#566076",
+          "#818b9c",
+          "#b6bdc9",
+          "#e7eaef"
+        ]
+      },
+      "ink-dim": {
+        "role": "neutral",
+        "displayName": "Dim Ink",
+        "canonical": "#667085",
+        "darkValue": "#a8b0bb"
+      },
+      "desk": {
+        "role": "neutral",
+        "displayName": "Desk Grey",
+        "canonical": "#f7f8fa",
+        "darkValue": "#17191c"
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Card White",
+        "canonical": "#ffffff",
+        "darkValue": "#22262b"
+      },
+      "surface-sunken": {
+        "role": "neutral",
+        "displayName": "Sunken Grey",
+        "canonical": "#f1f3f6",
+        "darkValue": "#2b3036"
+      },
+      "hairline": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "#dfe3e8",
+        "darkValue": "#3a414a"
+      },
+      "danger": {
+        "role": "tertiary",
+        "displayName": "Fault Red",
+        "canonical": "#b42318",
+        "darkValue": "#f97066"
+      },
+      "caution-bg": {
+        "role": "tertiary",
+        "displayName": "Caution Sand",
+        "canonical": "#fff9eb",
+        "darkValue": "#332a16"
+      },
+      "caution-border": {
+        "role": "tertiary",
+        "displayName": "Caution Sand Edge",
+        "canonical": "#f1c56b",
+        "darkValue": "#6b5520"
+      },
+      "focus": {
+        "role": "primary",
+        "displayName": "Focus Ring Blue",
+        "canonical": "#2563eb",
+        "darkValue": "#60a5fa"
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "The app name on the About card. One per window, at most."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "The welcome window's greeting."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Section and panel headings in Settings."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "The root size; everything not otherwise specified."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Descriptions, hints, counts, keycaps and footnotes; tabular figures."
+      }
+    },
+    "shadows": [
+      {
+        "name": "stage-window-floating",
+        "value": "0 8px 16px -6px color-mix(in srgb, var(--text) 45%, transparent)",
+        "purpose": "Inside the welcome stage only: the miniature window before Tile has placed it. Encodes state, not elevation."
+      },
+      {
+        "name": "stage-window-snapped",
+        "value": "0 2px 5px -2px color-mix(in srgb, var(--text) 35%, transparent)",
+        "purpose": "Inside the welcome stage only: the same window once snapped flush to an edge."
+      },
+      {
+        "name": "recording-ring",
+        "value": "0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent)",
+        "purpose": "A shortcut row awaiting a keypress. A state indicator, exempt from the Flat Rule."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-settle",
+        "value": "cubic-bezier(0.22, 1, 0.36, 1)",
+        "purpose": "Exponential ease-out for the stage pane's travel (420ms) and the step check (320ms)."
+      },
+      {
+        "name": "ease-state",
+        "value": "ease-out",
+        "purpose": "Colour and border state changes: 120ms on controls, 220ms on walkthrough rows."
+      },
+      {
+        "name": "card-entrance",
+        "value": "240ms ease-out both (opacity + 6px rise)",
+        "purpose": "The single entrance animation, used once per centred card window."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "narrow",
+        "value": "560px",
+        "purpose": "Below this the Settings field rows stop being two columns and stack."
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button",
+      "description": "The default button: every action that is not the window's exit or a destructive one.",
+      "html": "<button class=\"ds-btn\">All shortcuts</button>",
+      "css": ".ds-btn { padding: 8px 14px; font: inherit; color: #1f2937; background: #f1f3f6; border: 1px solid #dfe3e8; border-radius: 6px; cursor: pointer; } .ds-btn:hover { background: #dfe3e8; } .ds-btn:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }"
+    },
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "One per window, at the point of exit. Brightens on hover rather than changing hue.",
+      "html": "<button class=\"ds-btn-primary\">Start using Tile</button>",
+      "css": ".ds-btn-primary { padding: 8px 14px; font: inherit; color: #ffffff; background: #2563eb; border: 1px solid transparent; border-radius: 6px; cursor: pointer; } .ds-btn-primary:hover { filter: brightness(1.05); } .ds-btn-primary:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }"
+    },
+    {
+      "name": "Shortcut Row",
+      "kind": "custom",
+      "refersTo": "binding-key",
+      "description": "The unit Settings is made of: action name, the bound chord as a keycap button, and a clear button. Geometry never changes between states.",
+      "html": "<div class=\"ds-binding\"><span class=\"ds-binding__label\">Left half</span><span class=\"ds-binding__controls\"><button class=\"ds-binding__key\">^\\u2325Left</button><button class=\"ds-binding__clear\" aria-label=\"Clear\">\\u00d7</button></span></div>",
+      "css": ".ds-binding { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; padding: 12px 14px; background: #ffffff; border: 1px solid #dfe3e8; border-radius: 10px; color: #1f2937; font: inherit; } .ds-binding__label { font-weight: 500; } .ds-binding__controls { display: flex; align-items: center; gap: 6px; } .ds-binding__key { min-width: 126px; padding: 6px 10px; font: inherit; font-variant-numeric: tabular-nums; text-align: center; color: #1f2937; background: #f1f3f6; border: 1px solid #dfe3e8; border-radius: 6px; cursor: pointer; transition: background-color 120ms ease, border-color 120ms ease; } .ds-binding__key:hover { background: #dfe3e8; } .ds-binding__key:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; } .ds-binding__clear { padding: 4px 8px; font: inherit; line-height: 1; color: #667085; background: transparent; border: 1px solid transparent; border-radius: 6px; cursor: pointer; } .ds-binding__clear:hover { color: #b42318; background: #f1f3f6; }"
+    },
+    {
+      "name": "Recording Keycap",
+      "kind": "custom",
+      "refersTo": "binding-key-recording",
+      "description": "A shortcut row awaiting a keypress. The only place a ring appears outside focus.",
+      "html": "<button class=\"ds-key-recording\">Press keys\\u2026</button>",
+      "css": ".ds-key-recording { min-width: 126px; padding: 6px 10px; font: inherit; text-align: center; color: #2563eb; background: #f1f3f6; border: 1px solid #2563eb; border-radius: 6px; box-shadow: 0 0 0 2px color-mix(in srgb, #2563eb 30%, transparent); cursor: pointer; }"
+    },
+    {
+      "name": "Select Field",
+      "kind": "input",
+      "refersTo": "panel",
+      "description": "A settings row: a fixed label column and a flexible control, stacking below 560px.",
+      "html": "<label class=\"ds-field\"><span class=\"ds-field__label\">On repeat</span><span class=\"ds-field__control\"><select class=\"ds-select\"><option>Cycle sizes</option><option>Do nothing</option></select></span></label>",
+      "css": ".ds-field { display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 6px 0; color: #1f2937; font: inherit; } .ds-field__label { min-width: 170px; font-weight: 500; } .ds-field__control { display: flex; align-items: center; gap: 10px; flex: 1; } .ds-select { min-width: 190px; padding: 7px 30px 7px 9px; font: inherit; color: #1f2937; background: #ffffff; border: 1px solid #dfe3e8; border-radius: 6px; } .ds-select:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }"
+    },
+    {
+      "name": "Panel",
+      "kind": "card",
+      "refersTo": "panel",
+      "description": "The flat container everything in Settings sits in. Tone plus hairline, never a shadow.",
+      "html": "<section class=\"ds-panel\"><h2 class=\"ds-panel__title\">Accessibility permission</h2><p class=\"ds-panel__body\">Tile needs permission to move other applications' windows.</p></section>",
+      "css": ".ds-panel { padding: 16px 18px; background: #ffffff; border: 1px solid #dfe3e8; border-radius: 10px; color: #1f2937; font: inherit; } .ds-panel__title { margin: 0; font-size: 16px; line-height: 1.3; letter-spacing: -0.01em; } .ds-panel__body { margin: 8px 0 0; color: #667085; font-size: 13px; line-height: 1.45; }"
+    },
+    {
+      "name": "Warning Panel",
+      "kind": "card",
+      "refersTo": "panel-warning",
+      "description": "Sand fill and edge. Means 'this needs your attention', never 'this is important'.",
+      "html": "<section class=\"ds-panel-warning\">Nothing to move \\u2014 Tile skips its own windows.</section>",
+      "css": ".ds-panel-warning { padding: 16px 18px; background: #fff9eb; border: 1px solid #f1c56b; border-radius: 10px; color: #1f2937; font-size: 13px; line-height: 1.45; }"
+    },
+    {
+      "name": "Walkthrough Step",
+      "kind": "custom",
+      "refersTo": "step",
+      "description": "The welcome screen's live checklist row, shown completed. Built once and mutated in place so the tick can play.",
+      "html": "<li class=\"ds-step\" data-state=\"done\"><span class=\"ds-step__marker\"><svg class=\"ds-step__check\" viewBox=\"0 0 12 12\" aria-hidden=\"true\"><path d=\"M2.5 6.4 4.7 8.6 9.5 3.6\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.9\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg></span><p class=\"ds-step__label\">Snap a window to one side</p><span class=\"ds-step__keys\"><kbd class=\"ds-step__key\">^\\u2325Left</kbd></span><p class=\"ds-step__hint\">Click any window behind this one first.</p></li>",
+      "css": ".ds-step { list-style: none; display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; grid-template-areas: \"marker label keys\" \". hint hint\"; align-items: start; column-gap: 10px; row-gap: 3px; padding: 9px 10px; border-radius: 8px; background: color-mix(in srgb, #2563eb 8%, transparent); color: #1f2937; font: inherit; } .ds-step__marker { grid-area: marker; width: 18px; height: 18px; margin-top: 1px; display: grid; place-items: center; border: 1.5px solid #2563eb; border-radius: 50%; background: #2563eb; color: #ffffff; } .ds-step__check { width: 11px; height: 11px; } .ds-step__label { grid-area: label; margin: 0; font-size: 13px; font-weight: 550; } .ds-step__hint { grid-area: hint; margin: 0; color: #667085; font-size: 12px; line-height: 1.45; } .ds-step__keys { grid-area: keys; display: flex; align-items: center; gap: 5px; padding-top: 1px; } .ds-step__key { padding: 2px 7px; background: #f1f3f6; border: 1px solid #dfe3e8; border-bottom-width: 2px; border-radius: 6px; font-family: inherit; font-size: 12px; white-space: nowrap; }"
+    },
+    {
+      "name": "Desk Stage",
+      "kind": "custom",
+      "refersTo": "card",
+      "description": "A miniature of the user's desk: a 16:10 display with its menu-bar strip, the Tile dot, and a snapped window. A mirror of what really happened, never an illustration.",
+      "html": "<div class=\"ds-stage\"><div class=\"ds-stage__screen\"><span class=\"ds-stage__pane\"><span class=\"ds-stage__pane-bar\"></span></span></div></div>",
+      "css": ".ds-stage { display: flex; justify-content: center; height: 132px; } .ds-stage__screen { position: relative; height: 100%; aspect-ratio: 16 / 10; background: #f1f3f6; border: 1px solid #dfe3e8; border-radius: 7px; overflow: hidden; } .ds-stage__screen::before { content: \"\"; position: absolute; inset-inline: 0; top: 0; height: 10%; background: color-mix(in srgb, #1f2937 12%, transparent); border-bottom: 1px solid #dfe3e8; } .ds-stage__screen::after { content: \"\"; position: absolute; top: 4%; right: 6px; width: 4px; height: 4px; border-radius: 50%; background: #2563eb; } .ds-stage__pane { position: absolute; left: 0; top: 10%; width: 50%; height: 90%; background: color-mix(in srgb, #2563eb 20%, #ffffff); border: 1px solid color-mix(in srgb, #2563eb 45%, #dfe3e8); border-radius: 5px; box-shadow: 0 2px 5px -2px color-mix(in srgb, #1f2937 35%, transparent); overflow: hidden; } .ds-stage__pane-bar { display: block; height: 7px; background: color-mix(in srgb, #2563eb 42%, #ffffff); border-bottom: 1px solid color-mix(in srgb, #2563eb 35%, #dfe3e8); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Quiet Utility",
+    "overview": "Tile's job is to move windows, and its interface's job is to be forgotten. Every surface is built from the host operating system's own vocabulary — the system UI font, a neutral desk-grey page, white cards, hairline borders, one blue accent — so that Settings feels like a preference pane rather than a website that happens to live in a window. Nothing here competes with the user's actual work; the windows on screen are the content, and Tile is the hand that moves them.\n\nThe system is deliberately narrow. One accent colour, one radius family, one font stack, four type steps, and a single strip of authored motion. That restraint is not minimalism as a style — it is what lets a tray utility open a window for eight seconds and close it again without leaving an impression. Where the UI does become expressive, it earns it by being literal: the welcome screen's miniature desk is not an illustration, it is a live mirror of where the real window went.\n\nDensity follows the task. Settings is a long, scannable list of shortcut rows where scanability outranks air; the About and Welcome cards are small, centred compositions with generous padding, because there is only one thing to read. Both derive from the same tokens.",
+    "keyCharacteristics": [
+      "System-native by default — the OS font stack, no webfonts, no brand type.",
+      "One accent (#2563eb), used only to mean active, focused, or done.",
+      "Fully flat: tonal layering and 1px hairlines carry every boundary.",
+      "Automatic light and dark via prefers-color-scheme — no manual theme switch.",
+      "Motion is rare, monotonic, and always inside prefers-reduced-motion: no-preference."
+    ],
+    "rules": [
+      {
+        "name": "The One Blue Rule",
+        "body": "Blue means this is live: focused, recording, active, done. If an element is not in one of those states, it is grey. A blue that means \"important\" or \"on brand\" is a bug.",
+        "section": "colors"
+      },
+      {
+        "name": "The Three Tones Rule",
+        "body": "Depth is exactly three greys deep — desk, card, sunken — plus a hairline. A fourth tone means the layout, not the palette, needs fixing.",
+        "section": "colors"
+      },
+      {
+        "name": "The Semantic Pair Rule",
+        "body": "Red and sand are reserved: red states a problem, sand asks for attention. Neither is available for emphasis.",
+        "section": "colors"
+      },
+      {
+        "name": "The System Face Rule",
+        "body": "No webfont, ever. Tile inherits the OS UI font so an update to the OS updates Tile.",
+        "section": "typography"
+      },
+      {
+        "name": "The Tabular Numbers Rule",
+        "body": "Anything that changes in place while the user watches — a step count, a version, a millisecond value, a shortcut — uses font-variant-numeric: tabular-nums so it cannot twitch.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat Rule",
+        "body": "Surfaces do not cast shadows. If two things need separating, change the tone or draw a hairline. A shadow is only permitted when it carries information a tone cannot.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do build from the four CSS custom properties that already exist (--surface, --surface-2, --border, --text) before introducing a value.",
+      "Do separate surfaces with a tone change plus a 1px hairline.",
+      "Do reserve the accent for live states: focus, recording, active, done.",
+      "Do use :focus-visible with the 2px accent outline for every interactive element — the app is keyboard-first and the ring is the product.",
+      "Do put every transition and animation inside @media (prefers-reduced-motion: no-preference), and keep easing monotonic (cubic-bezier(0.22, 1, 0.36, 1) or a plain ease-out).",
+      "Do give anything that updates in place tabular figures.",
+      "Do keep both light and dark correct in the same edit; the dark palette is a prefers-color-scheme block a few lines above, not a later task."
+    ],
+    "donts": [
+      "Don't add a box-shadow or drop-shadow to a UI surface. The two shadows in the codebase encode window state inside the stage; that is the whole budget.",
+      "Don't introduce a webfont, an icon font, or an icon package. Icons are inline SVG; type is the system stack.",
+      "Don't use blue for emphasis, headings, or brand presence.",
+      "Don't fill anything with red. Red is text.",
+      "Don't add a fourth neutral tone or a second radius family.",
+      "Don't animate an entrance on more than one element per window; one authored moment, and on the welcome screen it is already spent on the tick and the travelling pane.",
+      "Don't let a state change reflow a list. Colour changes; geometry holds.",
+      "Don't show a control, count, or claim the app cannot verify — the UI is bound by the product's honesty rule as tightly as by its palette."
+    ]
+  }
+}
