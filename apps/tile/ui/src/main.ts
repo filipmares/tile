@@ -653,14 +653,16 @@ function skipDeck(): void {
  * and say something useful when it did nothing.
  */
 function onActionPerformed(event: ActionPerformed): void {
-  if (!event.hadWindow) {
-    setWalkNote(
-      "Nothing to move — Tile skips its own windows. Click a window behind this one, then press again.",
-    );
-    return;
-  }
-  if (!event.moved) return;
-  setWalkNote(null);
+  // An empty desk is not a failed press. The key still reached Tile, which is
+  // the half that actually goes wrong on a first run — the permission and the
+  // registration. Dead-ending the deck there would strand exactly the machine
+  // this screen matters most on, so mirror the move the action *would* have
+  // made and carry on, while saying plainly that it was a preview rather than
+  // a report. The note outlives the slide on purpose: it stays true until a
+  // real window moves, and clears itself the moment one does.
+  const empty = !event.hadWindow;
+  if (!empty && !event.moved) return;
+  setWalkNote(empty ? "No window open to move — so that was a preview." : null);
 
   const repeat = event.action === walk.lastAction;
   reflectOnStage(event.action);
@@ -1379,7 +1381,7 @@ async function bootWelcome(): Promise<void> {
   movePane(FLOATING, false);
   if (!status.hasMovableWindow && walk.slides.length > 0) {
     setWalkNote(
-      "Open a window first — a browser, Finder, anything. Tile skips its own windows, so there is nothing to move yet.",
+      "No window open yet — presses will preview. Open one for the real thing.",
     );
   }
 

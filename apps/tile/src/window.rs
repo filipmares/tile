@@ -109,11 +109,21 @@ pub fn open_welcome<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     if let Some(window) = app.get_webview_window(WELCOME_LABEL) {
         window.show()?;
         window.unminimize().ok();
-        window.set_focus()?;
         return Ok(());
     }
 
-    let window = WebviewWindowBuilder::new(
+    // Seen but not focused, which for this window are two different needs.
+    //
+    // Tile is an accessory app with no Dock icon, so a new window is not
+    // brought forward for us the way it would be for an ordinary app: a
+    // welcome screen that opens behind the user's work is one they never see.
+    // Floating it above solves that without the usual price. Taking focus
+    // would make *this* window the one the user was last in, so the first
+    // shortcut they press would move something they are no longer looking at,
+    // and the proof the walkthrough exists to give would land out of sight.
+    // Left unfocused, the window they were already working in stays the
+    // target, and it moves in plain view behind the card.
+    WebviewWindowBuilder::new(
         app,
         WELCOME_LABEL,
         WebviewUrl::App("index.html?welcome".into()),
@@ -123,14 +133,10 @@ pub fn open_welcome<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     .min_inner_size(460.0, 500.0)
     .resizable(true)
     .visible(true)
-    .focused(true)
+    .focused(false)
+    .always_on_top(true)
     .build()?;
 
-    // Tile is an accessory app with no Dock icon, so a new window is not
-    // brought forward for us the way it would be for an ordinary app. A
-    // welcome screen that opens behind whatever the user was doing is a
-    // welcome screen they never see.
-    window.set_focus()?;
     Ok(())
 }
 

@@ -370,8 +370,20 @@ standing for Tile itself. A tinted pane inside is positioned against the
 measured boxes of those displays and travels to its new slot in 420ms whenever
 the real window moves. A dashed hairline outline, drawn in dim ink and never in
 accent, shows where the current slide's shortcut would put it. The outline is a
-promise about the next press and the pane is a report of the last one; the pane
-may only ever show what actually happened.
+promise about the next press and the pane is a report of the last one.
+
+The pane may show a move that did not happen in exactly one case: the press was
+real but there was no window to move. An empty desk is common on a first run and
+must not dead-end the walkthrough, so the pane travels anyway and the note under
+the deck says the move was a preview. The rule the exception keeps is the real
+one — the pane never *silently* shows a hypothetical. Whenever it is not
+reporting, the screen says so in words.
+
+The welcome window never takes focus, so the window the user was already working
+in stays the one Tile moves. It floats above that window instead, because being
+seen and being focused are different needs: an accessory app's window is not
+raised for it, but a walkthrough that took focus would make itself the target
+and move its proof out of sight.
 
 ## Do's and Don'ts
 

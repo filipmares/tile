@@ -209,7 +209,7 @@
       "kind": "card",
       "refersTo": "panel-warning",
       "description": "Sand fill and edge. Means 'this needs your attention', never 'this is important'.",
-      "html": "<section class=\"ds-panel-warning\">Nothing to move \\u2014 Tile skips its own windows.</section>",
+      "html": "<section class=\"ds-panel-warning\">No window open to move \\u2014 so that was a preview.</section>",
       "css": ".ds-panel-warning { padding: 16px 18px; background: #fff9eb; border: 1px solid #f1c56b; border-radius: 10px; color: #1f2937; font-size: 13px; line-height: 1.45; }"
     },
     {
