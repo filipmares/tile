@@ -11,6 +11,7 @@ import {
   PermissionStatus,
   SubsequentExecutionMode,
   UpdateStatus,
+  WelcomeStatus,
   WindowAction,
 } from "./types";
 
@@ -57,6 +58,14 @@ export const openSettings = (): Promise<void> => invoke("open_settings");
 
 /** Reopens the welcome screen on demand. */
 export const openWelcome = (): Promise<void> => invoke("open_welcome");
+
+/**
+ * What the welcome walkthrough can honestly ask for on this machine: how many
+ * displays there are to throw a window to, and whether anything movable is
+ * focused right now.
+ */
+export const getWelcomeStatus = (): Promise<WelcomeStatus> =>
+  invoke("get_welcome_status");
 
 export const performAction = (action: WindowAction): Promise<void> =>
   invoke("perform_action", { action });

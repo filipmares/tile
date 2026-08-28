@@ -501,3 +501,21 @@ export type UpdateStatus =
     }
   | { status: "ready-to-relaunch"; version: string }
   | { status: "error"; message: string };
+
+/** `WelcomeStatusDto` — what the welcome walkthrough may honestly ask for. */
+export interface WelcomeStatus {
+  screenCount: number;
+  hasMovableWindow: boolean;
+}
+
+/**
+ * `ActionPerformedDto` — payload of `tile://action-performed`, sent to the
+ * welcome window only. `moved` is false when the action succeeded but changed
+ * nothing, which is the difference between a step the user completed and one
+ * they only attempted.
+ */
+export interface ActionPerformed {
+  action: WindowAction;
+  moved: boolean;
+  hadWindow: boolean;
+}

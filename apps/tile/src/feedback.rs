@@ -32,7 +32,7 @@ pub fn run_action_preemptible<R: Runtime>(
 ) {
     let state = app.state::<Arc<AppState>>();
     match state.perform_action_preemptible(action, next) {
-        Ok(()) => {}
+        Ok(outcome) => window::notify_action_performed(app, action, outcome),
         Err(err) => {
             log::error!("action {action} failed: {err}");
             if is_permission_denied(&err) {

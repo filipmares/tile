@@ -11,7 +11,9 @@ use tauri::{AppHandle, Runtime, State};
 use tile_core::{Config, CycleSize, Gaps, Hotkey, SubsequentExecutionMode, WindowAction};
 
 use crate::autostart;
-use crate::dto::{BuildInfoDto, HotkeyFailureDto, PermissionStatusDto, UpdateStatusDto};
+use crate::dto::{
+    BuildInfoDto, HotkeyFailureDto, PermissionStatusDto, UpdateStatusDto, WelcomeStatusDto,
+};
 use crate::state::AppState;
 use crate::update::UpdateManager;
 
@@ -130,7 +132,21 @@ pub fn reset_to_defaults<R: Runtime>(app: AppHandle<R>, state: State<'_, Shared>
 
 #[tauri::command]
 pub fn perform_action(state: State<'_, Shared>, action: WindowAction) -> Result<(), String> {
-    state.perform_action(action).map_err(|err| err.to_string())
+    state
+        .perform_action(action)
+        .map(|_| ())
+        .map_err(|err| err.to_string())
+}
+
+/// Reports what the welcome walkthrough can honestly ask for on this machine.
+#[tauri::command]
+pub fn get_welcome_status(state: State<'_, Shared>) -> Result<WelcomeStatusDto, String> {
+    let screen_count = state.screen_count().map_err(|err| err.to_string())?;
+    let has_movable_window = state.has_movable_window().map_err(|err| err.to_string())?;
+    Ok(WelcomeStatusDto {
+        screen_count,
+        has_movable_window,
+    })
 }
 
 #[tauri::command]

@@ -222,8 +222,9 @@ page:
 
 Tile has no main window: after launching, look for its icon in the menu bar
 (macOS) or the system tray (Windows). The first launch opens a welcome window
-that introduces the default shortcuts; you can reopen it any time from the
-bottom of **Settings…**.
+that walks you through the default shortcuts live — press them and the steps
+tick themselves off. You can reopen it any time from the bottom of
+**Settings…**.
 
 ### From source
 

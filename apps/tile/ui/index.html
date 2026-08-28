@@ -41,80 +41,57 @@
             class="welcome__mark"
             src="./icon.png"
             alt=""
-            width="56"
-            height="56"
+            width="52"
+            height="52"
           />
           <div>
             <h1 id="welcome-heading" class="welcome__title">Welcome to Tile</h1>
             <p class="welcome__lead">
-              Tile has no main window. It runs in the background, and its icon
-              is in the <span id="welcome-home">menu bar</span>.
+              Tile has no window of its own. It waits in the
+              <span id="welcome-home">menu bar</span> and moves whatever window
+              you are working in.
             </p>
           </div>
         </header>
 
-        <section class="welcome__step" aria-labelledby="welcome-keys-heading">
-          <h2 id="welcome-keys-heading" class="welcome__step-title">
-            Try it now
-          </h2>
-          <p class="welcome__step-body">
-            Click any window to focus it, then hold the modifier and press one
-            of these.
-          </p>
-          <ul class="welcome__keys" id="welcome-keys"></ul>
+        <!-- A miniature of your desk. The pane inside it moves when Tile moves
+             a real window, so the walkthrough below shows its work. -->
+        <div class="stage" id="welcome-stage" aria-hidden="true">
+          <div class="stage__screens" id="welcome-screens"></div>
+          <div class="stage__pane" id="welcome-pane">
+            <span class="stage__pane-bar"></span>
+          </div>
+        </div>
+
+        <section class="walk" aria-labelledby="welcome-walk-heading">
+          <div class="walk__head">
+            <h2 id="welcome-walk-heading" class="walk__title">
+              A few presses and you know Tile
+            </h2>
+            <p class="walk__count" id="welcome-progress" aria-live="polite">
+              0 of 3
+            </p>
+          </div>
+          <ol class="walk__steps" id="welcome-steps"></ol>
+          <p class="walk__note" id="welcome-note" role="status" hidden></p>
         </section>
 
-        <section class="welcome__step" aria-labelledby="welcome-repeat-heading">
-          <h2 id="welcome-repeat-heading" class="welcome__step-title">
-            Press the same shortcut again
-          </h2>
-          <p class="welcome__step-body">
-            Repeating a shortcut changes the size instead of repeating the
-            move. The left and right arrows cycle half, then two thirds, then a
-            third, then back to half. The cycle restarts when you run a
-            different action, switch to another window, or move the window
-            yourself.
-          </p>
-        </section>
-
-        <section
-          class="welcome__step"
-          aria-labelledby="welcome-displays-heading"
-        >
-          <h2 id="welcome-displays-heading" class="welcome__step-title">
-            Moving between displays
-          </h2>
-          <p class="welcome__step-body">
-            Throwing a window to another display keeps its slot where it can —
-            a left third stays a left third. A window that is not in a
-            recognisable slot keeps its relative place instead, measured
-            against each display's own work area, so mixed-resolution setups
-            behave.
-          </p>
-        </section>
-
-        <section class="welcome__step" aria-labelledby="welcome-more-heading">
-          <h2 id="welcome-more-heading" class="welcome__step-title">
-            Everything else
-          </h2>
-          <p class="welcome__step-body">
-            Tile has <span id="welcome-action-count">more</span> window actions
-            in total. The ones above are bound out of the box; the rest are
-            waiting in Settings for keys of your own, next to window spacing,
-            motion and startup.
-          </p>
-        </section>
+        <p class="welcome__more">
+          They are the start of
+          <span id="welcome-action-count">75</span> actions — thirds, quarters,
+          corners, nudges — all waiting for keys of your own.
+        </p>
 
         <div class="welcome__actions">
+          <button id="welcome-settings" type="button" class="button">
+            All shortcuts
+          </button>
           <button
-            id="welcome-settings"
+            id="welcome-dismiss"
             type="button"
             class="button button--primary"
           >
-            Open Settings
-          </button>
-          <button id="welcome-dismiss" type="button" class="button">
-            Done
+            Start using Tile
           </button>
         </div>
         <p class="welcome__meta">

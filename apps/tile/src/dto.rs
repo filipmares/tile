@@ -139,6 +139,29 @@ impl From<&HotkeyFailure> for HotkeyFailureDto {
     }
 }
 
+/// What the welcome window needs to know about the machine it is running on,
+/// so it can only ask the user to do things that would actually work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WelcomeStatusDto {
+    /// Connected displays. One means there is nowhere to throw a window to.
+    pub screen_count: usize,
+    /// Whether something Tile could move is focused right now.
+    pub has_movable_window: bool,
+}
+
+/// An action the user just performed, reported to the welcome window.
+///
+/// `moved` is the honest part: an action that found nothing to act on still
+/// succeeds, and a walkthrough that ticked a step off for it would be lying.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionPerformedDto {
+    pub action: WindowAction,
+    pub moved: bool,
+    pub had_window: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -6,8 +6,11 @@
 //! open recreates it.
 
 use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewUrl, WebviewWindowBuilder};
+use tile_core::WindowAction;
 
 use crate::build_kind::BuildKind;
+use crate::dto::ActionPerformedDto;
+use crate::state::ActionOutcome;
 
 /// Stable label for the single settings window.
 pub const SETTINGS_LABEL: &str = "settings";
@@ -19,6 +22,32 @@ pub const WELCOME_LABEL: &str = "welcome";
 const CHECK_FOR_UPDATES_EVENT: &str = "tile://check-for-updates";
 /// Requests that an open settings window surface the current update state.
 const SHOW_UPDATES_EVENT: &str = "tile://show-updates";
+/// Tells the welcome window that an action just ran, so its walkthrough can
+/// tick itself off.
+const ACTION_PERFORMED_EVENT: &str = "tile://action-performed";
+
+/// Reports a finished action to the welcome window, if one is open.
+///
+/// Deliberately addressed rather than broadcast: the walkthrough is the only
+/// listener there will ever be, and the settings window has no business
+/// hearing about every hotkey the user presses.
+pub fn notify_action_performed<R: Runtime>(
+    app: &AppHandle<R>,
+    action: WindowAction,
+    outcome: ActionOutcome,
+) {
+    if app.get_webview_window(WELCOME_LABEL).is_none() {
+        return;
+    }
+    let payload = ActionPerformedDto {
+        action,
+        moved: outcome == ActionOutcome::Moved,
+        had_window: outcome != ActionOutcome::NoWindow,
+    };
+    if let Err(err) = app.emit_to(WELCOME_LABEL, ACTION_PERFORMED_EVENT, payload) {
+        log::debug!("could not tell the welcome window about {action}: {err}");
+    }
+}
 
 /// Opens the settings window, focusing it if it already exists.
 pub fn open_settings<R: Runtime>(app: &AppHandle<R>, kind: BuildKind) -> tauri::Result<()> {
@@ -84,17 +113,24 @@ pub fn open_welcome<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         return Ok(());
     }
 
-    WebviewWindowBuilder::new(
+    let window = WebviewWindowBuilder::new(
         app,
         WELCOME_LABEL,
         WebviewUrl::App("index.html?welcome".into()),
     )
     .title("Welcome to Tile")
     .inner_size(520.0, 680.0)
-    .min_inner_size(420.0, 480.0)
+    .min_inner_size(460.0, 520.0)
     .resizable(true)
     .visible(true)
+    .focused(true)
     .build()?;
+
+    // Tile is an accessory app with no Dock icon, so a new window is not
+    // brought forward for us the way it would be for an ordinary app. A
+    // welcome screen that opens behind whatever the user was doing is a
+    // welcome screen they never see.
+    window.set_focus()?;
     Ok(())
 }
 

@@ -599,21 +599,26 @@ select {
   width: 100%;
 }
 
-/* The welcome screen: its own window, and the only place Tile explains what
-   its defaults do. Centred like About, but tall enough to read. */
+/* The welcome screen: its own window, and the only place Tile teaches its
+   defaults. The walkthrough is live — the steps tick themselves off when the
+   user presses the real shortcuts, and the stage mirrors the window that
+   actually moved. Centred like About, but tall enough to work through. */
 .app.app--welcome {
   min-height: 100vh;
-  padding: 28px;
+  padding: 24px;
   background: var(--surface-2);
+  display: flex;
 }
 
 .welcome {
-  width: min(100%, 460px);
-  margin: 0 auto;
+  width: min(100%, 468px);
+  /* Auto margins centre the card when the window is taller than it, and
+     still let it scroll from the top when it is not. */
+  margin: auto;
   display: flex;
   flex-direction: column;
-  gap: 22px;
-  padding: 28px 26px 24px;
+  gap: 20px;
+  padding: 26px 24px 22px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -631,62 +636,224 @@ select {
 .welcome__mark {
   display: block;
   flex: 0 0 auto;
-  width: 56px;
-  height: 56px;
-  border-radius: 14px;
+  width: 52px;
+  height: 52px;
+  border-radius: 13px;
   filter: drop-shadow(0 5px 10px color-mix(in srgb, var(--accent) 22%, transparent));
 }
 
 .welcome__title {
   margin: 0;
-  font-size: 24px;
+  font-size: 23px;
   line-height: 1.15;
   letter-spacing: -0.03em;
 }
 
 .welcome__lead {
-  margin: 6px 0 0;
+  margin: 5px 0 0;
   color: var(--text-dim);
   font-size: 13px;
 }
 
-.welcome__step {
-  display: grid;
-  gap: 6px;
+/* The stage: a miniature of the user's desk. Screens are laid out by the
+   browser and the pane is positioned against their measured boxes, so one
+   display and two behave the same and a window resize just re-measures. */
+.stage {
+  position: relative;
+  height: 132px;
+  border-radius: 8px;
 }
 
-.welcome__step-title {
+.stage__screens {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  height: 100%;
+}
+
+.stage__screen {
+  position: relative;
+  height: 100%;
+  aspect-ratio: 16 / 10;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+/* The menu bar (or, on Windows, the taskbar) that Tile itself lives in. The
+   dot is Tile: the one part of the app that is always on screen. */
+.stage__screen::before {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  height: 10%;
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+  border-bottom: 1px solid var(--border);
+}
+
+.stage__screen::after {
+  content: "";
+  position: absolute;
+  top: 4%;
+  right: 6px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.stage--tray-bottom .stage__screen::before {
+  top: auto;
+  bottom: 0;
+  border-bottom: 0;
+  border-top: 1px solid var(--border);
+}
+
+.stage--tray-bottom .stage__screen::after {
+  top: auto;
+  bottom: 4%;
+}
+
+.stage__pane {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--accent) 20%, var(--surface));
+  box-shadow: 0 8px 16px -6px color-mix(in srgb, var(--text) 45%, transparent);
+  overflow: hidden;
+}
+
+/* A snapped window sits flush against its edges; a floating one is lifted off
+   the desktop. The shadow carries that difference, so the stage reads as a
+   before and after rather than two arbitrary rectangles. */
+.stage__pane--snapped {
+  box-shadow: 0 2px 5px -2px color-mix(in srgb, var(--text) 35%, transparent);
+}
+
+.stage__pane-bar {
+  display: block;
+  height: 7px;
+  background: color-mix(in srgb, var(--accent) 42%, var(--surface));
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+
+.walk {
+  display: grid;
+  gap: 8px;
+}
+
+.walk__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.walk__title {
   margin: 0;
   font-size: 14px;
   font-weight: 650;
 }
 
-.welcome__step-body {
+.walk__count {
   margin: 0;
+  flex: 0 0 auto;
   color: var(--text-dim);
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
-.welcome__keys {
+.walk__steps {
   list-style: none;
-  margin: 4px 0 0;
+  margin: 0;
   padding: 0;
   display: grid;
-  gap: 6px;
+  gap: 2px;
 }
 
-.welcome__key {
+.step {
   display: grid;
-  grid-template-columns: minmax(0, auto) 1fr;
-  align-items: baseline;
-  gap: 10px;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  /* The keys sit on the label's line and the hint runs the full width under
+     both, so a two-shortcut step cannot squeeze its own explanation into a
+     column three words wide. */
+  grid-template-areas:
+    "marker label keys"
+    ".      hint  hint";
+  align-items: start;
+  column-gap: 10px;
+  row-gap: 3px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: transparent;
 }
 
-.welcome__combo {
-  justify-self: start;
-  padding: 3px 8px;
+.step[data-state="done"] {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.step__marker {
+  grid-area: marker;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  border: 1.5px solid color-mix(in srgb, var(--text-dim) 60%, transparent);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--accent-text);
+}
+
+.step[data-state="done"] .step__marker {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.step__check {
+  width: 11px;
+  height: 11px;
+  opacity: 0;
+  transform: scale(0.55);
+}
+
+.step[data-state="done"] .step__check {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.step__label {
+  grid-area: label;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 550;
+}
+
+.step__hint {
+  grid-area: hint;
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.step__keys {
+  grid-area: keys;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding-top: 1px;
+}
+
+.step__key {
+  padding: 2px 7px;
   border: 1px solid var(--border);
+  border-bottom-width: 2px;
   border-radius: 6px;
   background: var(--surface-2);
   font-family: inherit;
@@ -694,10 +861,39 @@ select {
   white-space: nowrap;
 }
 
-.welcome__summary,
+.step__or {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.walk__note {
+  margin: 2px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--warning-border);
+  border-radius: 8px;
+  background: var(--warning-bg);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.walk__note--done {
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.welcome__more {
+  margin: -4px 0 0;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .welcome__empty {
+  margin: 0;
   color: var(--text-dim);
   font-size: 13px;
+  line-height: 1.5;
 }
 
 .welcome__actions {
@@ -714,6 +910,46 @@ select {
   color: var(--text-dim);
   font-size: 11px;
   text-align: center;
+}
+
+/* One authored moment, and it is the moment that matters: the tick when Tile
+   proves it did what the step promised, and the pane travelling to its new
+   slot alongside it. Everything else here is still. */
+@media (prefers-reduced-motion: no-preference) {
+  .stage__pane {
+    transition: left 420ms cubic-bezier(0.22, 1, 0.36, 1),
+      top 420ms cubic-bezier(0.22, 1, 0.36, 1),
+      width 420ms cubic-bezier(0.22, 1, 0.36, 1),
+      height 420ms cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 420ms ease-out;
+  }
+
+  .step,
+  .step__marker {
+    transition: background-color 220ms ease-out, border-color 220ms ease-out;
+  }
+
+  .step__check {
+    transition: opacity 160ms ease-out 60ms,
+      transform 320ms cubic-bezier(0.22, 1, 0.36, 1) 60ms;
+  }
+}
+
+/* Measuring the stage mid-transition would fight the animation, so a resize
+   re-places the pane with motion switched off for that frame. */
+.stage--measuring .stage__pane {
+  transition: none;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 /* Development builds only: a quiet, unmistakable marker that this is not the
