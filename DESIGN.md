@@ -208,7 +208,9 @@ which is the personality: Tile reads as part of the system it is adjusting.
 
 - **Display** (700, 30px, 1.1, -0.04em): the app name on the About card. One per
   window, at most.
-- **Title** (700, 16px, 1.3, -0.01em): section and panel headings in Settings.
+- **Title** (700, 16px, 1.3, -0.01em): section and panel headings in Settings,
+  and the instruction line on a welcome slide — the one thing on that slide the
+  user must read.
 - **Body** (400, 14px, 1.45): the root size and everything unspecified. Settings
   is capped at a 680px column, the centred cards at 468px, so the measure stays
   well inside a comfortable read.
@@ -216,7 +218,9 @@ which is the personality: Tile reads as part of the system it is adjusting.
   footnotes. 11px exists for the single quietest line on a card and nowhere else.
 
 Semi-bold weights (550/650) mark a row label or a small subheading where 700
-would shout at 13px.
+would shout at 13px. The welcome wordmark is one of them: 15px/650, a step
+*below* the instruction it sits above, because the branding is the frame and the
+instruction is the point.
 
 ### Named Rules
 
@@ -360,17 +364,33 @@ user's cursor.
 
 ### Signature Component — the shortcut slide
 
-The welcome deck deals one shortcut at a time: large keycaps, one short line
-under them, nothing else. There is no heading above it and no introduction — the
-window's own title bar already says "Welcome to Tile", and the Tile mark sits
-centred over the stage. The deck is four shortcuts and a close: snap left, snap
+The welcome deck deals one shortcut at a time, and each slide is exactly three
+tiers, top to bottom: an instruction in 15px/650 telling the user what to do
+("Snap the window left."), the keycaps that do it, and one dim 12px line saying
+what the press actually gets them ("It takes the left half of whichever display
+it is on."). The order is deliberate — ask, show the key, then explain the
+result — so a user who already knows the answer never has to read past the
+keycaps. Nothing on a slide is decoration; drop any tier and the slide either
+stops asking, stops teaching, or stops meaning anything.
+
+Above the deck sits the smallest possible frame: a 28px mark and a "Tile"
+wordmark on one line, then a single dim lede that counts the deck out loud
+("Four shortcuts, pressed for real — each one moves the window behind this
+card."). The count is read from the slides that were actually built, never
+hardcoded, so a machine missing a binding gets a shorter deck and an honest
+sentence. The lede is spent once the walkthrough is over: on the closing slide
+it goes `visibility: hidden`, not `display: none`, so the composition below it
+does not jump at the last moment. The deck is four shortcuts and a close: snap left, snap
 right, cycle the width, fill the screen, done. Every one of the five is a key —
 Return finishes it — because a walkthrough that teaches the keyboard and then
 asks for the mouse has stopped believing its own lesson. The cycle slide is the only one
 that outlasts a single press; a row of size glyphs (½ ⅔ ⅓) lights up one at a
 time and the slide stands until every one of them has. The keyboard is the only way forward — the slide is
 left behind when the backend reports that its shortcut really moved a window,
-never on a click. Proving it fills the keycaps with accent, and after a 900ms
+never on a click. A window that was *already* where the slide asked counts too:
+Tile agreeing with the user is not Tile failing them, and treating a no-op as a
+miss makes the first slide unpassable for anyone whose window happened to start
+left-snapped. Proving it fills the keycaps with accent, and after a 900ms
 hold the track slides on, long enough for the pane above to arrive first. Slides
 are laid out but `visibility: hidden` off-screen, so the track is as tall as its
 tallest slide and advancing never resizes the card under the user.
@@ -423,10 +443,22 @@ the cost of being frontmost has gone to zero while the need has appeared. The
 dismiss button takes the focus ring on the same beat, so the key is visible
 before it is pressed.
 
-Focus here means two calls, not one. Tile is an accessory app, and AppKit will
-not make a window key while the app behind it is inactive — so ordering the
-window forward succeeds and changes nothing. The app is activated first, then
-the window focused. A single `set_focus` is the bug that looks like it worked.
+Focus here means three things, not one, and the first two are the ones that
+look like they worked. Tile is an accessory app, and AppKit will not make a
+window key while the app behind it is inactive — so ordering the window forward
+succeeds and changes nothing. Activating the app is the missing half, but it has
+to happen on the main thread, and a command handler is not on it, so the call
+returns cleanly from the wrong thread and does nothing at all. And on macOS 14
+and later, activation is *cooperative*: a background accessory app asks, and the
+window server is entitled to say no. It does.
+
+So Tile becomes a regular app for as long as the welcome window is open, and
+hands the policy back the moment it closes. **A Dock icon appears** — the honest
+price of a window that can be typed into, paid once, by the only window in the
+app that ever needs the keyboard. It is promoted at the closing slide rather
+than at open, because the transition can itself activate the app, and doing that
+mid-walkthrough would steal the very focus the deck spends four slides
+protecting.
 
 There is one earlier exit, and it opens only when the deck has failed. Three
 wrong keys in a row is not someone who needs the instruction repeated a fourth

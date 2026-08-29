@@ -37,18 +37,25 @@
         aria-labelledby="welcome-heading"
       >
         <header class="welcome__header">
-          <img
-            class="welcome__mark"
-            src="./icon.png"
-            alt=""
-            width="52"
-            height="52"
-          />
-          <!-- The greeting is the window's title bar and the mark below it. A
-               second "Welcome to Tile" in the body would say it a third time,
-               so the heading stays for screen readers, which have no title
-               bar to read, and leaves the composition alone. -->
-          <h1 id="welcome-heading" class="sr-only">Welcome to Tile</h1>
+          <!-- Mark and name together, small. The window's title bar says
+               "Welcome to Tile" and this says who is talking; a lockup at
+               title size is identity, where a display-sized greeting would be
+               a hero on a utility that has no use for one. The heading is
+               visible now, so there is no second copy for screen readers. -->
+          <h1 id="welcome-heading" class="welcome__lockup">
+            <img
+              class="welcome__mark"
+              src="./icon.png"
+              alt=""
+              width="28"
+              height="28"
+            />
+            <span class="welcome__wordmark">Tile</span>
+          </h1>
+          <!-- The one thing a first run cannot work out on its own: the window
+               that moves is the one behind this card, not this card. Said once,
+               up here, so no slide has to spend its own line on it. -->
+          <p class="welcome__lede" id="welcome-lede"></p>
         </header>
 
         <!-- A miniature of your desk. The dashed outline is where the next
@@ -73,7 +80,7 @@
                    there is no Dock or taskbar icon, so this is the one fact a
                    user needs at the moment they close this window, and it
                    means nothing before they have seen a shortcut work. -->
-              <p class="slide__aside" id="welcome-end-aside">
+              <p class="slide__detail" id="welcome-end-aside">
                 It waits in the <span id="welcome-home">menu bar</span> —
                 <span id="welcome-action-count">75</span> more actions there.
               </p>

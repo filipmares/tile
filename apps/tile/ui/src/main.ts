@@ -3,7 +3,6 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   checkForUpdates,
   getBuildInfo,
@@ -14,6 +13,7 @@ import {
   getWelcomeStatus,
   installUpdate,
   focusWelcome,
+  closeWelcomeWindow,
   openWelcome,
   resetToDefaults,
   setAnimation,
@@ -97,6 +97,7 @@ const dom = {
   welcomeTrack: el<HTMLDivElement>("#welcome-track"),
   welcomeEnd: el<HTMLDivElement>("#welcome-end"),
   welcomeEndLine: el<HTMLParagraphElement>("#welcome-end-line"),
+  welcomeLede: el<HTMLParagraphElement>("#welcome-lede"),
   welcomeEndAside: el<HTMLParagraphElement>("#welcome-end-aside"),
   welcomeDots: el<HTMLDivElement>("#welcome-dots"),
   welcomeSkip: el<HTMLButtonElement>("#welcome-skip"),
@@ -339,8 +340,17 @@ const CYCLE_GLYPHS: Record<CycleSize, string> = {
   "three-quarters": "\u00be",
 };
 
-/** Actions whose repeat walks the size cycle rather than doing nothing. */
-const CYCLING_ACTIONS: WindowAction[] = [
+/**
+ * Deck lengths spelled out. The count is a sentence, not a statistic, and a
+ * numeral in a line of plain prose reads as a figure to be checked.
+ */
+const COUNT_WORDS: Record<number, string> = {
+  2: "Two",
+  3: "Three",
+  4: "Four",
+};
+
+/** Actions whose repeat walks the size cycle rather than doing nothing. */const CYCLING_ACTIONS: WindowAction[] = [
   "left-half",
   "right-half",
   "top-half",
@@ -359,7 +369,10 @@ const ADVANCE_DELAY = 900;
 /** One slide: a shortcut to try, and what counts as having tried it. */
 interface Slide {
   id: "snap-left" | "snap-right" | "cycle" | "maximize";
+  /** The instruction: what to do, in the imperative. */
   line: string;
+  /** What the press will actually do — the part the keycap cannot say. */
+  detail: string;
   combos: string[];
   /** Satisfied by any of these, or by a repeat of one for the cycle slide. */
   actions: WindowAction[];
@@ -419,6 +432,7 @@ function buildSlides(cfg: Config | null): Slide[] {
     id: Slide["id"],
     action: WindowAction,
     line: string,
+    detail: string,
     needsRepeat = false,
   ): void => {
     const keys = combo(action);
@@ -426,6 +440,7 @@ function buildSlides(cfg: Config | null): Slide[] {
     slides.push({
       id,
       line,
+      detail,
       combos: [keys],
       actions: [action],
       needsRepeat,
@@ -433,15 +448,41 @@ function buildSlides(cfg: Config | null): Slide[] {
     });
   };
 
-  add("snap-left", "left-half", "Snap the window left.");
-  add("snap-right", "right-half", "Now the other side.");
+  add(
+    "snap-left",
+    "left-half",
+    "Snap the window left.",
+    "It takes the left half of whichever display it is on.",
+  );
+  add(
+    "snap-right",
+    "right-half",
+    "Now send it right.",
+    "The same chord, the other arrow. That is the whole pattern.",
+  );
   // Only worth a slide if repeating actually resizes. With cycling off, or a
   // cycle of one size, a second press changes nothing, and a slide the
   // keyboard cannot satisfy would strand the deck.
   if (walk.cycles && walk.cycleSizes.length > 1 && combo("right-half")) {
-    add("cycle", "right-half", "Again. Each press, a new size.", true);
+    add(
+      "cycle",
+      "right-half",
+      "Press it again, and again.",
+      // The sizes themselves are named by the pips below, which light up as
+      // each one is seen; repeating them here would print the same row twice.
+      // What the pips cannot say is why one press is not enough.
+      "Every repeat is a new width. This step waits for the whole cycle.",
+      true,
+    );
   }
-  add("maximize", "maximize", "Fill the screen.");
+  add(
+    "maximize",
+    "maximize",
+    "Fill the screen.",
+    isMac()
+      ? "The work area, not full-screen: your menu bar stays put."
+      : "The work area, not full-screen: your taskbar stays put.",
+  );
 
   return slides;
 }
@@ -662,7 +703,15 @@ function renderDeck(): void {
     line.className = "slide__line";
     line.textContent = slide.line;
 
-    card.append(keys, line);
+    // Instruction, then the keys, then what they will do. The eye needs to know
+    // what it is being asked before the chord means anything, and what the
+    // chord produces only after it has read the chord.
+    card.append(line, keys);
+
+    const detail = document.createElement("p");
+    detail.className = "slide__detail";
+    detail.textContent = slide.detail;
+    card.append(detail);
 
     // The cycle is the one slide whose end is not obvious from the key: the
     // same press keeps working, so without the sizes laid out the user cannot
@@ -698,6 +747,16 @@ function renderDeck(): void {
     dom.welcomeEndAside.textContent =
       `None of the default shortcuts are bound. Assign your own in Settings, from the ${isMac() ? "menu bar" : "system tray"}.`;
     dom.welcomeSkip.hidden = true;
+    dom.welcomeLede.textContent = "";
+  } else {
+    // Counted from the slides that were actually built, never from the four
+    // this deck usually has: a machine missing a binding gets a shorter deck,
+    // and a promise of four steps it is not going to deliver would be the one
+    // dishonest line on the screen.
+    dom.welcomeLede.textContent =
+      walk.slides.length === 1
+        ? "One shortcut, pressed for real — it moves the window behind this card."
+        : `${COUNT_WORDS[walk.slides.length] ?? walk.slides.length} shortcuts, pressed for real — each one moves the window behind this card.`;
   }
   showSlide(0);
 }
@@ -738,14 +797,20 @@ async function claimKeyboard(target: HTMLElement): Promise<void> {
   walk.hasKeyboard = true;
   // After the window has the keyboard, not before: a focus ring drawn in a
   // window that is not frontmost points at a control no key can reach.
-  target.focus();
+  //
+  // `preventScroll` because this button is off-screen inside the track at the
+  // moment it is focused, and the browser's reflex is to scroll its container
+  // until it is visible. The deck is scrolled by transform, never by scroll
+  // offset, so that help arrives as the closing slide sliding away under its
+  // own animation.
+  target.focus({ preventScroll: true });
 }
 
 /** Closes the welcome window. The walkthrough is over, however it ended. */
 function closeWelcome(): void {
-  void getCurrentWindow()
-    .close()
-    .catch((err) => console.error("could not close the welcome window", err));
+  void closeWelcomeWindow().catch((err) =>
+    console.error("could not close the welcome window", err),
+  );
 }
 
 /** Moves the deck to `index` and reflects it in the dots and the outline. */
@@ -765,6 +830,11 @@ function showSlide(index: number): void {
     }
   });
   renderCyclePips();
+  // The lede frames the deck — "each one moves the window behind this card" —
+  // and on the closing slide there is no next press for it to be about. It goes
+  // quiet rather than away: the composition is vertically centred, so removing
+  // a line would lift everything under it by that line's own height.
+  dom.welcomeLede.classList.toggle("welcome__lede--spent", last);
   dom.welcomeEnd.setAttribute("aria-hidden", String(!last));
   dom.welcomeSkip.hidden = last || walk.slides.length === 0;
   if (last) void claimKeyboard(dom.welcomeDismiss);
@@ -840,7 +910,12 @@ function onActionPerformed(event: ActionPerformed): void {
     return;
   }
 
-  if (!empty && !event.moved) return;
+  // A right key that moved nothing is still a right key. `moved: false` with a
+  // window present is a no-op, which means the window was already exactly where
+  // the slide asked it to go — Tile agreeing with the user rather than failing
+  // them. Crediting only movement stranded the deck whenever someone's window
+  // happened to start in the position being taught, and on the first slide that
+  // is a walkthrough which cannot be finished at all.
   walk.refusals = 0;
   setWalkNote(empty ? "No window open to move — so that was a preview." : null);
 
