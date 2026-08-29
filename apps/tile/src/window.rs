@@ -145,6 +145,23 @@ pub fn open_welcome<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Gives the welcome window the keyboard, activating Tile first.
+///
+/// Both halves are required and neither is sufficient. Activating without
+/// `set_focus` brings the app forward but leaves whichever window was last key
+/// still key; `set_focus` without activating is what Tauri gives us alone, and
+/// for an accessory app it is a no-op the API cheerfully reports as success.
+pub fn focus_welcome<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
+    let Some(window) = app.get_webview_window(WELCOME_LABEL) else {
+        return Ok(());
+    };
+
+    #[cfg(target_os = "macos")]
+    tile_platform::macos::activate_app();
+
+    window.set_focus()
+}
+
 /// Opens the about window, focusing it if it already exists.
 pub fn open_about<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     if let Some(window) = app.get_webview_window(ABOUT_LABEL) {

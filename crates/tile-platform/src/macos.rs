@@ -1613,6 +1613,40 @@ mod enhanced_ui_tests {
     }
 }
 
+/// Brings Tile to the front, so one of its own windows can take the keyboard.
+///
+/// Tile runs as an *accessory* app: no Dock icon, no entry in the app switcher
+/// (`ActivationPolicy::Accessory`). AppKit will not make a window key while the
+/// app behind it is inactive, and an accessory app is never activated for us
+/// the way an ordinary app is. So `-[NSWindow makeKeyAndOrderFront:]` alone —
+/// which is all Tauri's `set_focus` does — succeeds and changes nothing: the
+/// window comes forward still unable to receive a keystroke.
+///
+/// This is the missing half. It is deliberately not called when a window opens:
+/// stealing the keyboard is precisely what the welcome screen spends its whole
+/// walkthrough avoiding, because the window the user was last in has to stay
+/// the one Tile moves. It is called once, at the end, when there is nothing
+/// left to move and the only thing left to press is Return.
+///
+/// Must be called on the main thread; `NSApplication` is main-thread-only.
+pub fn activate_app() {
+    // SAFETY: Objective-C messaging through `objc2` against `NSApplication`,
+    // whose `+sharedApplication` and `-activateIgnoringOtherApps:` have been
+    // stable since 10.0. The receiver is null-checked, and the argument is
+    // annotated with its C type (`Bool`) so dispatch is correct. Wrapped in an
+    // autorelease pool for symmetry with the rest of this file's messaging.
+    objc2::rc::autoreleasepool(|_pool| unsafe {
+        let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+        if app.is_null() {
+            return;
+        }
+        // `ignoringOtherApps: true` rather than false: the user's press landed
+        // in another app, so without it the activation waits for a click that
+        // a keyboard-driven walkthrough is never going to get.
+        let _: () = msg_send![app, activateIgnoringOtherApps: true];
+    });
+}
+
 /// Enumerates displays via `NSScreen`, converting each frame from AppKit's
 /// bottom-left space into Tile's top-left space.
 fn enumerate_screens() -> Vec<Screen> {

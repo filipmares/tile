@@ -364,7 +364,9 @@ The welcome deck deals one shortcut at a time: large keycaps, one short line
 under them, nothing else. There is no heading above it and no introduction — the
 window's own title bar already says "Welcome to Tile", and the Tile mark sits
 centred over the stage. The deck is four shortcuts and a close: snap left, snap
-right, cycle the width, fill the screen, done. The cycle slide is the only one
+right, cycle the width, fill the screen, done. Every one of the five is a key —
+Return finishes it — because a walkthrough that teaches the keyboard and then
+asks for the mouse has stopped believing its own lesson. The cycle slide is the only one
 that outlasts a single press; a row of size glyphs (½ ⅔ ⅓) lights up one at a
 time and the slide stands until every one of them has. The keyboard is the only way forward — the slide is
 left behind when the backend reports that its shortcut really moved a window,
@@ -406,11 +408,25 @@ The note under the deck holds its line whether or not it is speaking. The
 composition is vertically centred, so a message that appears from nothing would
 shove the very thing it is talking about.
 
-The welcome window never takes focus, so the window the user was already working
-in stays the one Tile moves. It floats above that window instead, because being
-seen and being focused are different needs: an accessory app's window is not
-raised for it, but a walkthrough that took focus would make itself the target
-and move its proof out of sight.
+The welcome window does not take focus while it is teaching, so the window the
+user was already working in stays the one Tile moves. It floats above that
+window instead, because being seen and being focused are different needs: an
+accessory app's window is not raised for it, but a walkthrough that took focus
+would make itself the target and move its proof out of sight.
+
+It takes focus exactly once, on arrival at the closing slide, and the reason is
+the same reason it refused focus before. The deck is keyboard-driven end to
+end — but the first four steps are driven by *global* shortcuts, which do not
+need this window listening, and the last step is an ordinary Return, which does.
+By then there is no shortcut left to demonstrate and nothing left to move, so
+the cost of being frontmost has gone to zero while the need has appeared. The
+dismiss button takes the focus ring on the same beat, so the key is visible
+before it is pressed.
+
+Focus here means two calls, not one. Tile is an accessory app, and AppKit will
+not make a window key while the app behind it is inactive — so ordering the
+window forward succeeds and changes nothing. The app is activated first, then
+the window focused. A single `set_focus` is the bug that looks like it worked.
 
 ## Do's and Don'ts
 

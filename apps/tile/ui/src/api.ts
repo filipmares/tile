@@ -59,6 +59,9 @@ export const openSettings = (): Promise<void> => invoke("open_settings");
 /** Reopens the welcome screen on demand. */
 export const openWelcome = (): Promise<void> => invoke("open_welcome");
 
+/** Hands the welcome window the keyboard, for its closing slide only. */
+export const focusWelcome = (): Promise<void> => invoke("focus_welcome");
+
 /**
  * What the welcome walkthrough can honestly ask for on this machine: how many
  * displays there are to throw a window to, and whether anything movable is

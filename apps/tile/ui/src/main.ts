@@ -13,6 +13,7 @@ import {
   getUpdateStatus,
   getWelcomeStatus,
   installUpdate,
+  focusWelcome,
   openWelcome,
   resetToDefaults,
   setAnimation,
@@ -696,6 +697,34 @@ function renderCyclePips(): void {
   });
 }
 
+/**
+ * Hands the keyboard to this window for the closing slide.
+ *
+ * The deck spends four slides refusing focus on purpose: whatever the user was
+ * last in has to stay the thing Tile moves, or the proof lands somewhere they
+ * cannot see. That reason expires exactly here. There is no shortcut left to
+ * demonstrate and nothing left to move, so being frontmost costs nothing — and
+ * it buys the last step the same keyboard the other four were taught with.
+ * Return finishing the walkthrough is the deck keeping its own promise.
+ */
+async function claimKeyboard(): Promise<void> {
+  try {
+    await focusWelcome();
+  } catch (err) {
+    console.error("could not focus the welcome window", err);
+  }
+  // After the window has the keyboard, not before: a focus ring drawn in a
+  // window that is not frontmost points at a control no key can reach.
+  dom.welcomeDismiss.focus();
+}
+
+/** Closes the welcome window. The walkthrough is over, however it ended. */
+function closeWelcome(): void {
+  void getCurrentWindow()
+    .close()
+    .catch((err) => console.error("could not close the welcome window", err));
+}
+
 /** Moves the deck to `index` and reflects it in the dots and the outline. */
 function showSlide(index: number): void {
   walk.at = Math.min(Math.max(index, 0), walk.slides.length);
@@ -715,6 +744,7 @@ function showSlide(index: number): void {
   renderCyclePips();
   dom.welcomeEnd.setAttribute("aria-hidden", String(!last));
   dom.welcomeSkip.hidden = last || walk.slides.length === 0;
+  if (last) void claimKeyboard();
 
   dom.welcomeProgress.textContent =
     walk.slides.length === 0
@@ -1428,12 +1458,17 @@ async function bootWelcome(): Promise<void> {
   dom.welcomeHome.textContent = isMac() ? "menu bar" : "system tray";
   dom.welcomeActionCount.textContent = String(ACTIONS.length);
 
-  dom.welcomeDismiss.addEventListener("click", () => {
-    void getCurrentWindow()
-      .close()
-      .catch((err) => console.error("could not close the welcome window", err));
-  });
+  dom.welcomeDismiss.addEventListener("click", closeWelcome);
   dom.welcomeSkip.addEventListener("click", skipDeck);
+
+  // Escape only ever reaches this window on the closing slide, because that is
+  // the only time it holds the keyboard. Return is already handled: the button
+  // is a button, and it is focused when the slide arrives.
+  window.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || event.defaultPrevented) return;
+    event.preventDefault();
+    closeWelcome();
+  });
 
   // A resized window relays out the mini displays under a pane that is
   // positioned in pixels, so re-measure — without animating a move the user

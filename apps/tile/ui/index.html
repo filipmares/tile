@@ -78,12 +78,17 @@
                 <span id="welcome-action-count">75</span> more actions there.
               </p>
               <div class="slide__actions">
+                <!-- The deck taught four shortcuts with keycaps; the fifth step
+                     is not going to be the one that goes silent about its key.
+                     The glyph sits inside the button because the button is
+                     already the thing Return presses. -->
                 <button
                   id="welcome-dismiss"
                   type="button"
                   class="button button--primary"
                 >
                   Start using Tile
+                  <span class="button__key" aria-hidden="true">↩</span>
                 </button>
               </div>
             </div>

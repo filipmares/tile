@@ -895,7 +895,18 @@ select {
 /* The one way out of this window, so it is sized for the hand rather than
    stretched across the card. */
 .slide__actions .button {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
   padding-inline: 22px;
+}
+
+/* Not a keycap: this key is already inside the thing it presses, so it is
+   marked by weight and a held-back white rather than a second box. */
+.button__key {
+  color: color-mix(in srgb, currentColor 62%, transparent);
+  font-size: 13px;
+  line-height: 1;
 }
 
 /* The note is the deck's only voice, and it speaks about four times a run. A

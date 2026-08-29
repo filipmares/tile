@@ -123,6 +123,19 @@ pub fn open_welcome<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     crate::window::open_welcome(&app).map_err(|err| err.to_string())
 }
 
+/// Lets the welcome window take the keyboard for its closing slide.
+///
+/// The walkthrough is keyboard-driven from the first slide to the last, but the
+/// first four slides are driven by *global* shortcuts, which do not need this
+/// window focused — and must not have it, or Tile would be moving the very
+/// window the user is being taught with. The closing slide is the one step
+/// whose key is an ordinary keystroke, so it is the one step that needs the
+/// window to actually be listening.
+#[tauri::command]
+pub fn focus_welcome<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    crate::window::focus_welcome(&app).map_err(|err| err.to_string())
+}
+
 #[tauri::command]
 pub fn reset_to_defaults<R: Runtime>(app: AppHandle<R>, state: State<'_, Shared>) -> Config {
     let config = state.update_config(|config| *config = Config::default());
