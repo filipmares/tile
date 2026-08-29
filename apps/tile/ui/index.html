@@ -104,6 +104,11 @@
           <p class="sr-only" id="welcome-progress" aria-live="polite"></p>
           <button id="welcome-skip" type="button" class="welcome__skip">
             Skip
+            <!-- Silent until the deck actually hands over the keyboard: an Esc
+                 hint on a window that cannot receive Esc is a lie. -->
+            <span class="button__key" id="welcome-skip-key" aria-hidden="true" hidden
+              >esc</span
+            >
           </button>
         </footer>
       </section>

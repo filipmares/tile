@@ -100,6 +100,7 @@ const dom = {
   welcomeEndAside: el<HTMLParagraphElement>("#welcome-end-aside"),
   welcomeDots: el<HTMLDivElement>("#welcome-dots"),
   welcomeSkip: el<HTMLButtonElement>("#welcome-skip"),
+  welcomeSkipKey: el<HTMLSpanElement>("#welcome-skip-key"),
   welcomeProgress: el<HTMLParagraphElement>("#welcome-progress"),
   welcomeNote: el<HTMLParagraphElement>("#welcome-note"),
   welcomeActionCount: el<HTMLSpanElement>("#welcome-action-count"),
@@ -389,7 +390,14 @@ const walk = {
   skipped: false,
   timer: 0,
   refusal: 0,
+  /** Wrong keys in a row. Enough of them turns the exit into a real offer. */
+  refusals: 0,
+  /** Whether this window has already taken the keyboard. */
+  hasKeyboard: false,
 };
+
+/** Wrong keys in a row before the deck stops insisting and offers the exit. */
+const REFUSALS_BEFORE_EXIT = 3;
 
 /**
  * Builds the slides this machine can actually complete. A shortcut nobody has
@@ -610,6 +618,20 @@ function refusePress(slide: Slide): void {
 
   const combo = slide.combos[0];
   if (combo) setWalkNote(`Try ${combo}.`);
+
+  // Three wrong keys in a row is not a user who needs the instruction repeated
+  // a fourth time — it is a user who wants out and has no way to say so. Skip
+  // is a mouse target only because this window deliberately holds no keyboard,
+  // and that reason has just failed on its own terms: the shortcuts are not
+  // landing here anyway. So the deck stops insisting, takes the keyboard, and
+  // puts the exit under the very key someone stuck would already be reaching
+  // for. It offers the exit; it does not take it.
+  walk.refusals += 1;
+  if (walk.refusals >= REFUSALS_BEFORE_EXIT && !walk.hasKeyboard) {
+    void claimKeyboard(dom.welcomeSkip);
+    dom.welcomeSkipKey.hidden = false;
+    setWalkNote(combo ? `Try ${combo}, or press Esc to skip.` : null);
+  }
 }
 
 /** Builds the deck: one card per slide, ahead of the closing one. */
@@ -707,15 +729,16 @@ function renderCyclePips(): void {
  * it buys the last step the same keyboard the other four were taught with.
  * Return finishing the walkthrough is the deck keeping its own promise.
  */
-async function claimKeyboard(): Promise<void> {
+async function claimKeyboard(target: HTMLElement): Promise<void> {
   try {
     await focusWelcome();
   } catch (err) {
     console.error("could not focus the welcome window", err);
   }
+  walk.hasKeyboard = true;
   // After the window has the keyboard, not before: a focus ring drawn in a
   // window that is not frontmost points at a control no key can reach.
-  dom.welcomeDismiss.focus();
+  target.focus();
 }
 
 /** Closes the welcome window. The walkthrough is over, however it ended. */
@@ -744,7 +767,7 @@ function showSlide(index: number): void {
   renderCyclePips();
   dom.welcomeEnd.setAttribute("aria-hidden", String(!last));
   dom.welcomeSkip.hidden = last || walk.slides.length === 0;
-  if (last) void claimKeyboard();
+  if (last) void claimKeyboard(dom.welcomeDismiss);
 
   dom.welcomeProgress.textContent =
     walk.slides.length === 0
@@ -788,20 +811,37 @@ function onActionPerformed(event: ActionPerformed): void {
 
   // Off the deck — skipped, or on the closing slide — there is no lesson left
   // to follow, so every press is simply mirrored and none can be wrong.
-  const current = walk.skipped ? undefined : walk.slides[walk.at];
-  const asked = current ? current.actions.includes(event.action) : true;
+  const showing = walk.skipped ? undefined : walk.slides[walk.at];
+
+  // A press the current slide did not ask for may still be a slide's own key,
+  // pressed early. Someone who already knows Tile should not be refused for
+  // proving it in a different order than the deck happened to choose, so a key
+  // is credited to whichever unfinished slide teaches it. The cycle is left
+  // out: it is a lesson about pressing one key repeatedly, and a single press
+  // of it out of order has not shown that.
+  const current =
+    showing && !showing.actions.includes(event.action)
+      ? walk.slides.find(
+          (slide) =>
+            !slide.done &&
+            !slide.needsRepeat &&
+            slide.id !== "cycle" &&
+            slide.actions.includes(event.action),
+        )
+      : showing;
 
   // A wrong key is wrong whether or not it moved anything. Answering it before
   // the moved-check matters on the maximize slide, where the window is often
   // already where the wrong key would put it: without this, the one press most
   // likely to be a mistake is the one press that gets no answer at all.
-  if (current && !asked) {
+  if (showing && !current) {
     reflectOnStage(event.action, false);
-    refusePress(current);
+    refusePress(showing);
     return;
   }
 
   if (!empty && !event.moved) return;
+  walk.refusals = 0;
   setWalkNote(empty ? "No window open to move — so that was a preview." : null);
 
   const repeat = event.action === walk.lastAction;
@@ -823,8 +863,14 @@ function onActionPerformed(event: ActionPerformed): void {
 
   // Hold long enough for the pane to arrive and the keys to light up. Being
   // dealt the next slide mid-animation would read as a glitch, not a reward.
+  // Where it lands is the first slide still standing, which is the next one in
+  // the ordinary case and skips over anything already earned out of order.
+  const next = walk.slides.findIndex((slide) => !slide.done);
   window.clearTimeout(walk.timer);
-  walk.timer = window.setTimeout(() => showSlide(walk.at + 1), ADVANCE_DELAY);
+  walk.timer = window.setTimeout(
+    () => showSlide(next === -1 ? walk.slides.length : next),
+    ADVANCE_DELAY,
+  );
 }
 
 function renderBinding(
@@ -1461,13 +1507,17 @@ async function bootWelcome(): Promise<void> {
   dom.welcomeDismiss.addEventListener("click", closeWelcome);
   dom.welcomeSkip.addEventListener("click", skipDeck);
 
-  // Escape only ever reaches this window on the closing slide, because that is
-  // the only time it holds the keyboard. Return is already handled: the button
-  // is a button, and it is focused when the slide arrives.
+  // Escape reaches this window only when it holds the keyboard, which happens
+  // in exactly two places: the closing slide, and the moment the deck gives up
+  // insisting after repeated wrong keys. Each has its own exit — one is done,
+  // the other is leaving early — so the same key means the nearest true thing
+  // rather than one of them dressed as the other. Return is already handled:
+  // the button is a button, and it is focused when it matters.
   window.addEventListener("keydown", (event) => {
     if (event.key !== "Escape" || event.defaultPrevented) return;
     event.preventDefault();
-    closeWelcome();
+    if (walk.at < walk.slides.length && !walk.skipped) skipDeck();
+    else closeWelcome();
   });
 
   // A resized window relays out the mini displays under a pane that is

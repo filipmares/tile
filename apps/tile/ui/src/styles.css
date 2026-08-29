@@ -902,10 +902,12 @@ select {
 }
 
 /* Not a keycap: this key is already inside the thing it presses, so it is
-   marked by weight and a held-back white rather than a second box. */
+   marked by weight and a held-back white rather than a second box. Sized in
+   `em` because it appears on two buttons that do not share a font size, and a
+   key hint that outgrew its own label would read as the louder half. */
 .button__key {
   color: color-mix(in srgb, currentColor 62%, transparent);
-  font-size: 13px;
+  font-size: 0.93em;
   line-height: 1;
 }
 
@@ -972,6 +974,9 @@ select {
   right: 0;
   top: 50%;
   transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 2px 4px;
   border: 0;
   border-radius: 4px;

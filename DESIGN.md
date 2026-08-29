@@ -428,6 +428,23 @@ not make a window key while the app behind it is inactive — so ordering the
 window forward succeeds and changes nothing. The app is activated first, then
 the window focused. A single `set_focus` is the bug that looks like it worked.
 
+There is one earlier exit, and it opens only when the deck has failed. Three
+wrong keys in a row is not someone who needs the instruction repeated a fourth
+time; it is someone who wants out and has no way to say so, because Skip is a
+mouse target precisely for the reason above. But that reason has just failed on
+its own terms — the shortcuts are not landing here anyway — so the deck stops
+insisting, takes the keyboard, and puts the exit under Esc, the key someone
+stuck is already reaching for. The Esc hint stays hidden until that moment: a
+key that the window cannot yet receive would be a lie. The deck offers the exit;
+it does not take it, and one right key puts the count back to zero.
+
+A key is credited to whichever unfinished slide teaches it, not only to the
+slide showing. Someone who already knows Tile should not be refused for proving
+it in a different order than the deck happened to choose, so an early press ticks
+its own slide off and the deck resumes at the first one still standing. The size
+cycle is left out of this: it is a lesson about pressing one key repeatedly, and
+a single press of it has not shown that.
+
 ## Do's and Don'ts
 
 ### Do:
