@@ -156,10 +156,64 @@ pub fn focus_welcome<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         return Ok(());
     };
 
-    #[cfg(target_os = "macos")]
-    tile_platform::macos::activate_app();
+    // All three steps have to happen on the main thread, and a command handler
+    // is not on it. `NSApplication` is main-thread-only, so activating from the
+    // command's own worker thread is a silent no-op — the same shape of bug
+    // this function exists to fix, one level down. They also have to happen in
+    // this order and on one turn of the run loop.
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        // macOS 14 replaced free activation with *cooperative* activation: an
+        // app in the background asks, and the window server decides. For an
+        // accessory app the answer is no — measured, not assumed. `-activate`
+        // returns cleanly and `-isActive` is still false afterwards, so the
+        // window comes forward and the keyboard never follows.
+        //
+        // An app that owns a real, visible, focusable window is entitled to be
+        // a regular app, so for as long as this one is up, Tile is one. The
+        // Dock icon is the honest price of a window that can be typed into, and
+        // it is handed back the moment the window closes.
+        #[cfg(target_os = "macos")]
+        if let Err(err) = handle.set_activation_policy(tauri::ActivationPolicy::Regular) {
+            log::warn!("could not promote Tile for the closing slide: {err}");
+        }
 
-    window.set_focus()
+        #[cfg(target_os = "macos")]
+        tile_platform::macos::activate_app();
+
+        if let Err(err) = window.set_focus() {
+            log::warn!("could not focus the welcome window: {err}");
+        }
+    })
+}
+
+/// Closes the welcome window and gives the Dock icon back.
+///
+/// The promotion in `focus_welcome` is what lets this window be typed into; a
+/// tray-only app that kept a Dock icon afterwards would be a wart nobody could
+/// explain. Demoting before the close rather than after it means the icon and
+/// the window leave together, instead of the icon outliving the window by a
+/// frame. Demoting when Tile is still an accessory app is a no-op, so this is
+/// safe on every path out of the walkthrough, promoted or not.
+pub fn close_welcome<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
+    let Some(window) = app.get_webview_window(WELCOME_LABEL) else {
+        return Ok(());
+    };
+
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        #[cfg(not(target_os = "macos"))]
+        let _ = &handle;
+
+        #[cfg(target_os = "macos")]
+        if let Err(err) = handle.set_activation_policy(tauri::ActivationPolicy::Accessory) {
+            log::warn!("could not return Tile to the menu bar: {err}");
+        }
+
+        if let Err(err) = window.close() {
+            log::warn!("could not close the welcome window: {err}");
+        }
+    })
 }
 
 /// Opens the about window, focusing it if it already exists.

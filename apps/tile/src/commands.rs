@@ -136,6 +136,18 @@ pub fn focus_welcome<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     crate::window::focus_welcome(&app).map_err(|err| err.to_string())
 }
 
+/// Closes the welcome window, returning Tile to the menu bar first.
+///
+/// The closing slide promotes Tile to a regular app so the window can hold the
+/// keyboard; this hands that back. It is a command rather than a window event
+/// handler because registering `on_window_event` for this window — on the
+/// handle or on the builder — stops it from ever appearing, so the close has to
+/// be the thing that announces itself.
+#[tauri::command]
+pub fn close_welcome<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    crate::window::close_welcome(&app).map_err(|err| err.to_string())
+}
+
 #[tauri::command]
 pub fn reset_to_defaults<R: Runtime>(app: AppHandle<R>, state: State<'_, Shared>) -> Config {
     let config = state.update_config(|config| *config = Config::default());

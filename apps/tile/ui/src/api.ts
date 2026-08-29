@@ -62,6 +62,8 @@ export const openWelcome = (): Promise<void> => invoke("open_welcome");
 /** Hands the welcome window the keyboard, for its closing slide only. */
 export const focusWelcome = (): Promise<void> => invoke("focus_welcome");
 
+export const closeWelcomeWindow = (): Promise<void> => invoke("close_welcome");
+
 /**
  * What the welcome walkthrough can honestly ask for on this machine: how many
  * displays there are to throw a window to, and whether anything movable is

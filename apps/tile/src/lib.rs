@@ -67,6 +67,7 @@ pub fn run() {
             commands::open_settings,
             commands::open_welcome,
             commands::focus_welcome,
+            commands::close_welcome,
             commands::get_welcome_status,
             commands::perform_action,
             commands::get_permission_status,

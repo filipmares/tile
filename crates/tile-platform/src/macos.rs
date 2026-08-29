@@ -52,7 +52,7 @@ use core_foundation::dictionary::CFDictionary;
 use core_foundation::string::CFString;
 
 use objc2::runtime::AnyObject;
-use objc2::{class, msg_send};
+use objc2::{class, msg_send, sel};
 use objc2_foundation::NSRect;
 
 use tile_core::{Hotkey, Rect, Screen, WindowAction, WindowId, WindowSnapshot};
@@ -1631,19 +1631,32 @@ mod enhanced_ui_tests {
 /// Must be called on the main thread; `NSApplication` is main-thread-only.
 pub fn activate_app() {
     // SAFETY: Objective-C messaging through `objc2` against `NSApplication`,
-    // whose `+sharedApplication` and `-activateIgnoringOtherApps:` have been
-    // stable since 10.0. The receiver is null-checked, and the argument is
-    // annotated with its C type (`Bool`) so dispatch is correct. Wrapped in an
-    // autorelease pool for symmetry with the rest of this file's messaging.
+    // whose `+sharedApplication`, `-activate` and `-activateIgnoringOtherApps:`
+    // are all stable. The receiver is null-checked, the selector is probed
+    // before it is sent, and the fallback's argument is a plain `bool` matching
+    // its `BOOL` parameter. Wrapped in an autorelease pool for symmetry with
+    // the rest of this file's messaging.
     objc2::rc::autoreleasepool(|_pool| unsafe {
         let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
         if app.is_null() {
             return;
         }
-        // `ignoringOtherApps: true` rather than false: the user's press landed
-        // in another app, so without it the activation waits for a click that
-        // a keyboard-driven walkthrough is never going to get.
-        let _: () = msg_send![app, activateIgnoringOtherApps: true];
+
+        // macOS 14 replaced `activateIgnoringOtherApps:` with cooperative
+        // activation, and `-activate` is the half of it an app calls for
+        // itself. The old selector still compiles and still runs, but on a
+        // modern system it is the one the window server is entitled to ignore
+        // — so prefer the current call and keep the deprecated one only for
+        // the systems that have nothing else.
+        let modern: bool = msg_send![app, respondsToSelector: sel!(activate)];
+        if modern {
+            let _: () = msg_send![app, activate];
+        } else {
+            // `ignoringOtherApps: true` rather than false: the user's press
+            // landed in another app, so without it the activation waits for a
+            // click a keyboard-driven walkthrough is never going to get.
+            let _: () = msg_send![app, activateIgnoringOtherApps: true];
+        }
     });
 }
 
