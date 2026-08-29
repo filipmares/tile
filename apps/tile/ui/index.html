@@ -44,13 +44,11 @@
             width="52"
             height="52"
           />
-          <div>
-            <h1 id="welcome-heading" class="welcome__title">Welcome to Tile</h1>
-            <p class="welcome__lead">
-              It lives in the <span id="welcome-home">menu bar</span> and moves
-              the window you were last in.
-            </p>
-          </div>
+          <!-- The greeting is the window's title bar and the mark below it. A
+               second "Welcome to Tile" in the body would say it a third time,
+               so the heading stays for screen readers, which have no title
+               bar to read, and leaves the composition alone. -->
+          <h1 id="welcome-heading" class="sr-only">Welcome to Tile</h1>
         </header>
 
         <!-- A miniature of your desk. The dashed outline is where the next
@@ -71,9 +69,13 @@
           <div class="deck__track" id="welcome-track">
             <div class="slide slide--end" id="welcome-end">
               <p class="slide__line" id="welcome-end-line">That is Tile.</p>
+              <!-- Where Tile lives is said here rather than in the header:
+                   there is no Dock or taskbar icon, so this is the one fact a
+                   user needs at the moment they close this window, and it
+                   means nothing before they have seen a shortcut work. -->
               <p class="slide__aside" id="welcome-end-aside">
-                <span id="welcome-action-count">75</span> more actions —
-                thirds, corners, nudges.
+                It waits in the <span id="welcome-home">menu bar</span> —
+                <span id="welcome-action-count">75</span> more actions there.
               </p>
               <div class="slide__actions">
                 <button
@@ -88,7 +90,9 @@
           </div>
         </div>
 
-        <p class="welcome__note" id="welcome-note" role="status" hidden></p>
+        <!-- Not `hidden`: this line's height is reserved whether it speaks or
+             not, so the vertically centred deck does not jump when it does. -->
+        <p class="welcome__note" id="welcome-note" role="status"></p>
 
         <footer class="welcome__foot">
           <div class="dots" id="welcome-dots" aria-hidden="true"></div>

@@ -22,12 +22,6 @@ typography:
     fontWeight: 700
     lineHeight: 1.1
     letterSpacing: "-0.04em"
-  headline:
-    fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif"
-    fontSize: "23px"
-    fontWeight: 700
-    lineHeight: 1.15
-    letterSpacing: "-0.03em"
   title:
     fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif"
     fontSize: "16px"
@@ -133,9 +127,9 @@ screen's miniature desk is not an illustration, it is a live mirror of where the
 real window went.
 
 Density follows the task. Settings is a long, scannable list of shortcut rows
-where scanability outranks air; the About and Welcome cards are small, centred
-compositions with generous padding, because there is only one thing to read.
-Both derive from the same tokens.
+where scanability outranks air; About is a small, centred card, and Welcome is a
+centred composition with no card at all, because in both there is only one thing
+to read. All three derive from the same tokens.
 
 **Key Characteristics:**
 
@@ -167,7 +161,9 @@ colours that appear only when something is wrong or needs care.
   fill.
 - **Sunken Grey** (`#f1f3f6`; `#2b3036` dark): the recessed tone — secondary
   buttons, keycaps, shortcut keys, the mini display in the stage, and the page
-  behind the centred About/Welcome cards.
+  behind the centred About card. It is not the Welcome window's page: there the
+  mini displays need it, so it is spent inside the composition rather than under
+  it.
 - **Ink** (`#1f2937`; `#f3f4f6` dark): all primary text.
 - **Dim Ink** (`#667085`; `#a8b0bb` dark): descriptions, hints, units, counts,
   footnotes — anything the eye may skip.
@@ -178,7 +174,10 @@ colours that appear only when something is wrong or needs care.
 - **Fault Red** (`#b42318`; `#f97066` dark): conflict notes, destructive
   actions, the clear-binding button on hover. Text only — never a fill.
 - **Caution Sand** (`#fff9eb` fill / `#f1c56b` border; `#332a16` / `#6b5520`
-  dark): the warning panel and the welcome deck's "nothing to move" note.
+  dark): the warning panel, and the border a refused pane borrows for the length
+  of its shake. The welcome deck's note is dim ink, not caution: by the time it
+  speaks, the shake has already said no, and all the words have left to do is
+  say what to press instead.
 
 ### Named Rules
 
@@ -209,7 +208,6 @@ which is the personality: Tile reads as part of the system it is adjusting.
 
 - **Display** (700, 30px, 1.1, -0.04em): the app name on the About card. One per
   window, at most.
-- **Headline** (700, 23px, 1.15, -0.03em): the welcome window's greeting.
 - **Title** (700, 16px, 1.3, -0.01em): section and panel headings in Settings.
 - **Body** (400, 14px, 1.45): the root size and everything unspecified. Settings
   is capped at a 680px column, the centred cards at 468px, so the measure stays
@@ -240,10 +238,18 @@ are `1fr auto` grids — label left, control right — collapsing to a single co
 below 560px, where the label moves above its control and shortcut keys stretch
 full width.
 
-**The About and Welcome windows** are centred compositions: a single card of
-`min(100%, 360px)` and `min(100%, 468px)` respectively, auto-margined inside a
-sunken-grey page so it sits optically centred in a window taller than itself and
-still scrolls from the top when it is not.
+**The About window** is a centred composition: a single card of
+`min(100%, 360px)`, auto-margined inside a sunken-grey page so it sits optically
+centred in a window taller than itself and still scrolls from the top when it is
+not.
+
+**The Welcome window** is the same centred column at `min(100%, 468px)`, but
+with no card: no fill, no border, no radius, sitting directly on card white. A
+card exists to separate its contents from a page, and this window has no page
+and nothing else on it — the border was an outline drawn around the whole
+contents of a window that already has a frame. The window is the card. The page
+tone changes with it: sunken grey is needed *inside* the composition, for the
+stage's mini displays, so it cannot also be the ground they sit on.
 
 Spacing rhythm runs 6 / 8 / 12 / 20 / 28: hairline gaps inside a control cluster,
 8 between siblings, 12 between related blocks, 20 between the parts of a card,
@@ -355,7 +361,12 @@ user's cursor.
 ### Signature Component — the shortcut slide
 
 The welcome deck deals one shortcut at a time: large keycaps, one short line
-under them, nothing else. The keyboard is the only way forward — the slide is
+under them, nothing else. There is no heading above it and no introduction — the
+window's own title bar already says "Welcome to Tile", and the Tile mark sits
+centred over the stage. The deck is four shortcuts and a close: snap left, snap
+right, cycle the width, fill the screen, done. The cycle slide is the only one
+that outlasts a single press; a row of size glyphs (½ ⅔ ⅓) lights up one at a
+time and the slide stands until every one of them has. The keyboard is the only way forward — the slide is
 left behind when the backend reports that its shortcut really moved a window,
 never on a click. Proving it fills the keycaps with accent, and after a 900ms
 hold the track slides on, long enough for the pane above to arrive first. Slides
@@ -378,6 +389,22 @@ must not dead-end the walkthrough, so the pane travels anyway and the note under
 the deck says the move was a preview. The rule the exception keeps is the real
 one — the pane never *silently* shows a hypothetical. Whenever it is not
 reporting, the screen says so in words.
+
+The pane may also decline to show a move that *did* happen: a press the current
+slide did not ask for. The deck is a lesson with an order, and mirroring a
+detour would teach the detour. Instead the pane shakes in place — translation
+only, 340ms, no travel, because not going anywhere is the whole message — takes
+the caution border for the same beat, and a dim line under the deck names the
+key that was wanted. This leaves the stage briefly disagreeing with the real
+desk, which is why it is written down: it costs one wrong press, is repaired by
+the next right one, and is the smaller lie than a walkthrough that quietly
+rewards ignoring it. A wrong key is answered whether or not it moved anything,
+so the maximize slide — where the window is often already maximized — is not the
+one slide that says nothing.
+
+The note under the deck holds its line whether or not it is speaking. The
+composition is vertically centred, so a message that appears from nothing would
+shove the very thing it is talking about.
 
 The welcome window never takes focus, so the window the user was already working
 in stays the one Tile moves. It floats above that window instead, because being

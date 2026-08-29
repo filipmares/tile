@@ -599,33 +599,35 @@ select {
 /* The welcome screen: its own window, and the only place Tile teaches its
    defaults. It is a deck, dealt one shortcut at a time. The keyboard is the
    only way forward — a slide is left behind when its shortcut really moves a
-   window — and the stage above shows where the next press will land. */
+   window — and the stage above shows where the next press will land.
+
+   There is no card here. A card separates its contents from a page, and this
+   window has no page and nothing else to be separated from: the border was an
+   outline drawn around the entire contents of a window that already has a
+   frame of its own. The window is the card. */
 .app.app--welcome {
   min-height: 100vh;
   padding: 24px;
-  background: var(--surface-2);
+  background: var(--surface);
   display: flex;
 }
 
 .welcome {
   width: min(100%, 468px);
-  /* Auto margins centre the card when the window is taller than it, and
-     still let it scroll from the top when it is not. */
+  /* Auto margins centre the composition when the window is taller than it,
+     and still let it scroll from the top when it is not. */
   margin: auto;
   display: flex;
   flex-direction: column;
   gap: 20px;
-  padding: 26px 24px 20px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
   animation: about-fade-in 240ms ease-out both;
 }
 
+/* The mark stands alone now, so it stands centred, over a screen whose every
+   other line is centred too. */
 .welcome__header {
   display: flex;
-  align-items: center;
-  gap: 14px;
+  justify-content: center;
 }
 
 .welcome__mark {
@@ -634,19 +636,6 @@ select {
   width: 52px;
   height: 52px;
   border-radius: 13px;
-}
-
-.welcome__title {
-  margin: 0;
-  font-size: 23px;
-  line-height: 1.15;
-  letter-spacing: -0.03em;
-}
-
-.welcome__lead {
-  margin: 5px 0 0;
-  color: var(--text-dim);
-  font-size: 13px;
 }
 
 /* The stage: a miniature of the user's desk. Screens are laid out by the
@@ -720,6 +709,10 @@ select {
   height: 0;
   border: 1px dashed color-mix(in srgb, var(--text-dim) 55%, transparent);
   border-radius: 5px;
+  /* Above the pane, because the cycle shrinks as often as it grows: a next
+     size that sits inside the current one would otherwise be painted over and
+     the promise would simply vanish mid-cycle. */
+  z-index: 1;
 }
 
 .stage__pane {
@@ -742,6 +735,45 @@ select {
    before and after rather than two arbitrary rectangles. */
 .stage__pane--snapped {
   box-shadow: 0 2px 4px -2px rgb(0 0 0 / 40%);
+}
+
+/* A press the current slide did not ask for. The pane refuses it: it stays
+   exactly where the lesson left it and shakes its head. Nothing is broken and
+   nothing is lost, so the language is a refusal rather than an error — a
+   warning border, never `--danger`, on a screen whose whole job is to make a
+   first-time user feel capable.
+
+   The shake is what most people will read. The border is what remains when
+   the system is set to reduce motion, so the refusal still registers. */
+.stage__pane--refused {
+  border-color: color-mix(in srgb, var(--warning-border) 80%, var(--text-dim));
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .stage__pane--refused {
+    animation: pane-refuse 340ms ease-in-out;
+  }
+}
+
+/* Translation only, and small: the pane must not appear to have gone
+   anywhere, because not going anywhere is the entire message. */
+@keyframes pane-refuse {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  15% {
+    transform: translateX(-5px);
+  }
+  40% {
+    transform: translateX(5px);
+  }
+  65% {
+    transform: translateX(-3px);
+  }
+  85% {
+    transform: translateX(2px);
+  }
 }
 
 .stage__pane-bar {
@@ -819,6 +851,32 @@ select {
   font-weight: 550;
 }
 
+/* The cycle laid out as its actual fractions: what is left to see, and what
+   the cycle contains. Tabular figures keep the row from shifting as states
+   change. */
+.slide__sizes {
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+  margin: 12px 0 0;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.slide__size {
+  color: color-mix(in srgb, var(--text-dim) 45%, transparent);
+}
+
+.slide__size[data-state="done"] {
+  color: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+.slide__size[data-state="at"] {
+  color: var(--accent);
+  font-weight: 650;
+}
+
 .slide__aside {
   margin: 0;
   max-width: 42ch;
@@ -840,13 +898,25 @@ select {
   padding-inline: 22px;
 }
 
+/* The note is the deck's only voice, and it speaks about four times a run. A
+   tinted, bordered panel for two words would be the loudest thing on a screen
+   whose card was just taken away — so it is a line of type and nothing else.
+   It borrows the dim voice rather than a caution colour because the shake has
+   already said "no"; the note's job is only to say what to press instead.
+   Its line is always reserved, empty or not: the deck is vertically centred,
+   so a note that appears from nothing lifts the whole composition by its own
+   height. */
 .welcome__note {
   margin: -8px 0 0;
-  padding: 8px 10px;
-  border: 1px solid var(--warning-border);
-  border-radius: 8px;
-  background: var(--warning-bg);
-  color: var(--text);
+  /* A fixed height, not a min-height: two lines' worth is reserved whether it
+     speaks one line, two, or none, so the answer to a wrong key never also
+     shoves the thing being taught. */
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  text-align: center;
   font-size: 12px;
   line-height: 1.45;
 }
@@ -931,6 +1001,10 @@ select {
 
   .dots__dot {
     transition: background-color 220ms ease-out;
+  }
+
+  .slide__size {
+    transition: color 220ms ease-out;
   }
 }
 

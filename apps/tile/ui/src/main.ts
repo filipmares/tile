@@ -328,6 +328,15 @@ const CYCLE_FRACTIONS: Record<CycleSize, number> = {
   "three-quarters": 0.75,
 };
 
+/** How each cycle size is written on the slide that teaches the cycle. */
+const CYCLE_GLYPHS: Record<CycleSize, string> = {
+  "one-quarter": "\u00bc",
+  "one-third": "\u2153",
+  "one-half": "\u00bd",
+  "two-thirds": "\u2154",
+  "three-quarters": "\u00be",
+};
+
 /** Actions whose repeat walks the size cycle rather than doing nothing. */
 const CYCLING_ACTIONS: WindowAction[] = [
   "left-half",
@@ -347,7 +356,7 @@ const ADVANCE_DELAY = 900;
 
 /** One slide: a shortcut to try, and what counts as having tried it. */
 interface Slide {
-  id: "snap" | "cycle" | "display";
+  id: "snap-left" | "snap-right" | "cycle" | "maximize";
   line: string;
   combos: string[];
   /** Satisfied by any of these, or by a repeat of one for the cycle slide. */
@@ -356,6 +365,8 @@ interface Slide {
   done: boolean;
   card?: HTMLDivElement;
   dot?: HTMLSpanElement;
+  /** One per cycle size, on the slide that teaches the cycle. */
+  pips?: HTMLSpanElement[];
 }
 
 /** Everything the deck needs to remember between key presses. */
@@ -371,57 +382,57 @@ const walk = {
   lastAction: null as WindowAction | null,
   /** Where in the configured size cycle that action currently sits. */
   sizeIndex: -1,
+  /** Which cycle sizes the user has actually been shown, by index. */
+  cycleSeen: new Set<number>(),
   /** Set once the user skips: presses still mirror, but nothing advances. */
   skipped: false,
   timer: 0,
+  refusal: 0,
 };
 
 /**
  * Builds the slides this machine can actually complete. A shortcut nobody has
- * bound, a size cycle the user switched off and a second display that is not
- * plugged in are all left out rather than taught and then disproved.
+ * bound and a size cycle the user switched off are left out rather than taught
+ * and then disproved.
+ *
+ * The order is one idea per slide, each one leaning on the last: left, then
+ * right so the mirror image is obvious, then the same key again to show that
+ * repeating resizes rather than doing nothing, then the whole screen.
  */
-function buildSlides(cfg: Config | null, screenCount: number): Slide[] {
+function buildSlides(cfg: Config | null): Slide[] {
   const slides: Slide[] = [];
   const combo = (action: WindowAction): string | null => {
     const hk = cfg?.bindings[action];
     return hk ? formatHotkey(hk) : null;
   };
 
-  const halves = (["left-half", "right-half"] as WindowAction[]).filter(combo);
-  if (halves.length > 0) {
+  const add = (
+    id: Slide["id"],
+    action: WindowAction,
+    line: string,
+    needsRepeat = false,
+  ): void => {
+    const keys = combo(action);
+    if (!keys) return;
     slides.push({
-      id: "snap",
-      line: "Snap the window to one side.",
-      combos: halves.map((a) => combo(a) as string),
-      actions: halves,
-      needsRepeat: false,
+      id,
+      line,
+      combos: [keys],
+      actions: [action],
+      needsRepeat,
       done: false,
     });
+  };
 
-    if (walk.cycles) {
-      slides.push({
-        id: "cycle",
-        line: "Again. Same keys, new size.",
-        combos: halves.map((a) => combo(a) as string),
-        actions: halves,
-        needsRepeat: true,
-        done: false,
-      });
-    }
+  add("snap-left", "left-half", "Snap the window left.");
+  add("snap-right", "right-half", "Now the other side.");
+  // Only worth a slide if repeating actually resizes. With cycling off, or a
+  // cycle of one size, a second press changes nothing, and a slide the
+  // keyboard cannot satisfy would strand the deck.
+  if (walk.cycles && walk.cycleSizes.length > 1 && combo("right-half")) {
+    add("cycle", "right-half", "Again. Each press, a new size.", true);
   }
-
-  const throws = DISPLAY_ACTIONS.filter(combo);
-  if (screenCount > 1 && throws.length > 0) {
-    slides.push({
-      id: "display",
-      line: "Send it to the other display.",
-      combos: throws.map((a) => combo(a) as string),
-      actions: throws,
-      needsRepeat: false,
-      done: false,
-    });
-  }
+  add("maximize", "maximize", "Fill the screen.");
 
   return slides;
 }
@@ -484,12 +495,6 @@ function ghostFrame(): PaneFrame | null {
   const slide = walk.slides[walk.at];
   if (!slide || slide.done) return null;
 
-  if (slide.id === "display") {
-    const count = walk.screens.length;
-    if (count < 2) return null;
-    return { ...walk.pane, screen: (walk.pane.screen + 1) % count };
-  }
-
   const action = slide.actions[0];
   if (!action) return null;
   const shape = PANE_SHAPES[action];
@@ -498,15 +503,16 @@ function ghostFrame(): PaneFrame | null {
   if (slide.id === "cycle") {
     const sizes = walk.cycleSizes;
     if (sizes.length === 0 || walk.sizeIndex < 0) return null;
+    // Only a repeat advances the cycle. If anything else moved the window
+    // since — including a press this slide turned down — the engine starts the
+    // cycle from a half again, and the promise has to say so rather than
+    // pointing at a size the next press will not produce.
+    if (walk.lastAction !== action) {
+      return { screen: walk.pane.screen, ...shape(0.5) };
+    }
     const next = sizes[(walk.sizeIndex + 1) % sizes.length];
     if (!next) return null;
-    // The cycle resizes whichever side the window is already on, so follow the
-    // action that put it there rather than the first one on the slide.
-    const last = walk.lastAction;
-    const cycling = last && CYCLING_ACTIONS.includes(last) ? last : action;
-    const cycleShape = PANE_SHAPES[cycling];
-    if (!cycleShape) return null;
-    return { screen: walk.pane.screen, ...cycleShape(CYCLE_FRACTIONS[next]) };
+    return { screen: walk.pane.screen, ...shape(CYCLE_FRACTIONS[next]) };
   }
 
   // A first press is always a half, whatever the cycle is configured to do.
@@ -523,19 +529,25 @@ function renderGhost(): void {
 /**
  * Mirrors `action` on the stage, following the same size cycle the engine
  * walks so a second press shows the size the real window actually took.
+ *
+ * `place` is false for a press the current slide did not ask for. The
+ * bookkeeping still runs either way — the engine's cycle state moved whether
+ * or not the walkthrough wanted the press, and the promise drawn for the next
+ * one has to be built on what the engine now believes — but the pane stays
+ * where the lesson left it instead of following the window off course.
  */
-function reflectOnStage(action: WindowAction): void {
+function reflectOnStage(action: WindowAction, place: boolean): void {
   const repeat = action === walk.lastAction;
   const cycles = walk.cycles && CYCLING_ACTIONS.includes(action);
 
   if (DISPLAY_ACTIONS.includes(action)) {
     const count = walk.screens.length;
     const step = action === "next-display" ? 1 : count - 1;
+    const thrown = { ...walk.pane, screen: (walk.pane.screen + step) % count };
+    const snapped = walk.pane !== FLOATING;
     walk.lastAction = action;
-    movePane(
-      { ...walk.pane, screen: (walk.pane.screen + step) % count },
-      walk.pane !== FLOATING,
-    );
+    if (place) movePane(thrown, snapped);
+    else renderGhost();
     return;
   }
 
@@ -549,12 +561,54 @@ function reflectOnStage(action: WindowAction): void {
   const fraction = repeat && cycles && size ? CYCLE_FRACTIONS[size] : 0.5;
 
   walk.lastAction = action;
+  // Only the cycle slide's own key counts towards its progress. Walking the
+  // cycle on the other side proves the same thing, but this slide asks for a
+  // specific key and the pips must answer that question, not a neighbouring
+  // one — and never a press the slide turned down.
+  const teaches = walk.slides.find((s) => s.id === "cycle");
+  if (place && teaches?.actions.includes(action) && walk.sizeIndex >= 0) {
+    walk.cycleSeen.add(walk.sizeIndex);
+  }
+  if (!place) {
+    renderGhost();
+    return;
+  }
   if (action === "restore") {
     movePane(FLOATING, false);
     return;
   }
   const shape = PANE_SHAPES[action];
   if (shape) movePane({ screen: walk.pane.screen, ...shape(fraction) }, true);
+}
+
+/** How long the pane spends turning a press down. */
+const REFUSAL_MS = 340;
+
+/**
+ * Turns down a press the current slide did not ask for.
+ *
+ * The pane refuses to move and shakes where it stands, so the deck reads as
+ * having a mind of its own rather than as being broken. The stage is
+ * `aria-hidden`, so the shake alone would say nothing to a screen reader —
+ * the note repeats the refusal in words, and makes it the instruction rather
+ * than a scolding.
+ */
+function refusePress(slide: Slide): void {
+  const pane = dom.welcomePane;
+  pane.classList.remove("stage__pane--refused");
+  // Restart the animation rather than let a second wrong press land in the
+  // middle of the first one's shake, where it would look like nothing
+  // happened at all.
+  void pane.offsetWidth;
+  pane.classList.add("stage__pane--refused");
+  window.clearTimeout(walk.refusal);
+  walk.refusal = window.setTimeout(
+    () => pane.classList.remove("stage__pane--refused"),
+    REFUSAL_MS,
+  );
+
+  const combo = slide.combos[0];
+  if (combo) setWalkNote(`Try ${combo}.`);
 }
 
 /** Builds the deck: one card per slide, ahead of the closing one. */
@@ -586,6 +640,25 @@ function renderDeck(): void {
     line.textContent = slide.line;
 
     card.append(keys, line);
+
+    // The cycle is the one slide whose end is not obvious from the key: the
+    // same press keeps working, so without the sizes laid out the user cannot
+    // tell whether they are halfway or finished. Showing the actual fractions
+    // rather than blank pips teaches the cycle at the same time.
+    if (slide.id === "cycle") {
+      const sizes = document.createElement("p");
+      sizes.className = "slide__sizes";
+      slide.pips = walk.cycleSizes.map((size) => {
+        const pip = document.createElement("span");
+        pip.className = "slide__size";
+        pip.textContent = CYCLE_GLYPHS[size];
+        pip.dataset.state = "ahead";
+        sizes.append(pip);
+        return pip;
+      });
+      card.append(sizes);
+    }
+
     dom.welcomeTrack.insertBefore(card, dom.welcomeEnd);
     slide.card = card;
 
@@ -606,6 +679,23 @@ function renderDeck(): void {
   showSlide(0);
 }
 
+/** Whether the user has now been shown every size in the cycle. */
+function cycleComplete(): boolean {
+  return (
+    walk.cycleSizes.length > 0 && walk.cycleSeen.size >= walk.cycleSizes.length
+  );
+}
+
+/** Marks each size on the cycle slide as seen, current, or still to come. */
+function renderCyclePips(): void {
+  const slide = walk.slides.find((s) => s.id === "cycle");
+  if (!slide?.pips) return;
+  slide.pips.forEach((pip, i) => {
+    pip.dataset.state =
+      i === walk.sizeIndex ? "at" : walk.cycleSeen.has(i) ? "done" : "ahead";
+  });
+}
+
 /** Moves the deck to `index` and reflects it in the dots and the outline. */
 function showSlide(index: number): void {
   walk.at = Math.min(Math.max(index, 0), walk.slides.length);
@@ -622,6 +712,7 @@ function showSlide(index: number): void {
           : "ahead";
     }
   });
+  renderCyclePips();
   dom.welcomeEnd.setAttribute("aria-hidden", String(!last));
   dom.welcomeSkip.hidden = last || walk.slides.length === 0;
 
@@ -634,9 +725,12 @@ function showSlide(index: number): void {
   renderGhost();
 }
 
-/** Shows, replaces or clears the line under the deck. */
+/**
+ * Shows, replaces or clears the line under the deck. The element is never
+ * hidden — its blank line is part of the layout, so speaking and falling
+ * silent cost nothing above or below it.
+ */
 function setWalkNote(text: string | null): void {
-  dom.welcomeNote.hidden = text === null;
   dom.welcomeNote.textContent = text ?? "";
 }
 
@@ -661,29 +755,37 @@ function onActionPerformed(event: ActionPerformed): void {
   // a report. The note outlives the slide on purpose: it stays true until a
   // real window moves, and clears itself the moment one does.
   const empty = !event.hadWindow;
+
+  // Off the deck — skipped, or on the closing slide — there is no lesson left
+  // to follow, so every press is simply mirrored and none can be wrong.
+  const current = walk.skipped ? undefined : walk.slides[walk.at];
+  const asked = current ? current.actions.includes(event.action) : true;
+
+  // A wrong key is wrong whether or not it moved anything. Answering it before
+  // the moved-check matters on the maximize slide, where the window is often
+  // already where the wrong key would put it: without this, the one press most
+  // likely to be a mistake is the one press that gets no answer at all.
+  if (current && !asked) {
+    reflectOnStage(event.action, false);
+    refusePress(current);
+    return;
+  }
+
   if (!empty && !event.moved) return;
   setWalkNote(empty ? "No window open to move — so that was a preview." : null);
 
   const repeat = event.action === walk.lastAction;
-  reflectOnStage(event.action);
-  if (walk.skipped) return;
+  reflectOnStage(event.action, true);
+  renderCyclePips();
+  if (!current) return;
 
-  const current = walk.slides[walk.at];
-  let satisfied = false;
-  for (const slide of walk.slides) {
-    if (slide.done || !slide.actions.includes(event.action)) continue;
-    if (slide.needsRepeat && !repeat) continue;
-    // A repeat also proves the snap, for anyone who pressed twice before
-    // reading. Never the other way round.
-    slide.done = true;
-    if (slide.needsRepeat) {
-      const first = walk.slides.find((s) => s.id === "snap");
-      if (first) first.done = true;
-    }
-    satisfied = slide === current || (current?.done ?? false);
-    break;
-  }
-  if (!satisfied || !current) return;
+  // The slide asked for this key, but not every press of it finishes the
+  // slide: the cycle slide is the whole cycle, not one repeat of it, so until
+  // every size has been shown the press counts on the stage and on the pips
+  // and leaves the slide standing.
+  if (current.needsRepeat && !repeat) return;
+  if (current.id === "cycle" && !cycleComplete()) return;
+  current.done = true;
 
   if (current.card) current.card.dataset.state = "done";
   if (current.dot) current.dot.dataset.state = "done";
@@ -691,12 +793,8 @@ function onActionPerformed(event: ActionPerformed): void {
 
   // Hold long enough for the pane to arrive and the keys to light up. Being
   // dealt the next slide mid-animation would read as a glitch, not a reward.
-  const next = walk.slides.findIndex((s, i) => i > walk.at && !s.done);
   window.clearTimeout(walk.timer);
-  walk.timer = window.setTimeout(
-    () => showSlide(next === -1 ? walk.slides.length : next),
-    ADVANCE_DELAY,
-  );
+  walk.timer = window.setTimeout(() => showSlide(walk.at + 1), ADVANCE_DELAY);
 }
 
 function renderBinding(
@@ -1376,7 +1474,7 @@ async function bootWelcome(): Promise<void> {
   }
 
   renderStage(status.screenCount);
-  walk.slides = buildSlides(cfg, status.screenCount);
+  walk.slides = buildSlides(cfg);
   renderDeck();
   movePane(FLOATING, false);
   if (!status.hasMovableWindow && walk.slides.length > 0) {
