@@ -26,7 +26,12 @@ const SHOW_UPDATES_EVENT: &str = "tile://show-updates";
 /// tick itself off.
 const ACTION_PERFORMED_EVENT: &str = "tile://action-performed";
 
-/// Reports a finished action to the welcome window, if one is open.
+/// Reports an action's verdict to the welcome window, if one is open.
+///
+/// Called the moment the verdict is decided, which for an animated move is
+/// while the window is still travelling. That is deliberate: the walkthrough
+/// mirrors the movement on its own little stage, and the two should set off
+/// together rather than one waiting politely for the other to finish.
 ///
 /// Deliberately addressed rather than broadcast: the walkthrough is the only
 /// listener there will ever be, and the settings window has no business
