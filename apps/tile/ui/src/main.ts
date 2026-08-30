@@ -562,7 +562,7 @@ function ghostFrame(): PaneFrame | null {
 
   if (slide.id === "cycle") {
     const sizes = walk.cycleSizes;
-    if (sizes.length === 0 || walk.sizeIndex < 0) return null;
+    if (sizes.length === 0) return null;
     // Only a repeat advances the cycle. If anything else moved the window
     // since — including a press this slide turned down — the engine starts the
     // cycle from a half again, and the promise has to say so rather than
@@ -570,6 +570,12 @@ function ghostFrame(): PaneFrame | null {
     if (walk.lastAction !== action) {
       return { screen: walk.pane.screen, ...shape(0.5) };
     }
+    // `sizeIndex` is -1 when the window sits at a half the configured cycle
+    // does not contain, and that is a real position rather than a missing one:
+    // the engine recovers its step from geometry, matches nothing, and starts
+    // from the first configured size. `(-1 + 1) % len` is 0, so the line below
+    // already promises exactly that — returning early here instead would blank
+    // the outline for anyone whose cycle omits a half.
     const next = sizes[(walk.sizeIndex + 1) % sizes.length];
     if (!next) return null;
     return { screen: walk.pane.screen, ...shape(CYCLE_FRACTIONS[next]) };

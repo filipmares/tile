@@ -136,7 +136,7 @@ pub fn open_welcome<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     // and the proof the walkthrough exists to give would land out of sight.
     // Left unfocused, the window they were already working in stays the
     // target, and it moves in plain view behind the card.
-    WebviewWindowBuilder::new(
+    let window = WebviewWindowBuilder::new(
         app,
         WELCOME_LABEL,
         WebviewUrl::App("index.html?welcome".into()),
@@ -150,7 +150,42 @@ pub fn open_welcome<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     .always_on_top(true)
     .build()?;
 
+    // The safety net for the promotion `focus_welcome` performs. The
+    // walkthrough's own exit demotes before it closes, but Cmd+W, the red
+    // traffic light, and anything the OS does to this window all bypass that
+    // path -- and a tray-only app left with a Dock icon for the rest of the
+    // session is a wart the user cannot explain or get rid of. Destroyed fires
+    // on every one of those paths, including the tidy one, where demoting
+    // again is a no-op.
+    let handle = app.clone();
+    window.on_window_event(move |event| {
+        if matches!(event, tauri::WindowEvent::Destroyed) {
+            demote_to_accessory(&handle);
+        }
+    });
+
     Ok(())
+}
+
+/// Hands the Dock icon back, whatever closed the welcome window.
+///
+/// Safe to call when Tile is already an accessory app: setting the policy it
+/// is already in does nothing, which is what lets both the tidy exit and the
+/// window-event net call it without coordinating.
+fn demote_to_accessory<R: Runtime>(app: &AppHandle<R>) {
+    let handle = app.clone();
+    let dispatched = app.run_on_main_thread(move || {
+        #[cfg(not(target_os = "macos"))]
+        let _ = &handle;
+
+        #[cfg(target_os = "macos")]
+        if let Err(err) = handle.set_activation_policy(tauri::ActivationPolicy::Accessory) {
+            log::warn!("could not return Tile to the menu bar: {err}");
+        }
+    });
+    if let Err(err) = dispatched {
+        log::warn!("could not reach the main thread to hide the Dock icon: {err}");
+    }
 }
 
 /// Gives the welcome window the keyboard, activating Tile first.
@@ -206,6 +241,10 @@ pub fn focus_welcome<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 /// the window leave together, instead of the icon outliving the window by a
 /// frame. Demoting when Tile is still an accessory app is a no-op, so this is
 /// safe on every path out of the walkthrough, promoted or not.
+///
+/// This is the tidy exit, not the only one. Every other way the window can go
+/// -- Cmd+W, the red traffic light, the OS -- is caught by the `Destroyed`
+/// handler installed in `open_welcome`, which demotes as well.
 pub fn close_welcome<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let Some(window) = app.get_webview_window(WELCOME_LABEL) else {
         return Ok(());
