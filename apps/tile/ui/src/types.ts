@@ -79,20 +79,10 @@ export type WindowAction =
   | "third-display"
   | "fourth-display";
 
-/**
- * Presentation families, mirroring `WindowFamily::ALL` and its labels.
- *
- * `description` is optional and explains behaviour a label cannot carry. Only
- * families whose behaviour is genuinely surprising should have one.
- */
-export const FAMILIES: { id: string; label: string; description?: string }[] = [
+/** Presentation families, mirroring `WindowFamily::ALL` and its labels. */
+export const FAMILIES: { id: string; label: string }[] = [
   { id: "halves", label: "Halves" },
-  {
-    id: "displays",
-    label: "Displays",
-    description:
-      "Moving a window to another display keeps its slot where it can — a left third stays a left third. A window that is not in a recognisable slot keeps its relative place instead, measured against each display's own work area, so mixed-resolution setups behave.",
-  },
+  { id: "displays", label: "Displays" },
   { id: "corners", label: "Corners" },
   { id: "horizontal-thirds", label: "Horizontal Thirds" },
   { id: "vertical-thirds", label: "Vertical Thirds" },
@@ -511,3 +501,26 @@ export type UpdateStatus =
     }
   | { status: "ready-to-relaunch"; version: string }
   | { status: "error"; message: string };
+
+/** `WelcomeStatusDto` — what the welcome walkthrough may honestly ask for. */
+export interface WelcomeStatus {
+  screenCount: number;
+  hasMovableWindow: boolean;
+}
+
+/**
+ * `ActionPerformedDto` — payload of `tile://action-performed`, sent to the
+ * welcome window only.
+ *
+ * `moved` says the window actually changed position or size. `hadWindow` says
+ * there was something to act on at all, and it is the one that decides whether
+ * anything was proved: with no window there is nothing to see, so the press is
+ * a preview. `moved: false` with `hadWindow: true` is a no-op — the window was
+ * already exactly where the action would have put it — which the walkthrough
+ * credits, because Tile agreeing with the user is not Tile failing them.
+ */
+export interface ActionPerformed {
+  action: WindowAction;
+  moved: boolean;
+  hadWindow: boolean;
+}

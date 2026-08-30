@@ -31,31 +31,93 @@
       </section>
 
       <section
-        id="orientation-panel"
-        class="panel panel--welcome"
+        id="welcome"
+        class="welcome"
         hidden
-        aria-labelledby="orientation-heading"
+        aria-labelledby="welcome-heading"
       >
-        <h2 id="orientation-heading">Tile is running</h2>
-        <p>
-          Tile has no main window — it runs in the background, and its icon is
-          in the <span id="orientation-home">menu bar</span>. Hold the modifier
-          below and press an arrow to place the focused window.
-        </p>
-        <ul class="orientation__keys" id="orientation-keys"></ul>
-        <p class="panel__hint">
-          Press the same arrow again to change the size. Every other action is
-          in Shortcuts below, ready to bind to keys of your own.
-        </p>
-        <div class="panel__actions">
-          <button
-            id="orientation-dismiss"
-            type="button"
-            class="button button--primary"
-          >
-            Got it
-          </button>
+        <header class="welcome__header">
+          <!-- Mark and name together, small. The window's title bar says
+               "Welcome to Tile" and this says who is talking; a lockup at
+               title size is identity, where a display-sized greeting would be
+               a hero on a utility that has no use for one. The heading is
+               visible now, so there is no second copy for screen readers. -->
+          <h1 id="welcome-heading" class="welcome__lockup">
+            <img
+              class="welcome__mark"
+              src="./icon.png"
+              alt=""
+              width="28"
+              height="28"
+            />
+            <span class="welcome__wordmark">Tile</span>
+          </h1>
+          <!-- The one thing a first run cannot work out on its own: the window
+               that moves is the one behind this card, not this card. Said once,
+               up here, so no slide has to spend its own line on it. -->
+          <p class="welcome__lede" id="welcome-lede"></p>
+        </header>
+
+        <!-- A miniature of your desk. The dashed outline is where the next
+             press will put the window; the pane moves only once it really
+             has. -->
+        <div class="stage" id="welcome-stage" aria-hidden="true">
+          <div class="stage__screens" id="welcome-screens"></div>
+          <div class="stage__ghost" id="welcome-ghost" hidden></div>
+          <div class="stage__pane" id="welcome-pane">
+            <span class="stage__pane-bar"></span>
+          </div>
         </div>
+
+        <!-- One shortcut per slide. The deck advances when the shortcut is
+             actually pressed, so the slides are built in main.ts from the
+             bindings that exist on this machine. -->
+        <div class="deck">
+          <div class="deck__track" id="welcome-track">
+            <div class="slide slide--end" id="welcome-end">
+              <p class="slide__line" id="welcome-end-line">That is Tile.</p>
+              <!-- Where Tile lives is said here rather than in the header:
+                   there is no Dock or taskbar icon, so this is the one fact a
+                   user needs at the moment they close this window, and it
+                   means nothing before they have seen a shortcut work. -->
+              <p class="slide__detail" id="welcome-end-aside">
+                It waits in the <span id="welcome-home">menu bar</span> —
+                <span id="welcome-action-count">75</span> more actions there.
+              </p>
+              <div class="slide__actions">
+                <!-- The deck taught four shortcuts with keycaps; the fifth step
+                     is not going to be the one that goes silent about its key.
+                     The glyph sits inside the button because the button is
+                     already the thing Return presses. -->
+                <button
+                  id="welcome-dismiss"
+                  type="button"
+                  class="button button--primary"
+                >
+                  Start using Tile
+                  <span class="button__key" aria-hidden="true">↩</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Not `hidden`: this line's height is reserved whether it speaks or
+             not, so the vertically centred deck does not jump when it does. -->
+        <p class="welcome__note" id="welcome-note" role="status"></p>
+
+        <footer class="welcome__foot">
+          <div class="dots" id="welcome-dots" aria-hidden="true"></div>
+          <p class="sr-only" id="welcome-progress" aria-live="polite"></p>
+          <button id="welcome-skip" type="button" class="welcome__skip">
+            Skip
+            <!-- Silent until the deck actually hands over the keyboard: an Esc
+                 hint on a window that cannot receive Esc is a lie. -->
+            <span class="button__key" id="welcome-skip-key" aria-hidden="true" hidden
+              >esc</span
+            >
+          </button>
+        </footer>
       </section>
 
       <section
@@ -162,13 +224,6 @@
         <details class="settings-group">
           <summary class="settings-group__summary">Repeating shortcuts</summary>
           <div class="settings-group__content">
-          <p class="panel__hint">
-            Pressing the same shortcut again changes the size instead of
-            repeating the move. The left and right arrows cycle half, then two
-            thirds, then a third, then back to half. The cycle restarts when
-            you run a different action, switch to another window, or move the
-            window yourself.
-          </p>
           <div class="field">
             <label class="field__label" for="subsequent-mode">
               Repeating a shortcut
@@ -350,6 +405,9 @@
       </section>
 
       <footer class="app__footer">
+        <button id="show-welcome" type="button" class="button">
+          Show welcome guide
+        </button>
         <button id="reset" type="button" class="button button--danger">
           Restore defaults
         </button>

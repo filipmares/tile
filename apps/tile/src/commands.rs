@@ -11,7 +11,9 @@ use tauri::{AppHandle, Runtime, State};
 use tile_core::{Config, CycleSize, Gaps, Hotkey, SubsequentExecutionMode, WindowAction};
 
 use crate::autostart;
-use crate::dto::{BuildInfoDto, HotkeyFailureDto, PermissionStatusDto, UpdateStatusDto};
+use crate::dto::{
+    BuildInfoDto, HotkeyFailureDto, PermissionStatusDto, UpdateStatusDto, WelcomeStatusDto,
+};
 use crate::state::AppState;
 use crate::update::UpdateManager;
 
@@ -98,11 +100,52 @@ pub fn set_launch_on_login<R: Runtime>(
 }
 
 /// Claims the one-time first-run orientation. Returns `true` at most once per
-/// installation, and records that fact before returning, so reopening Settings
-/// or relaunching never repeats it.
+/// installation, and records that fact before returning, so reopening the
+/// welcome screen or relaunching never re-triggers a first run.
 #[tauri::command]
 pub fn take_orientation(state: State<'_, Shared>) -> bool {
     state.take_orientation()
+}
+
+/// Opens the settings window. Used by the welcome screen, which is a window of
+/// its own and so cannot simply scroll the user to the controls.
+#[tauri::command]
+pub fn open_settings<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, Shared>,
+) -> Result<(), String> {
+    crate::window::open_settings(&app, state.build_kind()).map_err(|err| err.to_string())
+}
+
+/// Reopens the welcome screen on demand, from the settings footer.
+#[tauri::command]
+pub fn open_welcome<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    crate::window::open_welcome(&app).map_err(|err| err.to_string())
+}
+
+/// Lets the welcome window take the keyboard for its closing slide.
+///
+/// The walkthrough is keyboard-driven from the first slide to the last, but the
+/// first four slides are driven by *global* shortcuts, which do not need this
+/// window focused — and must not have it, or Tile would be moving the very
+/// window the user is being taught with. The closing slide is the one step
+/// whose key is an ordinary keystroke, so it is the one step that needs the
+/// window to actually be listening.
+#[tauri::command]
+pub fn focus_welcome<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    crate::window::focus_welcome(&app).map_err(|err| err.to_string())
+}
+
+/// Closes the welcome window, returning Tile to the menu bar first.
+///
+/// The closing slide promotes Tile to a regular app so the window can hold the
+/// keyboard; this hands that back. It is a command rather than a window event
+/// handler because registering `on_window_event` for this window — on the
+/// handle or on the builder — stops it from ever appearing, so the close has to
+/// be the thing that announces itself.
+#[tauri::command]
+pub fn close_welcome<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    crate::window::close_welcome(&app).map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -114,7 +157,21 @@ pub fn reset_to_defaults<R: Runtime>(app: AppHandle<R>, state: State<'_, Shared>
 
 #[tauri::command]
 pub fn perform_action(state: State<'_, Shared>, action: WindowAction) -> Result<(), String> {
-    state.perform_action(action).map_err(|err| err.to_string())
+    state
+        .perform_action(action)
+        .map(|_| ())
+        .map_err(|err| err.to_string())
+}
+
+/// Reports what the welcome walkthrough can honestly ask for on this machine.
+#[tauri::command]
+pub fn get_welcome_status(state: State<'_, Shared>) -> Result<WelcomeStatusDto, String> {
+    let screen_count = state.screen_count().map_err(|err| err.to_string())?;
+    let has_movable_window = state.has_movable_window().map_err(|err| err.to_string())?;
+    Ok(WelcomeStatusDto {
+        screen_count,
+        has_movable_window,
+    })
 }
 
 #[tauri::command]

@@ -11,6 +11,7 @@ import {
   PermissionStatus,
   SubsequentExecutionMode,
   UpdateStatus,
+  WelcomeStatus,
   WindowAction,
 } from "./types";
 
@@ -44,9 +45,32 @@ export const setLaunchOnLogin = (enabled: boolean): Promise<Config> =>
 export const resetToDefaults = (): Promise<Config> =>
   invoke("reset_to_defaults");
 
-/** Claims the one-time first-run orientation. True at most once, ever. */
+/**
+ * Claims the one-time first-run orientation, and records that it happened.
+ * True at most once, ever. The welcome screen claims it as it renders, so a
+ * window that never opened leaves the first run owed for next launch.
+ */
 export const takeOrientation = (): Promise<boolean> =>
   invoke("take_orientation");
+
+/** Opens the settings window, from a window that is not it. */
+export const openSettings = (): Promise<void> => invoke("open_settings");
+
+/** Reopens the welcome screen on demand. */
+export const openWelcome = (): Promise<void> => invoke("open_welcome");
+
+/** Hands the welcome window the keyboard, for its closing slide only. */
+export const focusWelcome = (): Promise<void> => invoke("focus_welcome");
+
+export const closeWelcomeWindow = (): Promise<void> => invoke("close_welcome");
+
+/**
+ * What the welcome walkthrough can honestly ask for on this machine: how many
+ * displays there are to throw a window to, and whether anything movable is
+ * focused right now.
+ */
+export const getWelcomeStatus = (): Promise<WelcomeStatus> =>
+  invoke("get_welcome_status");
 
 export const performAction = (action: WindowAction): Promise<void> =>
   invoke("perform_action", { action });

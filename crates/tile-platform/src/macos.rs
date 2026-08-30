@@ -52,7 +52,7 @@ use core_foundation::dictionary::CFDictionary;
 use core_foundation::string::CFString;
 
 use objc2::runtime::AnyObject;
-use objc2::{class, msg_send};
+use objc2::{class, msg_send, sel};
 use objc2_foundation::NSRect;
 
 use tile_core::{Hotkey, Rect, Screen, WindowAction, WindowId, WindowSnapshot};
@@ -1611,6 +1611,53 @@ mod enhanced_ui_tests {
         assert_eq!(state.get(), Some(true));
         assert_eq!(*writes.borrow(), [false, true]);
     }
+}
+
+/// Brings Tile to the front, so one of its own windows can take the keyboard.
+///
+/// Tile runs as an *accessory* app: no Dock icon, no entry in the app switcher
+/// (`ActivationPolicy::Accessory`). AppKit will not make a window key while the
+/// app behind it is inactive, and an accessory app is never activated for us
+/// the way an ordinary app is. So `-[NSWindow makeKeyAndOrderFront:]` alone —
+/// which is all Tauri's `set_focus` does — succeeds and changes nothing: the
+/// window comes forward still unable to receive a keystroke.
+///
+/// This is the missing half. It is deliberately not called when a window opens:
+/// stealing the keyboard is precisely what the welcome screen spends its whole
+/// walkthrough avoiding, because the window the user was last in has to stay
+/// the one Tile moves. It is called once, at the end, when there is nothing
+/// left to move and the only thing left to press is Return.
+///
+/// Must be called on the main thread; `NSApplication` is main-thread-only.
+pub fn activate_app() {
+    // SAFETY: Objective-C messaging through `objc2` against `NSApplication`,
+    // whose `+sharedApplication`, `-activate` and `-activateIgnoringOtherApps:`
+    // are all stable. The receiver is null-checked, the selector is probed
+    // before it is sent, and the fallback's argument is a plain `bool` matching
+    // its `BOOL` parameter. Wrapped in an autorelease pool for symmetry with
+    // the rest of this file's messaging.
+    objc2::rc::autoreleasepool(|_pool| unsafe {
+        let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+        if app.is_null() {
+            return;
+        }
+
+        // macOS 14 replaced `activateIgnoringOtherApps:` with cooperative
+        // activation, and `-activate` is the half of it an app calls for
+        // itself. The old selector still compiles and still runs, but on a
+        // modern system it is the one the window server is entitled to ignore
+        // — so prefer the current call and keep the deprecated one only for
+        // the systems that have nothing else.
+        let modern: bool = msg_send![app, respondsToSelector: sel!(activate)];
+        if modern {
+            let _: () = msg_send![app, activate];
+        } else {
+            // `ignoringOtherApps: true` rather than false: the user's press
+            // landed in another app, so without it the activation waits for a
+            // click a keyboard-driven walkthrough is never going to get.
+            let _: () = msg_send![app, activateIgnoringOtherApps: true];
+        }
+    });
 }
 
 /// Enumerates displays via `NSScreen`, converting each frame from AppKit's

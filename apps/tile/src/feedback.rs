@@ -31,13 +31,23 @@ pub fn run_action_preemptible<R: Runtime>(
     next: &mut dyn FnMut() -> Option<WindowAction>,
 ) {
     let state = app.state::<Arc<AppState>>();
-    match state.perform_action_preemptible(action, next) {
-        Ok(()) => {}
-        Err(err) => {
-            log::error!("action {action} failed: {err}");
-            if is_permission_denied(&err) {
-                on_permission_denied(app, &err);
-            }
+
+    // Reported from inside the pipeline rather than from its return value.
+    // The return value arrives only once every window has finished
+    // travelling, which would leave the walkthrough silent for the whole
+    // length of the animation it is supposed to be narrating — the window
+    // would come to rest before the screen acknowledged the key. It also
+    // collapses a burst of presses into a single verdict, because each press
+    // after the first is swallowed to retarget the flight, so a walkthrough
+    // counting presses would undercount exactly when the user is fluent.
+    let result = state.perform_action_preemptible(action, next, &mut |action, outcome| {
+        window::notify_action_performed(app, action, outcome);
+    });
+
+    if let Err(err) = result {
+        log::error!("action {action} failed: {err}");
+        if is_permission_denied(&err) {
+            on_permission_denied(app, &err);
         }
     }
 }

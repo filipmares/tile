@@ -146,6 +146,23 @@ impl AppState {
         lock(&self.backend).permission_status(prompt)
     }
 
+    /// How many displays are connected right now.
+    ///
+    /// The welcome window asks so it can leave out the "send it to your other
+    /// display" step on a laptop with nothing plugged in, rather than teaching
+    /// a shortcut that would do nothing.
+    pub fn screen_count(&self) -> tile_platform::Result<usize> {
+        Ok(lock(&self.backend).screens()?.len())
+    }
+
+    /// Whether anything Tile could move is focused right now.
+    ///
+    /// Tile skips its own windows, so this stays true while the welcome window
+    /// itself is in front — it reports the window that would actually move.
+    pub fn has_movable_window(&self) -> tile_platform::Result<bool> {
+        Ok(lock(&self.backend).focused_window()?.is_some())
+    }
+
     /// Runs the full pipeline for `action`: read the focused window and
     /// screens, ask the engine for a [`Plan`], apply it, and commit history
     /// using the frame the backend actually produced.
@@ -154,8 +171,8 @@ impl AppState {
     /// window) use this; the hotkey worker uses
     /// [`AppState::perform_action_preemptible`] so a second press can steer an
     /// animation that is still in flight.
-    pub fn perform_action(&self, action: WindowAction) -> tile_platform::Result<()> {
-        self.perform_action_preemptible(action, &mut || None)
+    pub fn perform_action(&self, action: WindowAction) -> tile_platform::Result<ActionOutcome> {
+        self.perform_action_preemptible(action, &mut || None, &mut |_, _| {})
     }
 
     /// As [`AppState::perform_action`], but able to pick up further actions
@@ -165,17 +182,29 @@ impl AppState {
     /// that has already arrived without blocking — the hotkey worker passes a
     /// non-blocking receive on its channel. With animation switched off it is
     /// never called, and the pipeline is exactly what it always was.
+    ///
+    /// `observe` is told about each action the moment its fate is decided,
+    /// which is *before* the window has begun travelling. Two things make
+    /// that the right moment rather than an optimistic one. The verdict is
+    /// already final — planning is what decides it, and by then the window
+    /// has been found and successfully opened for animation, so a report of
+    /// `Moved` has survived three real round-trips with the OS rather than
+    /// being assumed. And a burst of presses produces one return value but
+    /// several decisions: everything after the first is absorbed by `next` to
+    /// retarget the flight, so a caller watching only the return value would
+    /// never hear about them at all.
     pub fn perform_action_preemptible(
         &self,
         action: WindowAction,
         next: &mut dyn FnMut() -> Option<WindowAction>,
-    ) -> tile_platform::Result<()> {
+        observe: &mut dyn FnMut(WindowAction, ActionOutcome),
+    ) -> tile_platform::Result<ActionOutcome> {
         let backend = lock(&self.backend);
         let mut engine = lock(&self.engine);
 
         let animation = engine.config.animation;
         if !animation.enabled {
-            return apply_once(backend.as_ref(), &mut engine, action);
+            return apply_once(backend.as_ref(), &mut engine, action, observe);
         }
 
         animated_pipeline(
@@ -185,6 +214,7 @@ impl AppState {
             animation.params(),
             &mut SleepPacer::new(),
             next,
+            observe,
         )
     }
 
@@ -249,14 +279,32 @@ pub fn is_permission_denied(err: &PlatformError) -> bool {
 }
 
 /// The unanimated pipeline: plan, apply in one jump, commit.
+/// What one run of the action pipeline actually did.
+///
+/// Callers that only care about errors can ignore this, but the welcome
+/// window's walkthrough cannot: it ticks a step off when Tile really moves
+/// something, and tells the user to open a window when there was nothing to
+/// move. Both of those are `Ok` today, so they have to be distinguishable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActionOutcome {
+    /// A window was moved.
+    Moved,
+    /// Nothing movable was focused, so there was nothing to act on.
+    NoWindow,
+    /// There was a window, but the action would not change anything.
+    NoOp,
+}
+
 fn apply_once(
     backend: &dyn WindowBackend,
     engine: &mut Engine,
     action: WindowAction,
-) -> tile_platform::Result<()> {
+    observe: &mut dyn FnMut(WindowAction, ActionOutcome),
+) -> tile_platform::Result<ActionOutcome> {
     let Some(window) = backend.focused_window()? else {
         log::debug!("ignoring {action}: no movable focused window");
-        return Ok(());
+        observe(action, ActionOutcome::NoWindow);
+        return Ok(ActionOutcome::NoWindow);
     };
     let screens = backend.screens()?;
 
@@ -265,12 +313,15 @@ fn apply_once(
             let actual = backend.set_window_frame(id, target)?;
             engine.commit(action, &window, actual);
             log::debug!("performed {action} on window {id}");
+            observe(action, ActionOutcome::Moved);
+            Ok(ActionOutcome::Moved)
         }
         Plan::NoOp(reason) => {
             log::debug!("no-op for {action}: {reason:?}");
+            observe(action, ActionOutcome::NoOp);
+            Ok(ActionOutcome::NoOp)
         }
     }
-    Ok(())
 }
 
 /// A window currently travelling towards a target.
@@ -391,9 +442,21 @@ fn animated_pipeline(
     params: AnimationParams,
     pacer: &mut dyn Pacer,
     next: &mut dyn FnMut() -> Option<WindowAction>,
-) -> tile_platform::Result<()> {
+    observe: &mut dyn FnMut(WindowAction, ActionOutcome),
+) -> tile_platform::Result<ActionOutcome> {
     let mut flight: Option<Flight> = None;
-    let result = run_animated_pipeline(backend, engine, action, params, pacer, next, &mut flight);
+    let mut outcome = ActionOutcome::NoOp;
+    let result = run_animated_pipeline(
+        backend,
+        engine,
+        action,
+        params,
+        pacer,
+        next,
+        observe,
+        &mut flight,
+        &mut outcome,
+    );
 
     // Any error anywhere above abandons the loop with the window possibly
     // part-way through its journey. Leaving it there is not neutral: Tile's
@@ -414,11 +477,13 @@ fn animated_pipeline(
         }
     }
 
-    result
+    result.map(|()| outcome)
 }
 
 /// The pipeline proper. Hands its in-flight window back through `flight` so
-/// [`animated_pipeline`] can reconcile it if any step fails.
+/// [`animated_pipeline`] can reconcile it if any step fails, and its verdict
+/// back through `outcome` so a caller can tell a real move from the two ways
+/// an action legitimately does nothing.
 #[allow(clippy::too_many_arguments)]
 fn run_animated_pipeline(
     backend: &dyn WindowBackend,
@@ -427,7 +492,9 @@ fn run_animated_pipeline(
     params: AnimationParams,
     pacer: &mut dyn Pacer,
     next: &mut dyn FnMut() -> Option<WindowAction>,
+    observe: &mut dyn FnMut(WindowAction, ActionOutcome),
     flight: &mut Option<Flight>,
+    outcome: &mut ActionOutcome,
 ) -> tile_platform::Result<()> {
     let mut pending = Some(action);
 
@@ -445,6 +512,10 @@ fn run_animated_pipeline(
                 // must not be abandoned mid-air just because focus went
                 // somewhere unmovable.
                 log::debug!("ignoring {action}: no movable focused window");
+                if flight.is_none() {
+                    *outcome = ActionOutcome::NoWindow;
+                }
+                observe(action, ActionOutcome::NoWindow);
                 if let Some(previous) = flight.take() {
                     land(backend, engine, previous)?;
                 }
@@ -478,6 +549,7 @@ fn run_animated_pipeline(
 
             match engine.plan(action, &window, &screens) {
                 Plan::Move { id, target } => {
+                    *outcome = ActionOutcome::Moved;
                     // An action aimed at a *different* window must not leave
                     // the current one stranded halfway. Land it on its exact
                     // target first before moving on.
@@ -506,11 +578,21 @@ fn run_animated_pipeline(
                                 Some(Flight::begin(backend, id, action, window, target, params)?);
                         }
                     }
+
+                    // Only now is the move a fact rather than a plan: the
+                    // window was found, planned against, and successfully
+                    // opened for animation — three real round-trips with the
+                    // OS. No pixel has moved yet, which is the point. The
+                    // walkthrough's own little pane sets off at the same
+                    // instant as the window it is describing, rather than
+                    // waiting for it to arrive and then repeating the journey.
+                    observe(action, ActionOutcome::Moved);
                 }
                 Plan::NoOp(reason) => {
                     // Nothing to do for this action, but a window already in
                     // flight must still finish its journey.
                     log::debug!("no-op for {action}: {reason:?}");
+                    observe(action, ActionOutcome::NoOp);
                 }
             }
         }
@@ -881,6 +963,7 @@ mod tests {
             params(),
             &mut FixedPacer,
             &mut || None,
+            &mut |_, _| {},
         )
         .unwrap();
 
@@ -911,6 +994,7 @@ mod tests {
             params(),
             &mut FixedPacer,
             &mut after_frames(2, vec![WindowAction::LeftHalf, WindowAction::LeftHalf]),
+            &mut |_, _| {},
         )
         .unwrap();
 
@@ -949,6 +1033,7 @@ mod tests {
                     None
                 }
             },
+            &mut |_, _| {},
         )
         .unwrap();
 
@@ -964,6 +1049,7 @@ mod tests {
             params(),
             &mut FixedPacer,
             &mut || None,
+            &mut |_, _| {},
         )
         .unwrap();
         assert_eq!(backend.last_frame(), Rect::new(100.0, 100.0, 400.0, 300.0));
@@ -995,6 +1081,7 @@ mod tests {
                 params,
                 &mut FixedPacer,
                 &mut || None,
+                &mut |_, _| {},
             )
             .unwrap();
 
@@ -1044,6 +1131,7 @@ mod tests {
             params(),
             &mut FixedPacer,
             &mut || None,
+            &mut |_, _| {},
         )
         .unwrap();
 
@@ -1082,6 +1170,7 @@ mod tests {
                     None
                 }
             },
+            &mut |_, _| {},
         )
         .unwrap();
 
@@ -1119,6 +1208,7 @@ mod tests {
             params(),
             &mut FixedPacer,
             &mut || None,
+            &mut |_, _| {},
         )
         .expect_err("the failing backend should surface its error");
         assert!(
@@ -1174,6 +1264,7 @@ mod tests {
             params(),
             &mut FixedPacer,
             &mut after_frames(2, vec![WindowAction::TopHalf, WindowAction::TopHalf]),
+            &mut |_, _| {},
         )
         .unwrap();
 
@@ -1184,6 +1275,7 @@ mod tests {
             params(),
             &mut FixedPacer,
             &mut || None,
+            &mut |_, _| {},
         )
         .unwrap();
 
@@ -1207,6 +1299,7 @@ mod tests {
             params(),
             &mut FixedPacer,
             &mut || None,
+            &mut |_, _| {},
         )
         .unwrap();
         animated_pipeline(
@@ -1216,6 +1309,7 @@ mod tests {
             params(),
             &mut FixedPacer,
             &mut || None,
+            &mut |_, _| {},
         )
         .unwrap();
 
@@ -1239,6 +1333,7 @@ mod tests {
             params(),
             &mut FixedPacer,
             &mut || None,
+            &mut |_, _| {},
         )
         .unwrap();
 
@@ -1257,6 +1352,7 @@ mod tests {
             params(),
             &mut FixedPacer,
             &mut after_frames(2, vec![WindowAction::TopHalf]),
+            &mut |_, _| {},
         )
         .unwrap();
 
@@ -1280,6 +1376,7 @@ mod tests {
             params(),
             &mut FixedPacer,
             &mut after_frames(2, vec![WindowAction::LeftHalf]),
+            &mut |_, _| {},
         )
         .unwrap();
 
@@ -1287,6 +1384,71 @@ mod tests {
         assert!(
             cycled.width > 960.0,
             "expected the cycle to grow past a half, got {cycled:?}"
+        );
+    }
+
+    #[test]
+    fn every_press_is_reported_even_when_absorbed_mid_flight() {
+        // The walkthrough counts presses. A burst returns a single verdict —
+        // everything after the first press is swallowed to retarget the
+        // flight — so the observer, not the return value, is what has to see
+        // all three.
+        let backend = FakeBackend::new();
+        let mut engine = engine_with_animation();
+        let mut seen: Vec<(WindowAction, ActionOutcome)> = Vec::new();
+
+        animated_pipeline(
+            &backend,
+            &mut engine,
+            WindowAction::LeftHalf,
+            params(),
+            &mut FixedPacer,
+            &mut after_frames(2, vec![WindowAction::TopHalf, WindowAction::RightHalf]),
+            &mut |action, outcome| seen.push((action, outcome)),
+        )
+        .unwrap();
+
+        assert_eq!(
+            seen,
+            vec![
+                (WindowAction::LeftHalf, ActionOutcome::Moved),
+                (WindowAction::TopHalf, ActionOutcome::Moved),
+                (WindowAction::RightHalf, ActionOutcome::Moved),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_move_is_reported_before_the_window_starts_travelling() {
+        // Reporting on arrival would leave the walkthrough silent for the
+        // whole animation, then ask it to replay a journey the user has
+        // already watched. The report lands before the first frame, so both
+        // windows move together.
+        //
+        // It is not a guess: by then the window has been found, planned
+        // against, and opened for animation, and a failure later in the pump
+        // still lands the window on this exact target.
+        let backend = FakeBackend::new();
+        let mut engine = engine_with_animation();
+        let mut frames_at_report = None;
+
+        animated_pipeline(
+            &backend,
+            &mut engine,
+            WindowAction::LeftHalf,
+            params(),
+            &mut FixedPacer,
+            &mut || None,
+            &mut |_, _| frames_at_report = Some(backend.frames.borrow().len()),
+        )
+        .unwrap();
+
+        let total = backend.frames.borrow().len();
+        assert!(total > 3, "expected a real animation, got {total} frames");
+        assert_eq!(
+            frames_at_report,
+            Some(0),
+            "the report must precede the motion, not trail it"
         );
     }
 
@@ -1302,6 +1464,7 @@ mod tests {
             params(),
             &mut FixedPacer,
             &mut after_frames(2, vec![WindowAction::TopHalf, WindowAction::RightHalf]),
+            &mut |_, _| {},
         )
         .unwrap();
 
@@ -1320,10 +1483,42 @@ mod tests {
         };
         let mut engine = Engine::new(config);
 
-        apply_once(&backend, &mut engine, WindowAction::LeftHalf).unwrap();
+        apply_once(
+            &backend,
+            &mut engine,
+            WindowAction::LeftHalf,
+            &mut |_, _| {},
+        )
+        .unwrap();
 
         assert_eq!(backend.frames.borrow().len(), 1);
         assert_eq!(backend.last_frame(), Rect::new(0.0, 0.0, 960.0, 1080.0));
+    }
+
+    /// The welcome walkthrough ticks a step off on `Moved` and asks the user
+    /// to open a window on `NoWindow`, so a pipeline that reported both as
+    /// plain success would have it congratulating people for nothing.
+    #[test]
+    fn the_outcome_tells_a_move_apart_from_having_nothing_to_move() {
+        let backend = FakeBackend::new();
+        let mut engine = Engine::new(Config::default());
+
+        assert_eq!(
+            apply_once(
+                &backend,
+                &mut engine,
+                WindowAction::LeftHalf,
+                &mut |_, _| {}
+            )
+            .unwrap(),
+            ActionOutcome::Moved
+        );
+
+        let empty = InertWindowBackend;
+        assert_eq!(
+            apply_once(&empty, &mut engine, WindowAction::LeftHalf, &mut |_, _| {}).unwrap(),
+            ActionOutcome::NoWindow
+        );
     }
 
     /// Minimal backends so `AppState` can be built in a test. Neither is
