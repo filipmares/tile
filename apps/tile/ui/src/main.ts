@@ -355,7 +355,8 @@ const COUNT_WORDS: Record<number, string> = {
   4: "Four",
 };
 
-/** Actions whose repeat walks the size cycle rather than doing nothing. */const CYCLING_ACTIONS: WindowAction[] = [
+/** Actions whose repeat walks the size cycle rather than doing nothing. */
+const CYCLING_ACTIONS: WindowAction[] = [
   "left-half",
   "right-half",
   "top-half",

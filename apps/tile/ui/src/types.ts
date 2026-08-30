@@ -510,9 +510,14 @@ export interface WelcomeStatus {
 
 /**
  * `ActionPerformedDto` — payload of `tile://action-performed`, sent to the
- * welcome window only. `moved` is false when the action succeeded but changed
- * nothing, which is the difference between a step the user completed and one
- * they only attempted.
+ * welcome window only.
+ *
+ * `moved` says the window actually changed position or size. `hadWindow` says
+ * there was something to act on at all, and it is the one that decides whether
+ * anything was proved: with no window there is nothing to see, so the press is
+ * a preview. `moved: false` with `hadWindow: true` is a no-op — the window was
+ * already exactly where the action would have put it — which the walkthrough
+ * credits, because Tile agreeing with the user is not Tile failing them.
  */
 export interface ActionPerformed {
   action: WindowAction;

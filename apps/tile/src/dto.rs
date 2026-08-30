@@ -152,8 +152,11 @@ pub struct WelcomeStatusDto {
 
 /// An action the user just performed, reported to the welcome window.
 ///
-/// `moved` is the honest part: an action that found nothing to act on still
-/// succeeds, and a walkthrough that ticked a step off for it would be lying.
+/// `has_window` is the honest part: an action that found nothing to act on
+/// still succeeds, and a walkthrough that ticked a step off for it would be
+/// lying. `moved` is narrower — it says the window actually went somewhere, so
+/// `moved: false` alongside `had_window: true` means the window was already in
+/// position rather than that anything failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ActionPerformedDto {
