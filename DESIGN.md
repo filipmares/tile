@@ -390,8 +390,11 @@ left behind when the backend reports that its shortcut really moved a window,
 never on a click. A window that was *already* where the slide asked counts too:
 Tile agreeing with the user is not Tile failing them, and treating a no-op as a
 miss makes the first slide unpassable for anyone whose window happened to start
-left-snapped. Proving it fills the keycaps with accent, and after a 900ms
-hold the track slides on, long enough for the pane above to arrive first. Slides
+left-snapped. Proving it fills the keycaps with accent, and 520ms later the
+track slides on in 360ms. That hold is the pane's own 420ms travel plus a beat
+to register it, not a pause laid on top: the deck waits exactly as long as the
+proof takes and no longer, because this is a keyboard flow and every idle
+frame between a correct press and the next instruction reads as lag. Slides
 are laid out but `visibility: hidden` off-screen, so the track is as tall as its
 tallest slide and advancing never resizes the card under the user.
 

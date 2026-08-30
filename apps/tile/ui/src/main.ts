@@ -363,8 +363,12 @@ const COUNT_WORDS: Record<number, string> = {
 
 const DISPLAY_ACTIONS: WindowAction[] = ["previous-display", "next-display"];
 
-/** How long the pane and the tick are given before the deck moves on. */
-const ADVANCE_DELAY = 900;
+/**
+ * How long the pane and the tick are given before the deck moves on. The pane
+ * takes 420ms to travel and the keycaps light in 220ms, so this is that
+ * animation plus a beat to register it — not a pause on top of it.
+ */
+const ADVANCE_DELAY = 520;
 
 /** One slide: a shortcut to try, and what counts as having tried it. */
 interface Slide {
