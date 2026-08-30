@@ -301,8 +301,8 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str, kind: BuildKind) 
                 UpdateStatus::ReadyToRelaunch { .. } => app.request_restart(),
                 _ => {
                     let check_for_updates = !matches!(status, UpdateStatus::Available { .. });
-                    if let Err(err) = window::open_update_settings(app, kind, check_for_updates) {
-                        log::error!("failed to open update settings: {err}");
+                    if let Err(err) = window::open_updates(app, check_for_updates) {
+                        log::error!("failed to open update window: {err}");
                     }
                 }
             }

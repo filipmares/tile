@@ -1,9 +1,11 @@
-//! Settings-window lifecycle.
+//! Window lifecycle.
 //!
-//! The app has no window at startup; the settings window is created on demand
-//! and is a single instance — opening it again just re-focuses the existing
-//! one. Closing it destroys it (the tray keeps the app alive), and the next
-//! open recreates it.
+//! The app has no window at startup; each window is created on demand and is a
+//! single instance — opening one again just re-focuses the existing one.
+//! Closing it destroys it (the tray keeps the app alive), and the next open
+//! recreates it. Settings, About, Update, and Welcome are four separate
+//! windows: the update flow deliberately has a screen to itself, and so does
+//! the first-run walkthrough.
 
 use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewUrl, WebviewWindowBuilder};
 use tile_core::WindowAction;
@@ -18,9 +20,11 @@ pub const SETTINGS_LABEL: &str = "settings";
 pub const ABOUT_LABEL: &str = "about";
 /// Stable label for the welcome window.
 pub const WELCOME_LABEL: &str = "welcome";
-/// Requests that an open settings window start and surface an update check.
+/// Stable label for the dedicated update window.
+pub const UPDATES_LABEL: &str = "updates";
+/// Requests that an open update window start and surface an update check.
 const CHECK_FOR_UPDATES_EVENT: &str = "tile://check-for-updates";
-/// Requests that an open settings window surface the current update state.
+/// Requests that an open update window surface the current update state.
 const SHOW_UPDATES_EVENT: &str = "tile://show-updates";
 /// Tells the welcome window that an action just ran, so its walkthrough can
 /// tick itself off.
@@ -73,18 +77,16 @@ pub fn open_settings<R: Runtime>(app: &AppHandle<R>, kind: BuildKind) -> tauri::
     Ok(())
 }
 
-/// Opens Settings with the Updates panel active, optionally starting a check.
-pub fn open_update_settings<R: Runtime>(
-    app: &AppHandle<R>,
-    kind: BuildKind,
-    check_for_updates: bool,
-) -> tauri::Result<()> {
+/// Opens the dedicated update window, optionally starting a check straight
+/// away. Updating has no home in Settings: this window is the whole flow, from
+/// the check through the download to the relaunch.
+pub fn open_updates<R: Runtime>(app: &AppHandle<R>, check_for_updates: bool) -> tauri::Result<()> {
     let event = if check_for_updates {
         CHECK_FOR_UPDATES_EVENT
     } else {
         SHOW_UPDATES_EVENT
     };
-    if let Some(window) = app.get_webview_window(SETTINGS_LABEL) {
+    if let Some(window) = app.get_webview_window(UPDATES_LABEL) {
         window.show()?;
         window.unminimize().ok();
         window.set_focus()?;
@@ -92,17 +94,23 @@ pub fn open_update_settings<R: Runtime>(
         return Ok(());
     }
 
+    // A window that does not exist yet cannot receive an event, so the intent
+    // rides along in its own session storage and is claimed once at boot.
     let update_intent = if check_for_updates { "check" } else { "show" };
     let initialization_script =
         format!("window.sessionStorage.setItem('tile-update-intent', '{update_intent}');");
-    WebviewWindowBuilder::new(app, SETTINGS_LABEL, WebviewUrl::default())
-        .initialization_script(initialization_script)
-        .title(kind.window_title())
-        .inner_size(560.0, 640.0)
-        .min_inner_size(460.0, 480.0)
-        .resizable(true)
-        .visible(true)
-        .build()?;
+    WebviewWindowBuilder::new(
+        app,
+        UPDATES_LABEL,
+        WebviewUrl::App("index.html?updates".into()),
+    )
+    .initialization_script(initialization_script)
+    .title("Tile Update")
+    .inner_size(420.0, 460.0)
+    .min_inner_size(380.0, 380.0)
+    .resizable(false)
+    .visible(true)
+    .build()?;
     Ok(())
 }
 

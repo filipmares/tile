@@ -1,12 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Permissions for the Tile settings, about and welcome windows.",
-  "windows": ["settings", "about", "welcome"],
-  "permissions": [
-    "core:default",
-    "core:window:allow-close",
-    "core:window:allow-set-focus",
-    "opener:default"
-  ]
+  "description": "Permissions for the Tile settings, about, welcome and update windows.",
+  "windows": ["settings", "about", "welcome", "updates"],
+  "permissions": ["core:default", "opener:default"]
 }
