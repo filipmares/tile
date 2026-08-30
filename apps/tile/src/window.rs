@@ -171,6 +171,9 @@ pub fn focus_welcome<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     // this order and on one turn of the run loop.
     let handle = app.clone();
     app.run_on_main_thread(move || {
+        #[cfg(not(target_os = "macos"))]
+        let _ = &handle;
+
         // macOS 14 replaced free activation with *cooperative* activation: an
         // app in the background asks, and the window server decides. For an
         // accessory app the answer is no — measured, not assumed. `-activate`
