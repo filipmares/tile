@@ -174,17 +174,25 @@ pub fn open_welcome<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 /// window-event net call it without coordinating.
 fn demote_to_accessory<R: Runtime>(app: &AppHandle<R>) {
     let handle = app.clone();
-    let dispatched = app.run_on_main_thread(move || {
-        #[cfg(not(target_os = "macos"))]
-        let _ = &handle;
-
-        #[cfg(target_os = "macos")]
-        if let Err(err) = handle.set_activation_policy(tauri::ActivationPolicy::Accessory) {
-            log::warn!("could not return Tile to the menu bar: {err}");
-        }
-    });
+    let dispatched = app.run_on_main_thread(move || set_accessory_policy(&handle));
     if let Err(err) = dispatched {
         log::warn!("could not reach the main thread to hide the Dock icon: {err}");
+    }
+}
+
+/// The demotion itself, for callers already on the main thread.
+///
+/// Split out so the tidy exit can demote and close on one turn of the run loop
+/// while the window-event net dispatches to reach the same code. Activation
+/// policy is `NSApplication` state, so calling this off the main thread is a
+/// silent no-op rather than an error.
+fn set_accessory_policy<R: Runtime>(app: &AppHandle<R>) {
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
+
+    #[cfg(target_os = "macos")]
+    if let Err(err) = app.set_activation_policy(tauri::ActivationPolicy::Accessory) {
+        log::warn!("could not return Tile to the menu bar: {err}");
     }
 }
 
@@ -252,13 +260,7 @@ pub fn close_welcome<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 
     let handle = app.clone();
     app.run_on_main_thread(move || {
-        #[cfg(not(target_os = "macos"))]
-        let _ = &handle;
-
-        #[cfg(target_os = "macos")]
-        if let Err(err) = handle.set_activation_policy(tauri::ActivationPolicy::Accessory) {
-            log::warn!("could not return Tile to the menu bar: {err}");
-        }
+        set_accessory_policy(&handle);
 
         if let Err(err) = window.close() {
             log::warn!("could not close the welcome window: {err}");
