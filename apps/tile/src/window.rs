@@ -51,13 +51,24 @@ fn present_focusable_window<R: Runtime>(
     window: WebviewWindow<R>,
     label: &'static str,
 ) -> tauri::Result<()> {
-    let handle = app.clone();
-    app.run_on_main_thread(move || {
-        #[cfg(not(target_os = "macos"))]
-        let _ = (&handle, label);
+    // Preserve the public contract of the open helpers: failures to show or
+    // focus are returned to their caller. On macOS, set_focus can still be an
+    // ineffective success while Tile is inactive, so activation below repeats
+    // that final step after promoting the app.
+    window.show()?;
+    window.unminimize().ok();
+    window.set_focus()?;
 
-        #[cfg(target_os = "macos")]
-        {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, label);
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let handle = app.clone();
+        app.run_on_main_thread(move || {
             promoted_windows()
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -66,18 +77,12 @@ fn present_focusable_window<R: Runtime>(
                 log::warn!("could not promote Tile to show the {label} window: {err}");
             }
             tile_platform::macos::activate_app();
-        }
 
-        if let Err(err) = window.show() {
-            log::warn!("could not show the {label} window: {err}");
-        }
-        if let Err(err) = window.unminimize() {
-            log::warn!("could not restore the {label} window: {err}");
-        }
-        if let Err(err) = window.set_focus() {
-            log::warn!("could not focus the {label} window: {err}");
-        }
-    })
+            if let Err(err) = window.set_focus() {
+                log::warn!("could not focus the {label} window: {err}");
+            }
+        })
+    }
 }
 
 /// Returns Tile to accessory mode after the last activated window closes.
@@ -86,12 +91,18 @@ fn demote_when_destroyed<R: Runtime>(
     window: &WebviewWindow<R>,
     label: &'static str,
 ) {
-    let handle = app.clone();
-    window.on_window_event(move |event| {
-        if matches!(event, tauri::WindowEvent::Destroyed) {
-            release_promotion(&handle, label);
-        }
-    });
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, window, label);
+
+    #[cfg(target_os = "macos")]
+    {
+        let handle = app.clone();
+        window.on_window_event(move |event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                release_promotion(&handle, label);
+            }
+        });
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -99,22 +110,17 @@ fn promoted_windows() -> &'static Mutex<HashSet<&'static str>> {
     PROMOTED_WINDOWS.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
+#[cfg(target_os = "macos")]
 fn release_promotion<R: Runtime>(app: &AppHandle<R>, label: &'static str) {
-    #[cfg(not(target_os = "macos"))]
-    let _ = (app, label);
-
-    #[cfg(target_os = "macos")]
-    {
-        let should_demote = {
-            let mut windows = promoted_windows()
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            windows.remove(label);
-            windows.is_empty()
-        };
-        if should_demote {
-            demote_to_accessory(app);
-        }
+    let should_demote = {
+        let mut windows = promoted_windows()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        windows.remove(label);
+        windows.is_empty()
+    };
+    if should_demote {
+        demote_to_accessory(app);
     }
 }
 
@@ -251,6 +257,7 @@ pub fn open_welcome<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 /// Safe to call when Tile is already an accessory app: setting the policy it
 /// is already in does nothing, which is what lets both the tidy exit and the
 /// window-event net call it without coordinating.
+#[cfg(target_os = "macos")]
 fn demote_to_accessory<R: Runtime>(app: &AppHandle<R>) {
     let handle = app.clone();
     let dispatched = app.run_on_main_thread(move || set_accessory_policy(&handle));
@@ -265,11 +272,8 @@ fn demote_to_accessory<R: Runtime>(app: &AppHandle<R>) {
 /// while the window-event net dispatches to reach the same code. Activation
 /// policy is `NSApplication` state, so calling this off the main thread is a
 /// silent no-op rather than an error.
+#[cfg(target_os = "macos")]
 fn set_accessory_policy<R: Runtime>(app: &AppHandle<R>) {
-    #[cfg(not(target_os = "macos"))]
-    let _ = app;
-
-    #[cfg(target_os = "macos")]
     if let Err(err) = app.set_activation_policy(tauri::ActivationPolicy::Accessory) {
         log::warn!("could not return Tile to the menu bar: {err}");
     }
@@ -305,8 +309,10 @@ pub fn close_welcome<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         return Ok(());
     };
 
+    #[cfg(target_os = "macos")]
     let handle = app.clone();
     app.run_on_main_thread(move || {
+        #[cfg(target_os = "macos")]
         release_promotion(&handle, WELCOME_LABEL);
 
         if let Err(err) = window.close() {
