@@ -113,24 +113,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # The Tauri app crate may not yet be a workspace member while the app
-      # shell is still being scaffolded. Detect the frontend so the npm steps
-      # (and, later, the app itself) light up automatically once it lands,
-      # without breaking CI in the meantime.
-      - name: Detect frontend
-        id: frontend
-        shell: bash
-        run: |
-          if [ -f apps/tile/ui/package.json ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-            echo "dir=apps/tile/ui" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "No apps/tile/ui/package.json yet — skipping frontend build."
-          fi
-
       - name: Set up Node
-        if: steps.frontend.outputs.present == 'true'
         uses: actions/setup-node@v7
         with:
           node-version: 20
@@ -138,13 +121,11 @@ jobs:
           cache-dependency-path: apps/tile/ui/package-lock.json
 
       - name: Install frontend dependencies
-        if: steps.frontend.outputs.present == 'true'
-        working-directory: ${{ steps.frontend.outputs.dir }}
+        working-directory: apps/tile/ui
         run: npm ci
 
       - name: Build frontend
-        if: steps.frontend.outputs.present == 'true'
-        working-directory: ${{ steps.frontend.outputs.dir }}
+        working-directory: apps/tile/ui
         run: npm run build
 
       - name: Check formatting

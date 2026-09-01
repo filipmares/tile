@@ -4257,7 +4257,6 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
  "tauri-plugin-updater",
- "thiserror 2.0.20",
  "tile-core",
  "tile-platform",
 ]

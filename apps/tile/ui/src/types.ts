@@ -1,84 +1,6 @@
 // TypeScript mirrors of the Rust types that cross the Tauri bridge. These MUST
 // match the serde representations in `tile-core` and the app's DTOs exactly.
 
-/** `WindowAction` — serde `rename_all = "kebab-case"`. */
-export type WindowAction =
-  | "left-half"
-  | "right-half"
-  | "top-half"
-  | "bottom-half"
-  | "previous-display"
-  | "next-display"
-  | "top-left"
-  | "top-right"
-  | "bottom-left"
-  | "bottom-right"
-  | "first-third"
-  | "center-third"
-  | "last-third"
-  | "first-two-thirds"
-  | "last-two-thirds"
-  | "center-two-thirds"
-  | "top-vertical-third"
-  | "middle-vertical-third"
-  | "bottom-vertical-third"
-  | "top-vertical-two-thirds"
-  | "bottom-vertical-two-thirds"
-  | "first-fourth"
-  | "second-fourth"
-  | "third-fourth"
-  | "last-fourth"
-  | "first-three-fourths"
-  | "last-three-fourths"
-  | "center-three-fourths"
-  | "top-left-third"
-  | "top-right-third"
-  | "bottom-left-third"
-  | "bottom-right-third"
-  | "top-left-sixth"
-  | "top-center-sixth"
-  | "top-right-sixth"
-  | "bottom-left-sixth"
-  | "bottom-center-sixth"
-  | "bottom-right-sixth"
-  | "top-left-ninth"
-  | "top-center-ninth"
-  | "top-right-ninth"
-  | "middle-left-ninth"
-  | "middle-center-ninth"
-  | "middle-right-ninth"
-  | "bottom-left-ninth"
-  | "bottom-center-ninth"
-  | "bottom-right-ninth"
-  | "maximize"
-  | "almost-maximize"
-  | "maximize-height"
-  | "center-half"
-  | "center"
-  | "restore"
-  | "move-left"
-  | "move-right"
-  | "move-up"
-  | "move-down"
-  | "larger"
-  | "smaller"
-  | "larger-width"
-  | "smaller-width"
-  | "larger-height"
-  | "smaller-height"
-  | "double-width-left"
-  | "double-width-right"
-  | "double-height-up"
-  | "double-height-down"
-  | "halve-width-left"
-  | "halve-width-right"
-  | "halve-height-up"
-  | "halve-height-down"
-  | "first-display"
-  | "second-display"
-  | "third-display"
-  | "fourth-display";
-
 /** Presentation families, mirroring `WindowFamily::ALL` and its labels. */
 export const FAMILIES: { id: string; label: string }[] = [
   { id: "halves", label: "Halves" },
@@ -100,7 +22,7 @@ export const FAMILIES: { id: string; label: string }[] = [
  * Order, labels and families mirror `WindowAction::ALL`, `WindowAction::label`
  * and `WindowAction::family`. `family` keys into {@link FAMILIES}.
  */
-export const ACTIONS: { id: WindowAction; label: string; family: string }[] = [
+export const ACTIONS = [
   { id: "left-half", label: "Left Half", family: "halves" },
   { id: "right-half", label: "Right Half", family: "halves" },
   { id: "top-half", label: "Top Half", family: "halves" },
@@ -232,6 +154,11 @@ export const ACTIONS: { id: WindowAction; label: string; family: string }[] = [
   { id: "almost-maximize", label: "Almost Maximize", family: "sizing" },
   { id: "maximize-height", label: "Maximize Height", family: "sizing" },
   { id: "center-half", label: "Center Half", family: "sizing" },
+  {
+    id: "center-half-back",
+    label: "Center Half (Previous Size)",
+    family: "sizing",
+  },
   { id: "center", label: "Center", family: "sizing" },
   { id: "restore", label: "Restore", family: "sizing" },
   { id: "move-left", label: "Move Left", family: "move" },
@@ -281,7 +208,10 @@ export const ACTIONS: { id: WindowAction; label: string; family: string }[] = [
     family: "halve-double",
   },
 
-];
+] as const satisfies readonly { id: string; label: string; family: string }[];
+
+/** `WindowAction` — serde `rename_all = "kebab-case"`. */
+export type WindowAction = (typeof ACTIONS)[number]["id"];
 
 /** `KeyCode` — serde `rename_all = "kebab-case"`. Mirrors `KeyCode::ALL`. */
 export type KeyCode =

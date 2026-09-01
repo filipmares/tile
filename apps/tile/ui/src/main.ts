@@ -108,7 +108,6 @@ const dom = {
   welcomeSkipKey: el<HTMLSpanElement>("#welcome-skip-key"),
   welcomeProgress: el<HTMLParagraphElement>("#welcome-progress"),
   welcomeNote: el<HTMLParagraphElement>("#welcome-note"),
-  welcomeActionCount: el<HTMLSpanElement>("#welcome-action-count"),
   welcomeDismiss: el<HTMLButtonElement>("#welcome-dismiss"),
   grant: el<HTMLButtonElement>("#grant-permission"),
   openAccessibility: el<HTMLButtonElement>("#open-accessibility"),
@@ -1574,8 +1573,6 @@ async function bootWelcome(): Promise<void> {
   // Windows puts the icon in the system tray, macOS in the menu bar. This is
   // onboarding copy, so naming the wrong one sends the user hunting.
   dom.welcomeHome.textContent = isMac() ? "menu bar" : "system tray";
-  dom.welcomeActionCount.textContent = String(ACTIONS.length);
-
   dom.welcomeDismiss.addEventListener("click", closeWelcome);
   dom.welcomeSkip.addEventListener("click", skipDeck);
 
