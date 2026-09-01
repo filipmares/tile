@@ -62,7 +62,7 @@ fn present_focusable_window<R: Runtime>(
     #[cfg(not(target_os = "macos"))]
     {
         let _ = (app, label);
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(target_os = "macos")]
