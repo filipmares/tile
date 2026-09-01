@@ -1622,11 +1622,11 @@ mod enhanced_ui_tests {
 /// which is all Tauri's `set_focus` does — succeeds and changes nothing: the
 /// window comes forward still unable to receive a keystroke.
 ///
-/// This is the missing half. It is deliberately not called when a window opens:
-/// stealing the keyboard is precisely what the welcome screen spends its whole
-/// walkthrough avoiding, because the window the user was last in has to stay
-/// the one Tile moves. It is called once, at the end, when there is nothing
-/// left to move and the only thing left to press is Return.
+/// This is the missing half for user-requested windows such as Settings. It is
+/// deliberately not called when the welcome window first opens: stealing the
+/// keyboard is precisely what most of that walkthrough avoids, because the
+/// window the user was last in has to stay the one Tile moves. The welcome flow
+/// activates only for its final, ordinary-keystroke step.
 ///
 /// Must be called on the main thread; `NSApplication` is main-thread-only.
 pub fn activate_app() {
