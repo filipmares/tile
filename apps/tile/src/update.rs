@@ -5,6 +5,11 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
 
+#[cfg(target_os = "macos")]
+use std::path::Path;
+#[cfg(target_os = "macos")]
+use std::process::{Command, Stdio};
+
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
@@ -12,6 +17,8 @@ use crate::build_kind::BuildKind;
 
 const STARTUP_CHECK_DELAY: Duration = Duration::from_secs(5);
 const RECHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+#[cfg(target_os = "macos")]
+const RELAUNCH_DELAY_SECONDS: &str = "1";
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
@@ -68,6 +75,54 @@ fn suppresses_check(status: &UpdateStatus) -> bool {
     {
         false
     }
+}
+
+#[cfg(target_os = "macos")]
+fn app_bundle_for_executable(executable: &Path) -> Option<&Path> {
+    let macos = executable.parent()?;
+    if macos.file_name()? != "MacOS" {
+        return None;
+    }
+    let contents = macos.parent()?;
+    if contents.file_name()? != "Contents" {
+        return None;
+    }
+    let bundle = contents.parent()?;
+    (bundle.extension()? == "app").then_some(bundle)
+}
+
+/// Relaunches the installed macOS bundle after an update has settled on disk.
+///
+/// Tauri restarts by executing the replaced binary directly. macOS can reject
+/// that immediate exec while Gatekeeper is still evaluating the new bundle, so
+/// defer until this process has exited and ask Launch Services to open the app.
+#[cfg(target_os = "macos")]
+pub(crate) fn relaunch<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let executable =
+        std::env::current_exe().map_err(|err| format!("could not locate Tile: {err}"))?;
+    let bundle = app_bundle_for_executable(&executable).ok_or_else(|| {
+        format!(
+            "Tile is not running from an app bundle: {}",
+            executable.display()
+        )
+    })?;
+
+    Command::new("/bin/sh")
+        .args([
+            "-c",
+            "sleep \"$1\"; exec /usr/bin/open -n \"$2\"",
+            "tile-relaunch",
+            RELAUNCH_DELAY_SECONDS,
+        ])
+        .arg(bundle)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|err| format!("could not schedule Tile to relaunch: {err}"))?;
+
+    app.exit(0);
+    Ok(())
 }
 
 impl UpdateManager {
@@ -163,7 +218,7 @@ impl UpdateManager {
 
         #[cfg(target_os = "macos")]
         if relaunch_after_install && matches!(self.status(), UpdateStatus::ReadyToRelaunch { .. }) {
-            app.request_restart();
+            relaunch(app)?;
             return Ok(self.status());
         }
         if self
@@ -228,7 +283,7 @@ impl UpdateManager {
             );
             if relaunch_after_install {
                 self.installing.store(false, Ordering::Release);
-                app.request_restart();
+                relaunch(app)?;
             }
         }
 
@@ -353,5 +408,28 @@ mod tests {
             total_bytes: None,
         }));
         assert!(!suppresses_check(&UpdateStatus::Current));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn finds_app_bundle_from_macos_executable() {
+        let executable = Path::new("/Applications/Tile.app/Contents/MacOS/tile");
+        assert_eq!(
+            app_bundle_for_executable(executable),
+            Some(Path::new("/Applications/Tile.app"))
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn rejects_executables_outside_an_app_bundle() {
+        assert_eq!(
+            app_bundle_for_executable(Path::new("/usr/local/bin/tile")),
+            None
+        );
+        assert_eq!(
+            app_bundle_for_executable(Path::new("/Applications/Tile/Contents/MacOS/tile")),
+            None
+        );
     }
 }

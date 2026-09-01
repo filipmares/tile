@@ -298,7 +298,11 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str, kind: BuildKind) 
             let status = app.state::<Arc<UpdateManager>>().status();
             match status {
                 #[cfg(target_os = "macos")]
-                UpdateStatus::ReadyToRelaunch { .. } => app.request_restart(),
+                UpdateStatus::ReadyToRelaunch { .. } => {
+                    if let Err(err) = crate::update::relaunch(app) {
+                        log::error!("failed to relaunch Tile: {err}");
+                    }
+                }
                 _ => {
                     let check_for_updates = !matches!(status, UpdateStatus::Available { .. });
                     if let Err(err) = window::open_updates(app, check_for_updates) {
