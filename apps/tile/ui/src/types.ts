@@ -436,7 +436,11 @@ export type UpdateStatus =
 export interface WelcomeStatus {
   screenCount: number;
   hasMovableWindow: boolean;
-  /** Index of the display holding the window, counted left to right. */
+  /**
+   * Display a shortcut would move a window on, counted left to right. Falls
+   * back to the primary display when `hasMovableWindow` is false, since there
+   * is then no window to take the answer from.
+   */
   currentScreen: number;
 }
 
@@ -455,6 +459,10 @@ export interface ActionPerformed {
   action: WindowAction;
   moved: boolean;
   hadWindow: boolean;
-  /** Display the window is on, counted left to right; null if none moved. */
+  /**
+   * Display the window is on, or heading for when it moved, counted left to
+   * right. Null only when `hadWindow` is false: a no-op reports the display
+   * the window is already sitting on, so this does not track `moved`.
+   */
   screen: number | null;
 }
