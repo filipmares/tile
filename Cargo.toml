@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/tile-core", "crates/tile-platform", "apps/tile"]
 
 [workspace.package]
-version = "0.3.7"
+version = "0.3.8"
 edition = "2021"
 rust-version = "1.77.2"
 license = "MIT"
