@@ -511,6 +511,17 @@ function renderStage(screenCount: number): void {
   dom.welcomeStage.classList.toggle("stage--tray-bottom", !isMac());
 }
 
+/**
+ * The miniature standing in for real display `index`, counted left to right.
+ *
+ * The stage draws at most three, so a window on a fourth display is shown on
+ * the last miniature rather than on one that was never drawn.
+ */
+function onStage(index: number): number {
+  if (walk.screens.length === 0) return 0;
+  return Math.min(Math.max(index, 0), walk.screens.length - 1);
+}
+
 /** The share of a mini display taken by the menu bar or taskbar. */
 const STAGE_BAR = 0.1;
 
@@ -1618,7 +1629,7 @@ async function bootWelcome(): Promise<void> {
     cfg?.subsequentExecutionMode === "cycle-sizes" &&
     walk.cycleSizes.length > 0;
 
-  let status = { screenCount: 1, hasMovableWindow: true };
+  let status = { screenCount: 1, hasMovableWindow: true, currentScreen: 0 };
   try {
     status = await getWelcomeStatus();
   } catch (err) {
@@ -1630,7 +1641,13 @@ async function bootWelcome(): Promise<void> {
   renderStage(status.screenCount);
   walk.slides = buildSlides(cfg);
   renderDeck();
-  movePane(FLOATING, false);
+  // Start the pane on the display the window really is on. The miniatures run
+  // left to right, and the main display is often not the leftmost one, so
+  // starting at zero would mirror the first shortcut on the wrong screen.
+  movePane(
+    { ...FLOATING, screen: onStage(status.currentScreen) },
+    false,
+  );
   if (!status.hasMovableWindow && walk.slides.length > 0) {
     setWalkNote(
       "No window open yet — presses will preview. Open one for the real thing.",

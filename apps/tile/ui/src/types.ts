@@ -436,6 +436,8 @@ export type UpdateStatus =
 export interface WelcomeStatus {
   screenCount: number;
   hasMovableWindow: boolean;
+  /** Index of the display holding the window, counted left to right. */
+  currentScreen: number;
 }
 
 /**

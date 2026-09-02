@@ -38,7 +38,8 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use tile_core::{
-    AnimationParams, Animator, Config, Engine, Plan, Rect, WindowAction, WindowId, WindowSnapshot,
+    AnimationParams, Animator, Config, Engine, Plan, Rect, Screen, WindowAction, WindowId,
+    WindowSnapshot,
 };
 use tile_platform::{
     AnimationSession, HotkeyBackend, HotkeyFailure, PermissionStatus, PlatformError, WindowBackend,
@@ -161,6 +162,43 @@ impl AppState {
     /// itself is in front — it reports the window that would actually move.
     pub fn has_movable_window(&self) -> tile_platform::Result<bool> {
         Ok(lock(&self.backend).focused_window()?.is_some())
+    }
+
+    /// Where the window a shortcut would move is sitting, as an index into
+    /// [`Screen::geometrically_ordered`].
+    ///
+    /// The welcome stage draws one miniature per display, left to right. It has
+    /// to start its pane on the display the real window is actually on, or the
+    /// first shortcut moves a window on one screen while the mirror of it moves
+    /// on another. Geometric order rather than the backend's enumeration for
+    /// the same reason display throws use it: the OS lists displays in an order
+    /// that says nothing about where they sit, and the main display is often
+    /// not the leftmost one.
+    ///
+    /// Falls back to the primary display when nothing movable is focused, which
+    /// is where a window would most likely open.
+    pub fn current_screen_index(&self) -> tile_platform::Result<usize> {
+        // One lock for both reads: a display unplugged between them would
+        // otherwise yield an index into a screen list that no longer exists.
+        let backend = lock(&self.backend);
+        let screens = backend.screens()?;
+        let focused = backend.focused_window()?;
+
+        let holder = match &focused {
+            Some(window) => Screen::best_match(&screens, &window.frame),
+            None => screens
+                .iter()
+                .find(|screen| screen.is_primary)
+                .or_else(|| screens.first()),
+        };
+
+        Ok(holder
+            .and_then(|screen| {
+                Screen::geometrically_ordered(&screens)
+                    .iter()
+                    .position(|ordered| ordered.id == screen.id)
+            })
+            .unwrap_or(0))
     }
 
     /// Runs the full pipeline for `action`: read the focused window and
@@ -1542,6 +1580,98 @@ mod tests {
         fn permission_status(&self, _prompt: bool) -> tile_platform::Result<PermissionStatus> {
             Ok(PermissionStatus::NotRequired)
         }
+    }
+
+    /// Two displays arranged the way a laptop usually sits beside a larger
+    /// main display: the primary is the *second* screen from the left.
+    ///
+    /// `screens` deliberately lists the primary first, which is how the OS
+    /// tends to enumerate them, so a test using this backend fails if the
+    /// index is taken from enumeration order rather than geometry.
+    struct SideBySideBackend {
+        focused: Option<Rect>,
+    }
+
+    impl SideBySideBackend {
+        const LEFT: Rect = Rect {
+            x: -1920.0,
+            y: 243.0,
+            width: 1440.0,
+            height: 900.0,
+        };
+        const PRIMARY: Rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 2560.0,
+            height: 1440.0,
+        };
+    }
+
+    impl WindowBackend for SideBySideBackend {
+        fn focused_window(&self) -> tile_platform::Result<Option<WindowSnapshot>> {
+            Ok(self.focused.map(|frame| WindowSnapshot { id: 1, frame }))
+        }
+
+        fn screens(&self) -> tile_platform::Result<Vec<Screen>> {
+            Ok(vec![
+                Screen {
+                    id: "primary".into(),
+                    frame: Self::PRIMARY,
+                    work_area: Self::PRIMARY,
+                    scale_factor: 1.0,
+                    is_primary: true,
+                },
+                Screen {
+                    id: "left".into(),
+                    frame: Self::LEFT,
+                    work_area: Self::LEFT,
+                    scale_factor: 1.0,
+                    is_primary: false,
+                },
+            ])
+        }
+
+        fn set_window_frame(&self, _id: WindowId, target: Rect) -> tile_platform::Result<Rect> {
+            Ok(target)
+        }
+
+        fn permission_status(&self, _prompt: bool) -> tile_platform::Result<PermissionStatus> {
+            Ok(PermissionStatus::NotRequired)
+        }
+    }
+
+    fn state_looking_at(focused: Option<Rect>) -> AppState {
+        AppState::new(
+            Box::new(SideBySideBackend { focused }),
+            Box::new(CountingHotkeyBackend::default()),
+            Config::default(),
+            BuildKind::Development,
+            None,
+            false,
+        )
+    }
+
+    /// The welcome stage counts its miniatures left to right, and the main
+    /// display is often not the leftmost one. A window on the primary of this
+    /// desk belongs on the *second* miniature, not the first.
+    #[test]
+    fn the_current_screen_is_counted_left_to_right_not_by_enumeration() {
+        let state = state_looking_at(Some(Rect::new(200.0, 200.0, 800.0, 600.0)));
+        assert_eq!(state.current_screen_index().unwrap(), 1);
+    }
+
+    #[test]
+    fn a_window_on_the_leftmost_display_is_the_first_screen() {
+        let state = state_looking_at(Some(Rect::new(-1800.0, 300.0, 800.0, 600.0)));
+        assert_eq!(state.current_screen_index().unwrap(), 0);
+    }
+
+    /// With nothing movable focused, the pane belongs where a window would
+    /// most likely open rather than on whichever screen sits furthest left.
+    #[test]
+    fn without_a_focused_window_the_primary_display_is_used() {
+        let state = state_looking_at(None);
+        assert_eq!(state.current_screen_index().unwrap(), 1);
     }
 
     /// Counts `apply` calls through a shared handle, so a test can prove that

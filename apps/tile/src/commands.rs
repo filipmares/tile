@@ -188,9 +188,13 @@ pub fn perform_action(state: State<'_, Shared>, action: WindowAction) -> Result<
 pub fn get_welcome_status(state: State<'_, Shared>) -> Result<WelcomeStatusDto, String> {
     let screen_count = state.screen_count().map_err(|err| err.to_string())?;
     let has_movable_window = state.has_movable_window().map_err(|err| err.to_string())?;
+    let current_screen = state
+        .current_screen_index()
+        .map_err(|err| err.to_string())?;
     Ok(WelcomeStatusDto {
         screen_count,
         has_movable_window,
+        current_screen,
     })
 }
 

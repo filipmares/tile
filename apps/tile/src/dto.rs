@@ -148,6 +148,10 @@ pub struct WelcomeStatusDto {
     pub screen_count: usize,
     /// Whether something Tile could move is focused right now.
     pub has_movable_window: bool,
+    /// Which display the window a shortcut would move is on, counted left to
+    /// right, so the stage can start its pane on the screen the user is
+    /// actually looking at rather than always on the leftmost one.
+    pub current_screen: usize,
 }
 
 /// An action the user just performed, reported to the welcome window.
