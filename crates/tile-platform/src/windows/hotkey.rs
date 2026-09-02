@@ -412,6 +412,14 @@ fn match_binding(
 /// Reads the current modifier state. Uses `GetAsyncKeyState` for the modifiers
 /// only (never for the pressed key itself). The Win flag reflects the physical
 /// left/right Win keys.
+///
+/// A low-level hook runs before Windows updates async state for the event being
+/// delivered. That does not make this stale for a binding lookup: the event
+/// being delivered is the non-modifier trigger, while every modifier key-down
+/// is an earlier event whose state has already been committed. Querying the OS
+/// is more robust than reconstructing state indefinitely from a hook stream,
+/// which can begin midway through a chord or miss a key-up if Windows removes a
+/// timed-out hook.
 fn current_modifiers() -> Modifiers {
     let mut m = Modifiers::NONE;
     if key_down(VK_CONTROL) {

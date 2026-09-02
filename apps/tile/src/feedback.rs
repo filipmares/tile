@@ -40,8 +40,8 @@ pub fn run_action_preemptible<R: Runtime>(
     // collapses a burst of presses into a single verdict, because each press
     // after the first is swallowed to retarget the flight, so a walkthrough
     // counting presses would undercount exactly when the user is fluent.
-    let result = state.perform_action_preemptible(action, next, &mut |action, outcome| {
-        window::notify_action_performed(app, action, outcome);
+    let result = state.perform_action_preemptible(action, next, &mut |report| {
+        window::notify_action_performed(app, report);
     });
 
     if let Err(err) = result {

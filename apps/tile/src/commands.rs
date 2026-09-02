@@ -118,9 +118,29 @@ pub fn open_settings<R: Runtime>(
 }
 
 /// Reopens the welcome screen on demand, from the settings footer.
+///
+/// This command must be asynchronous even though the window operation itself
+/// is synchronous. On Windows, a synchronous IPC command runs inside WebView2's
+/// message callback; building another WebView there waits on the event loop
+/// that is still servicing that callback and deadlocks. Returning a future lets
+/// the callback finish before the queued main-thread operation runs.
 #[tauri::command]
-pub fn open_welcome<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
-    crate::window::open_welcome(&app).map_err(|err| err.to_string())
+pub async fn open_welcome<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    let (sender, mut receiver) = tauri::async_runtime::channel(1);
+    let handle = app.clone();
+
+    app.run_on_main_thread(move || {
+        let result = crate::window::open_welcome(&handle).map_err(|err| err.to_string());
+        if sender.try_send(result).is_err() {
+            log::error!("could not return the welcome window result to the settings window");
+        }
+    })
+    .map_err(|err| err.to_string())?;
+
+    receiver
+        .recv()
+        .await
+        .ok_or_else(|| "the welcome window operation did not complete".to_string())?
 }
 
 /// Lets the welcome window take the keyboard for its closing slide.
@@ -168,9 +188,13 @@ pub fn perform_action(state: State<'_, Shared>, action: WindowAction) -> Result<
 pub fn get_welcome_status(state: State<'_, Shared>) -> Result<WelcomeStatusDto, String> {
     let screen_count = state.screen_count().map_err(|err| err.to_string())?;
     let has_movable_window = state.has_movable_window().map_err(|err| err.to_string())?;
+    let current_screen = state
+        .current_screen_index()
+        .map_err(|err| err.to_string())?;
     Ok(WelcomeStatusDto {
         screen_count,
         has_movable_window,
+        current_screen,
     })
 }
 

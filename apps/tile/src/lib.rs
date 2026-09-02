@@ -45,7 +45,16 @@ pub fn run() {
     let mut rx = Some(rx);
 
     let context = tauri::generate_context!();
-    let build = tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+
+    // Before every other plugin, which is what this one requires: it has to
+    // claim the lock and hand off to the running copy before anything else
+    // starts building state this process is about to throw away.
+    if BuildKind::detect().enforces_single_instance() {
+        builder = builder.plugin(tauri_plugin_single_instance::init(answer_second_launch));
+    }
+
+    let build = builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -110,6 +119,26 @@ pub fn run() {
             _ => {}
         }),
         Err(err) => log::error!("failed to start Tile: {err}"),
+    }
+}
+
+/// Answers a second launch of an already-running Tile, in the copy that was
+/// there first. The newcomer exits on its own.
+///
+/// Tile has no Dock icon or taskbar button, so launching it again is exactly
+/// what someone does when they cannot tell whether it is already running.
+/// Exiting in silence would look like a failure to start, so the running copy
+/// opens settings: the same window the tray offers, and proof of which process
+/// owns the shortcuts.
+fn answer_second_launch<R: Runtime>(app: &AppHandle<R>, _argv: Vec<String>, _cwd: String) {
+    log::info!("a second Tile was launched; surfacing the copy that is already running");
+    let Some(state) = app.try_state::<Arc<AppState>>() else {
+        // Setup has not run yet, so there is no settings window to open and
+        // nothing the newcomer needed that this copy is not about to do anyway.
+        return;
+    };
+    if let Err(err) = window::open_settings(app, state.build_kind()) {
+        log::error!("could not surface the running Tile for a second launch: {err}");
     }
 }
 

@@ -148,6 +148,12 @@ pub struct WelcomeStatusDto {
     pub screen_count: usize,
     /// Whether something Tile could move is focused right now.
     pub has_movable_window: bool,
+    /// Which display the window a shortcut would move is on, counted left to
+    /// right, so the stage can start its pane on the screen the user is
+    /// actually looking at rather than always on the leftmost one. Falls back
+    /// to the primary display when `has_movable_window` is false, since there
+    /// is then no window to take the answer from.
+    pub current_screen: usize,
 }
 
 /// An action the user just performed, reported to the welcome window.
@@ -163,6 +169,12 @@ pub struct ActionPerformedDto {
     pub action: WindowAction,
     pub moved: bool,
     pub had_window: bool,
+    /// The display the window is on, or heading for, counted left to right.
+    /// The stage follows it, so the miniature keeps mirroring the real window
+    /// even when Tile moved one the walkthrough never knew about. `None` only
+    /// when there was no window to act on: a no-op still reports the display
+    /// the window is already sitting on.
+    pub screen: Option<usize>,
 }
 
 #[cfg(test)]

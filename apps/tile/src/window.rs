@@ -15,11 +15,10 @@ use std::sync::{Mutex, OnceLock};
 use tauri::{
     AppHandle, Emitter, Manager, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
 };
-use tile_core::WindowAction;
 
 use crate::build_kind::BuildKind;
 use crate::dto::ActionPerformedDto;
-use crate::state::ActionOutcome;
+use crate::state::{ActionOutcome, ActionReport};
 
 /// Stable label for the single settings window.
 pub const SETTINGS_LABEL: &str = "settings";
@@ -134,21 +133,21 @@ fn release_promotion<R: Runtime>(app: &AppHandle<R>, label: &'static str) {
 /// Deliberately addressed rather than broadcast: the walkthrough is the only
 /// listener there will ever be, and the settings window has no business
 /// hearing about every hotkey the user presses.
-pub fn notify_action_performed<R: Runtime>(
-    app: &AppHandle<R>,
-    action: WindowAction,
-    outcome: ActionOutcome,
-) {
+pub fn notify_action_performed<R: Runtime>(app: &AppHandle<R>, report: ActionReport) {
     if app.get_webview_window(WELCOME_LABEL).is_none() {
         return;
     }
     let payload = ActionPerformedDto {
-        action,
-        moved: outcome == ActionOutcome::Moved,
-        had_window: outcome != ActionOutcome::NoWindow,
+        action: report.action,
+        moved: report.outcome == ActionOutcome::Moved,
+        had_window: report.outcome != ActionOutcome::NoWindow,
+        screen: report.screen,
     };
     if let Err(err) = app.emit_to(WELCOME_LABEL, ACTION_PERFORMED_EVENT, payload) {
-        log::debug!("could not tell the welcome window about {action}: {err}");
+        log::debug!(
+            "could not tell the welcome window about {}: {err}",
+            report.action
+        );
     }
 }
 
@@ -226,7 +225,7 @@ pub fn open_welcome<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     // and the proof the walkthrough exists to give would land out of sight.
     // Left unfocused, the window they were already working in stays the
     // target, and it moves in plain view behind the card.
-    let window = WebviewWindowBuilder::new(
+    let builder = WebviewWindowBuilder::new(
         app,
         WELCOME_LABEL,
         WebviewUrl::App("index.html?welcome".into()),
@@ -237,8 +236,18 @@ pub fn open_welcome<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     .resizable(true)
     .visible(true)
     .focused(false)
-    .always_on_top(true)
-    .build()?;
+    .always_on_top(true);
+
+    // `focused(false)` only controls creation-time activation. On Windows the
+    // user can still focus the WebView by clicking the walkthrough, after which
+    // Win+Arrow belongs to the focused Tile window and Aero Snap moves the card
+    // instead of the window it is demonstrating. Make that impossible for the
+    // teaching slides; `focus_welcome` opts back in for the ordinary Enter/Esc
+    // interaction on the closing slide.
+    #[cfg(target_os = "windows")]
+    let builder = builder.focusable(false);
+
+    let window = builder.build()?;
 
     // The safety net for the promotion `focus_welcome` performs. The
     // walkthrough's own exit demotes before it closes, but Cmd+W, the red
@@ -289,6 +298,9 @@ pub fn focus_welcome<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let Some(window) = app.get_webview_window(WELCOME_LABEL) else {
         return Ok(());
     };
+
+    #[cfg(target_os = "windows")]
+    window.set_focusable(true)?;
 
     present_focusable_window(app, window, WELCOME_LABEL)
 }

@@ -511,6 +511,17 @@ function renderStage(screenCount: number): void {
   dom.welcomeStage.classList.toggle("stage--tray-bottom", !isMac());
 }
 
+/**
+ * The miniature standing in for real display `index`, counted left to right.
+ *
+ * The stage draws at most three, so a window on a fourth display is shown on
+ * the last miniature rather than on one that was never drawn.
+ */
+function onStage(index: number): number {
+  if (walk.screens.length === 0) return 0;
+  return Math.min(Math.max(index, 0), walk.screens.length - 1);
+}
+
 /** The share of a mini display taken by the menu bar or taskbar. */
 const STAGE_BAR = 0.1;
 
@@ -530,6 +541,22 @@ function placeOnStage(el: HTMLElement, frame: PaneFrame): void {
   style.top = `${workY + frame.y * workH}px`;
   style.width = `${frame.w * screen.offsetWidth}px`;
   style.height = `${frame.h * workH}px`;
+}
+
+/**
+ * Whether the pane is still the untidied window the stage opened with.
+ *
+ * Compared by shape rather than by identity: the pane starts life as a copy of
+ * [`FLOATING`] placed on the user's own display, and a restore puts it back on
+ * whichever display the window is on now, so neither is ever the same object.
+ */
+function isFloating(frame: PaneFrame): boolean {
+  return (
+    frame.x === FLOATING.x &&
+    frame.y === FLOATING.y &&
+    frame.w === FLOATING.w &&
+    frame.h === FLOATING.h
+  );
 }
 
 /** Re-places the pane and the outline, in silence, after a resize. */
@@ -601,15 +628,27 @@ function renderGhost(): void {
  * one has to be built on what the engine now believes — but the pane stays
  * where the lesson left it instead of following the window off course.
  */
-function reflectOnStage(action: WindowAction, place: boolean): void {
+function reflectOnStage(
+  action: WindowAction,
+  place: boolean,
+  screen: number | null,
+): void {
   const repeat = action === walk.lastAction;
   const cycles = walk.cycles && CYCLING_ACTIONS.includes(action);
+  // Where Tile actually put the window, which is the only thing that knows
+  // *which* window moved. The walkthrough opened from Settings never had focus
+  // to begin with, so the stage cannot work this out for itself. A press that
+  // moved nothing reports no display, and the stage keeps its own reckoning.
+  const reported = screen === null ? null : onStage(screen);
 
   if (DISPLAY_ACTIONS.includes(action)) {
     const count = walk.screens.length;
     const step = action === "next-display" ? 1 : count - 1;
-    const thrown = { ...walk.pane, screen: (walk.pane.screen + step) % count };
-    const snapped = walk.pane !== FLOATING;
+    const thrown = {
+      ...walk.pane,
+      screen: reported ?? (walk.pane.screen + step) % count,
+    };
+    const snapped = !isFloating(walk.pane);
     walk.lastAction = action;
     if (place) movePane(thrown, snapped);
     else renderGhost();
@@ -638,12 +677,13 @@ function reflectOnStage(action: WindowAction, place: boolean): void {
     renderGhost();
     return;
   }
+  const onScreen = reported ?? walk.pane.screen;
   if (action === "restore") {
-    movePane(FLOATING, false);
+    movePane({ ...FLOATING, screen: onScreen }, false);
     return;
   }
   const shape = PANE_SHAPES[action];
-  if (shape) movePane({ screen: walk.pane.screen, ...shape(fraction) }, true);
+  if (shape) movePane({ screen: onScreen, ...shape(fraction) }, true);
 }
 
 /** How long the pane spends turning a press down. */
@@ -920,7 +960,7 @@ function onActionPerformed(event: ActionPerformed): void {
   // already where the wrong key would put it: without this, the one press most
   // likely to be a mistake is the one press that gets no answer at all.
   if (showing && !current) {
-    reflectOnStage(event.action, false);
+    reflectOnStage(event.action, false, event.screen);
     refusePress(showing);
     return;
   }
@@ -935,7 +975,7 @@ function onActionPerformed(event: ActionPerformed): void {
   setWalkNote(empty ? "No window open to move — so that was a preview." : null);
 
   const repeat = event.action === walk.lastAction;
-  reflectOnStage(event.action, true);
+  reflectOnStage(event.action, true, event.screen);
   renderCyclePips();
   if (!current) return;
 
@@ -1618,7 +1658,7 @@ async function bootWelcome(): Promise<void> {
     cfg?.subsequentExecutionMode === "cycle-sizes" &&
     walk.cycleSizes.length > 0;
 
-  let status = { screenCount: 1, hasMovableWindow: true };
+  let status = { screenCount: 1, hasMovableWindow: true, currentScreen: 0 };
   try {
     status = await getWelcomeStatus();
   } catch (err) {
@@ -1630,7 +1670,13 @@ async function bootWelcome(): Promise<void> {
   renderStage(status.screenCount);
   walk.slides = buildSlides(cfg);
   renderDeck();
-  movePane(FLOATING, false);
+  // Start the pane on the display the window really is on. The miniatures run
+  // left to right, and the main display is often not the leftmost one, so
+  // starting at zero would mirror the first shortcut on the wrong screen.
+  movePane(
+    { ...FLOATING, screen: onStage(status.currentScreen) },
+    false,
+  );
   if (!status.hasMovableWindow && walk.slides.length > 0) {
     setWalkNote(
       "No window open yet — presses will preview. Open one for the real thing.",

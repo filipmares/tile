@@ -38,7 +38,8 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use tile_core::{
-    AnimationParams, Animator, Config, Engine, Plan, Rect, WindowAction, WindowId, WindowSnapshot,
+    AnimationParams, Animator, Config, Engine, Plan, Rect, Screen, WindowAction, WindowId,
+    WindowSnapshot,
 };
 use tile_platform::{
     AnimationSession, HotkeyBackend, HotkeyFailure, PermissionStatus, PlatformError, WindowBackend,
@@ -163,6 +164,46 @@ impl AppState {
         Ok(lock(&self.backend).focused_window()?.is_some())
     }
 
+    /// Where the window a shortcut would move is sitting, as an index into
+    /// [`Screen::geometrically_ordered`].
+    ///
+    /// The welcome stage draws one miniature per display, left to right. It has
+    /// to start its pane on the display the real window is actually on, or the
+    /// first shortcut moves a window on one screen while the mirror of it moves
+    /// on another. Geometric order rather than the backend's enumeration for
+    /// the same reason display throws use it: the OS lists displays in an order
+    /// that says nothing about where they sit, and the main display is often
+    /// not the leftmost one.
+    ///
+    /// Falls back to the primary display when nothing movable is focused, which
+    /// is where a window would most likely open.
+    pub fn current_screen_index(&self) -> tile_platform::Result<usize> {
+        // One lock for both reads: a display unplugged between them would
+        // otherwise yield an index into a screen list that no longer exists.
+        let backend = lock(&self.backend);
+        let screens = backend.screens()?;
+        let focused = backend.focused_window()?;
+
+        if let Some(window) = &focused {
+            if let Some(index) = screen_index(&screens, window.frame) {
+                return Ok(index);
+            }
+        }
+
+        let fallback = screens
+            .iter()
+            .find(|screen| screen.is_primary)
+            .or_else(|| screens.first());
+
+        Ok(fallback
+            .and_then(|screen| {
+                Screen::geometrically_ordered(&screens)
+                    .iter()
+                    .position(|ordered| ordered.id == screen.id)
+            })
+            .unwrap_or(0))
+    }
+
     /// Runs the full pipeline for `action`: read the focused window and
     /// screens, ask the engine for a [`Plan`], apply it, and commit history
     /// using the frame the backend actually produced.
@@ -172,7 +213,7 @@ impl AppState {
     /// [`AppState::perform_action_preemptible`] so a second press can steer an
     /// animation that is still in flight.
     pub fn perform_action(&self, action: WindowAction) -> tile_platform::Result<ActionOutcome> {
-        self.perform_action_preemptible(action, &mut || None, &mut |_, _| {})
+        self.perform_action_preemptible(action, &mut || None, &mut |_| {})
     }
 
     /// As [`AppState::perform_action`], but able to pick up further actions
@@ -197,7 +238,7 @@ impl AppState {
         &self,
         action: WindowAction,
         next: &mut dyn FnMut() -> Option<WindowAction>,
-        observe: &mut dyn FnMut(WindowAction, ActionOutcome),
+        observe: &mut dyn FnMut(ActionReport),
     ) -> tile_platform::Result<ActionOutcome> {
         let backend = lock(&self.backend);
         let mut engine = lock(&self.engine);
@@ -295,15 +336,45 @@ pub enum ActionOutcome {
     NoOp,
 }
 
+/// One decided action, reported the moment its verdict is final.
+///
+/// Carries the display as well as the verdict because the only listener — the
+/// welcome walkthrough — cannot ask for it afterwards: the pipeline holds the
+/// backend lock while reporting, so a listener that called back in to find out
+/// where the window went would deadlock against the very action it was told
+/// about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ActionReport {
+    pub action: WindowAction,
+    pub outcome: ActionOutcome,
+    /// The display the window is on, or heading for, counted left to right.
+    /// `None` when there was no window to act on.
+    pub screen: Option<usize>,
+}
+
+/// Which display `frame` belongs to, as an index into
+/// [`Screen::geometrically_ordered`] — the left-to-right order the welcome
+/// stage draws its miniatures in.
+fn screen_index(screens: &[Screen], frame: Rect) -> Option<usize> {
+    let screen = Screen::best_match(screens, &frame)?;
+    Screen::geometrically_ordered(screens)
+        .iter()
+        .position(|ordered| ordered.id == screen.id)
+}
+
 fn apply_once(
     backend: &dyn WindowBackend,
     engine: &mut Engine,
     action: WindowAction,
-    observe: &mut dyn FnMut(WindowAction, ActionOutcome),
+    observe: &mut dyn FnMut(ActionReport),
 ) -> tile_platform::Result<ActionOutcome> {
     let Some(window) = backend.focused_window()? else {
         log::debug!("ignoring {action}: no movable focused window");
-        observe(action, ActionOutcome::NoWindow);
+        observe(ActionReport {
+            action,
+            outcome: ActionOutcome::NoWindow,
+            screen: None,
+        });
         return Ok(ActionOutcome::NoWindow);
     };
     let screens = backend.screens()?;
@@ -313,12 +384,20 @@ fn apply_once(
             let actual = backend.set_window_frame(id, target)?;
             engine.commit(action, &window, actual);
             log::debug!("performed {action} on window {id}");
-            observe(action, ActionOutcome::Moved);
+            observe(ActionReport {
+                action,
+                outcome: ActionOutcome::Moved,
+                screen: screen_index(&screens, actual),
+            });
             Ok(ActionOutcome::Moved)
         }
         Plan::NoOp(reason) => {
             log::debug!("no-op for {action}: {reason:?}");
-            observe(action, ActionOutcome::NoOp);
+            observe(ActionReport {
+                action,
+                outcome: ActionOutcome::NoOp,
+                screen: screen_index(&screens, window.frame),
+            });
             Ok(ActionOutcome::NoOp)
         }
     }
@@ -442,7 +521,7 @@ fn animated_pipeline(
     params: AnimationParams,
     pacer: &mut dyn Pacer,
     next: &mut dyn FnMut() -> Option<WindowAction>,
-    observe: &mut dyn FnMut(WindowAction, ActionOutcome),
+    observe: &mut dyn FnMut(ActionReport),
 ) -> tile_platform::Result<ActionOutcome> {
     let mut flight: Option<Flight> = None;
     let mut outcome = ActionOutcome::NoOp;
@@ -492,7 +571,7 @@ fn run_animated_pipeline(
     params: AnimationParams,
     pacer: &mut dyn Pacer,
     next: &mut dyn FnMut() -> Option<WindowAction>,
-    observe: &mut dyn FnMut(WindowAction, ActionOutcome),
+    observe: &mut dyn FnMut(ActionReport),
     flight: &mut Option<Flight>,
     outcome: &mut ActionOutcome,
 ) -> tile_platform::Result<()> {
@@ -515,7 +594,11 @@ fn run_animated_pipeline(
                 if flight.is_none() {
                     *outcome = ActionOutcome::NoWindow;
                 }
-                observe(action, ActionOutcome::NoWindow);
+                observe(ActionReport {
+                    action,
+                    outcome: ActionOutcome::NoWindow,
+                    screen: None,
+                });
                 if let Some(previous) = flight.take() {
                     land(backend, engine, previous)?;
                 }
@@ -586,13 +669,25 @@ fn run_animated_pipeline(
                     // walkthrough's own little pane sets off at the same
                     // instant as the window it is describing, rather than
                     // waiting for it to arrive and then repeating the journey.
-                    observe(action, ActionOutcome::Moved);
+                    //
+                    // The display reported is the one the window is heading
+                    // *for*, not the one it is leaving, so a throw across
+                    // screens moves the miniature with the window.
+                    observe(ActionReport {
+                        action,
+                        outcome: ActionOutcome::Moved,
+                        screen: screen_index(&screens, target),
+                    });
                 }
                 Plan::NoOp(reason) => {
                     // Nothing to do for this action, but a window already in
                     // flight must still finish its journey.
                     log::debug!("no-op for {action}: {reason:?}");
-                    observe(action, ActionOutcome::NoOp);
+                    observe(ActionReport {
+                        action,
+                        outcome: ActionOutcome::NoOp,
+                        screen: screen_index(&screens, window.frame),
+                    });
                 }
             }
         }
@@ -963,7 +1058,7 @@ mod tests {
             params(),
             &mut FixedPacer,
             &mut || None,
-            &mut |_, _| {},
+            &mut |_| {},
         )
         .unwrap();
 
@@ -994,7 +1089,7 @@ mod tests {
             params(),
             &mut FixedPacer,
             &mut after_frames(2, vec![WindowAction::LeftHalf, WindowAction::LeftHalf]),
-            &mut |_, _| {},
+            &mut |_| {},
         )
         .unwrap();
 
@@ -1033,7 +1128,7 @@ mod tests {
                     None
                 }
             },
-            &mut |_, _| {},
+            &mut |_| {},
         )
         .unwrap();
 
@@ -1049,7 +1144,7 @@ mod tests {
             params(),
             &mut FixedPacer,
             &mut || None,
-            &mut |_, _| {},
+            &mut |_| {},
         )
         .unwrap();
         assert_eq!(backend.last_frame(), Rect::new(100.0, 100.0, 400.0, 300.0));
@@ -1081,7 +1176,7 @@ mod tests {
                 params,
                 &mut FixedPacer,
                 &mut || None,
-                &mut |_, _| {},
+                &mut |_| {},
             )
             .unwrap();
 
@@ -1131,7 +1226,7 @@ mod tests {
             params(),
             &mut FixedPacer,
             &mut || None,
-            &mut |_, _| {},
+            &mut |_| {},
         )
         .unwrap();
 
@@ -1170,7 +1265,7 @@ mod tests {
                     None
                 }
             },
-            &mut |_, _| {},
+            &mut |_| {},
         )
         .unwrap();
 
@@ -1208,7 +1303,7 @@ mod tests {
             params(),
             &mut FixedPacer,
             &mut || None,
-            &mut |_, _| {},
+            &mut |_| {},
         )
         .expect_err("the failing backend should surface its error");
         assert!(
@@ -1264,7 +1359,7 @@ mod tests {
             params(),
             &mut FixedPacer,
             &mut after_frames(2, vec![WindowAction::TopHalf, WindowAction::TopHalf]),
-            &mut |_, _| {},
+            &mut |_| {},
         )
         .unwrap();
 
@@ -1275,7 +1370,7 @@ mod tests {
             params(),
             &mut FixedPacer,
             &mut || None,
-            &mut |_, _| {},
+            &mut |_| {},
         )
         .unwrap();
 
@@ -1299,7 +1394,7 @@ mod tests {
             params(),
             &mut FixedPacer,
             &mut || None,
-            &mut |_, _| {},
+            &mut |_| {},
         )
         .unwrap();
         animated_pipeline(
@@ -1309,7 +1404,7 @@ mod tests {
             params(),
             &mut FixedPacer,
             &mut || None,
-            &mut |_, _| {},
+            &mut |_| {},
         )
         .unwrap();
 
@@ -1333,7 +1428,7 @@ mod tests {
             params(),
             &mut FixedPacer,
             &mut || None,
-            &mut |_, _| {},
+            &mut |_| {},
         )
         .unwrap();
 
@@ -1352,7 +1447,7 @@ mod tests {
             params(),
             &mut FixedPacer,
             &mut after_frames(2, vec![WindowAction::TopHalf]),
-            &mut |_, _| {},
+            &mut |_| {},
         )
         .unwrap();
 
@@ -1376,7 +1471,7 @@ mod tests {
             params(),
             &mut FixedPacer,
             &mut after_frames(2, vec![WindowAction::LeftHalf]),
-            &mut |_, _| {},
+            &mut |_| {},
         )
         .unwrap();
 
@@ -1404,7 +1499,7 @@ mod tests {
             params(),
             &mut FixedPacer,
             &mut after_frames(2, vec![WindowAction::TopHalf, WindowAction::RightHalf]),
-            &mut |action, outcome| seen.push((action, outcome)),
+            &mut |report| seen.push((report.action, report.outcome)),
         )
         .unwrap();
 
@@ -1439,7 +1534,7 @@ mod tests {
             params(),
             &mut FixedPacer,
             &mut || None,
-            &mut |_, _| frames_at_report = Some(backend.frames.borrow().len()),
+            &mut |_| frames_at_report = Some(backend.frames.borrow().len()),
         )
         .unwrap();
 
@@ -1464,7 +1559,7 @@ mod tests {
             params(),
             &mut FixedPacer,
             &mut after_frames(2, vec![WindowAction::TopHalf, WindowAction::RightHalf]),
-            &mut |_, _| {},
+            &mut |_| {},
         )
         .unwrap();
 
@@ -1483,13 +1578,7 @@ mod tests {
         };
         let mut engine = Engine::new(config);
 
-        apply_once(
-            &backend,
-            &mut engine,
-            WindowAction::LeftHalf,
-            &mut |_, _| {},
-        )
-        .unwrap();
+        apply_once(&backend, &mut engine, WindowAction::LeftHalf, &mut |_| {}).unwrap();
 
         assert_eq!(backend.frames.borrow().len(), 1);
         assert_eq!(backend.last_frame(), Rect::new(0.0, 0.0, 960.0, 1080.0));
@@ -1504,19 +1593,13 @@ mod tests {
         let mut engine = Engine::new(Config::default());
 
         assert_eq!(
-            apply_once(
-                &backend,
-                &mut engine,
-                WindowAction::LeftHalf,
-                &mut |_, _| {}
-            )
-            .unwrap(),
+            apply_once(&backend, &mut engine, WindowAction::LeftHalf, &mut |_| {}).unwrap(),
             ActionOutcome::Moved
         );
 
         let empty = InertWindowBackend;
         assert_eq!(
-            apply_once(&empty, &mut engine, WindowAction::LeftHalf, &mut |_, _| {}).unwrap(),
+            apply_once(&empty, &mut engine, WindowAction::LeftHalf, &mut |_| {}).unwrap(),
             ActionOutcome::NoWindow
         );
     }
@@ -1542,6 +1625,143 @@ mod tests {
         fn permission_status(&self, _prompt: bool) -> tile_platform::Result<PermissionStatus> {
             Ok(PermissionStatus::NotRequired)
         }
+    }
+
+    /// Two displays arranged the way a laptop usually sits beside a larger
+    /// main display: the primary is the *second* screen from the left.
+    ///
+    /// `screens` deliberately lists the primary first, which is how the OS
+    /// tends to enumerate them, so a test using this backend fails if the
+    /// index is taken from enumeration order rather than geometry.
+    struct SideBySideBackend {
+        focused: Option<Rect>,
+    }
+
+    impl SideBySideBackend {
+        const LEFT: Rect = Rect {
+            x: -1920.0,
+            y: 243.0,
+            width: 1440.0,
+            height: 900.0,
+        };
+        const PRIMARY: Rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 2560.0,
+            height: 1440.0,
+        };
+    }
+
+    impl WindowBackend for SideBySideBackend {
+        fn focused_window(&self) -> tile_platform::Result<Option<WindowSnapshot>> {
+            Ok(self.focused.map(|frame| WindowSnapshot { id: 1, frame }))
+        }
+
+        fn screens(&self) -> tile_platform::Result<Vec<Screen>> {
+            Ok(vec![
+                Screen {
+                    id: "primary".into(),
+                    frame: Self::PRIMARY,
+                    work_area: Self::PRIMARY,
+                    scale_factor: 1.0,
+                    is_primary: true,
+                },
+                Screen {
+                    id: "left".into(),
+                    frame: Self::LEFT,
+                    work_area: Self::LEFT,
+                    scale_factor: 1.0,
+                    is_primary: false,
+                },
+            ])
+        }
+
+        fn set_window_frame(&self, _id: WindowId, target: Rect) -> tile_platform::Result<Rect> {
+            Ok(target)
+        }
+
+        fn permission_status(&self, _prompt: bool) -> tile_platform::Result<PermissionStatus> {
+            Ok(PermissionStatus::NotRequired)
+        }
+    }
+
+    fn state_looking_at(focused: Option<Rect>) -> AppState {
+        AppState::new(
+            Box::new(SideBySideBackend { focused }),
+            Box::new(CountingHotkeyBackend::default()),
+            Config::default(),
+            BuildKind::Development,
+            None,
+            false,
+        )
+    }
+
+    /// The welcome stage counts its miniatures left to right, and the main
+    /// display is often not the leftmost one. A window on the primary of this
+    /// desk belongs on the *second* miniature, not the first.
+    #[test]
+    fn the_current_screen_is_counted_left_to_right_not_by_enumeration() {
+        let state = state_looking_at(Some(Rect::new(200.0, 200.0, 800.0, 600.0)));
+        assert_eq!(state.current_screen_index().unwrap(), 1);
+    }
+
+    #[test]
+    fn a_window_on_the_leftmost_display_is_the_first_screen() {
+        let state = state_looking_at(Some(Rect::new(-1800.0, 300.0, 800.0, 600.0)));
+        assert_eq!(state.current_screen_index().unwrap(), 0);
+    }
+
+    /// With nothing movable focused, the pane belongs where a window would
+    /// most likely open rather than on whichever screen sits furthest left.
+    #[test]
+    fn without_a_focused_window_the_primary_display_is_used() {
+        let state = state_looking_at(None);
+        assert_eq!(state.current_screen_index().unwrap(), 1);
+    }
+
+    /// The stage mirrors the window it is describing, so a throw across
+    /// displays has to report where the window is *going*. Reporting where it
+    /// started would leave the miniature behind on the old screen.
+    #[test]
+    fn a_display_throw_reports_the_destination_screen() {
+        let backend = SideBySideBackend {
+            focused: Some(Rect::new(200.0, 200.0, 800.0, 600.0)),
+        };
+        let mut engine = Engine::new(Config::default());
+        let mut seen: Vec<Option<usize>> = Vec::new();
+
+        apply_once(
+            &backend,
+            &mut engine,
+            WindowAction::PreviousDisplay,
+            &mut |report| seen.push(report.screen),
+        )
+        .unwrap();
+
+        assert_eq!(
+            seen,
+            vec![Some(0)],
+            "thrown off the primary, the window lands on the leftmost display"
+        );
+    }
+
+    /// A press with nothing to act on still reaches the walkthrough, and must
+    /// not claim a display it never touched.
+    #[test]
+    fn an_action_with_nothing_to_move_reports_no_display() {
+        let backend = SideBySideBackend { focused: None };
+        let mut engine = Engine::new(Config::default());
+        let mut seen: Vec<Option<usize>> = Vec::new();
+
+        apply_once(
+            &backend,
+            &mut engine,
+            WindowAction::LeftHalf,
+            &mut |report| seen.push(report.screen),
+        )
+        .unwrap();
+
+        assert_eq!(seen, vec![None]);
     }
 
     /// Counts `apply` calls through a shared handle, so a test can prove that
