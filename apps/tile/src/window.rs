@@ -168,6 +168,14 @@ pub fn open_settings<R: Runtime>(app: &AppHandle<R>, kind: BuildKind) -> tauri::
     present_focusable_window(app, window, SETTINGS_LABEL)
 }
 
+/// Closes the settings window when another app-owned window takes over.
+pub fn close_settings<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
+    if let Some(window) = app.get_webview_window(SETTINGS_LABEL) {
+        window.close()?;
+    }
+    Ok(())
+}
+
 /// Opens the dedicated update window, optionally starting a check straight
 /// away. Updating has no home in Settings: this window is the whole flow, from
 /// the check through the download to the relaunch.
