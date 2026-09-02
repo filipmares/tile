@@ -63,6 +63,27 @@ impl BuildKind {
         matches!(self, BuildKind::Installed)
     }
 
+    /// Whether this build refuses to run a second time.
+    ///
+    /// Two Tile processes cannot share a machine. Each installs its own global
+    /// keyboard hook, and the OS offers a keystroke to the most recently
+    /// installed hook first, which swallows it so the shortcut fires once —
+    /// but in whichever process happens to be newest. Windows still move, so
+    /// nothing looks broken until a screen that is *waiting* on a shortcut
+    /// (the first-run walkthrough) never hears the key it asked for. Two tray
+    /// icons and two writers of `config.json` come with it.
+    ///
+    /// Development builds are exempt, and deliberately so. The single-instance
+    /// lock is keyed on the bundle identifier, which a checkout shares with the
+    /// installed copy, so enforcing it here would stop a developer running
+    /// their build while their own Tile sits in the tray — the very separation
+    /// [`Self::project_app_name`] and [`Self::manages_autostart`] exist to
+    /// preserve. It would also race `tauri dev`, which restarts the app by
+    /// replacing the process.
+    pub fn enforces_single_instance(self) -> bool {
+        matches!(self, BuildKind::Installed)
+    }
+
     /// Application name handed to `ProjectDirs`, which is what keeps
     /// development config in a sibling directory of the installed one.
     pub fn project_app_name(self) -> &'static str {
@@ -168,6 +189,15 @@ mod tests {
         assert!(!BuildKind::Development.manages_autostart());
         assert!(BuildKind::Development.is_development());
         assert!(!BuildKind::Installed.is_development());
+    }
+
+    /// A second copy of an installed Tile is never harmless: the newest global
+    /// keyboard hook swallows the keystroke, so the shortcut fires in whichever
+    /// process happens to be newest rather than the one the user is looking at.
+    #[test]
+    fn only_an_installed_build_refuses_a_second_instance() {
+        assert!(BuildKind::Installed.enforces_single_instance());
+        assert!(!BuildKind::Development.enforces_single_instance());
     }
 
     #[test]
