@@ -455,4 +455,6 @@ export interface ActionPerformed {
   action: WindowAction;
   moved: boolean;
   hadWindow: boolean;
+  /** Display the window is on, counted left to right; null if none moved. */
+  screen: number | null;
 }

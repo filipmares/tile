@@ -15,11 +15,10 @@ use std::sync::{Mutex, OnceLock};
 use tauri::{
     AppHandle, Emitter, Manager, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
 };
-use tile_core::WindowAction;
 
 use crate::build_kind::BuildKind;
 use crate::dto::ActionPerformedDto;
-use crate::state::ActionOutcome;
+use crate::state::{ActionOutcome, ActionReport};
 
 /// Stable label for the single settings window.
 pub const SETTINGS_LABEL: &str = "settings";
@@ -134,21 +133,21 @@ fn release_promotion<R: Runtime>(app: &AppHandle<R>, label: &'static str) {
 /// Deliberately addressed rather than broadcast: the walkthrough is the only
 /// listener there will ever be, and the settings window has no business
 /// hearing about every hotkey the user presses.
-pub fn notify_action_performed<R: Runtime>(
-    app: &AppHandle<R>,
-    action: WindowAction,
-    outcome: ActionOutcome,
-) {
+pub fn notify_action_performed<R: Runtime>(app: &AppHandle<R>, report: ActionReport) {
     if app.get_webview_window(WELCOME_LABEL).is_none() {
         return;
     }
     let payload = ActionPerformedDto {
-        action,
-        moved: outcome == ActionOutcome::Moved,
-        had_window: outcome != ActionOutcome::NoWindow,
+        action: report.action,
+        moved: report.outcome == ActionOutcome::Moved,
+        had_window: report.outcome != ActionOutcome::NoWindow,
+        screen: report.screen,
     };
     if let Err(err) = app.emit_to(WELCOME_LABEL, ACTION_PERFORMED_EVENT, payload) {
-        log::debug!("could not tell the welcome window about {action}: {err}");
+        log::debug!(
+            "could not tell the welcome window about {}: {err}",
+            report.action
+        );
     }
 }
 

@@ -167,6 +167,11 @@ pub struct ActionPerformedDto {
     pub action: WindowAction,
     pub moved: bool,
     pub had_window: bool,
+    /// The display the window is on, or heading for, counted left to right.
+    /// The stage follows it, so the miniature keeps mirroring the real window
+    /// even when Tile moved one the walkthrough never knew about. `None` when
+    /// there was nothing to move.
+    pub screen: Option<usize>,
 }
 
 #[cfg(test)]
