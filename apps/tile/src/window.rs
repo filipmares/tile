@@ -226,7 +226,7 @@ pub fn open_welcome<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     // and the proof the walkthrough exists to give would land out of sight.
     // Left unfocused, the window they were already working in stays the
     // target, and it moves in plain view behind the card.
-    let window = WebviewWindowBuilder::new(
+    let builder = WebviewWindowBuilder::new(
         app,
         WELCOME_LABEL,
         WebviewUrl::App("index.html?welcome".into()),
@@ -237,8 +237,18 @@ pub fn open_welcome<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     .resizable(true)
     .visible(true)
     .focused(false)
-    .always_on_top(true)
-    .build()?;
+    .always_on_top(true);
+
+    // `focused(false)` only controls creation-time activation. On Windows the
+    // user can still focus the WebView by clicking the walkthrough, after which
+    // Win+Arrow belongs to the focused Tile window and Aero Snap moves the card
+    // instead of the window it is demonstrating. Make that impossible for the
+    // teaching slides; `focus_welcome` opts back in for the ordinary Enter/Esc
+    // interaction on the closing slide.
+    #[cfg(target_os = "windows")]
+    let builder = builder.focusable(false);
+
+    let window = builder.build()?;
 
     // The safety net for the promotion `focus_welcome` performs. The
     // walkthrough's own exit demotes before it closes, but Cmd+W, the red
@@ -289,6 +299,9 @@ pub fn focus_welcome<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let Some(window) = app.get_webview_window(WELCOME_LABEL) else {
         return Ok(());
     };
+
+    #[cfg(target_os = "windows")]
+    window.set_focusable(true)?;
 
     present_focusable_window(app, window, WELCOME_LABEL)
 }
