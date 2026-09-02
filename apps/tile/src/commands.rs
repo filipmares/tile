@@ -131,6 +131,11 @@ pub async fn open_welcome<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
 
     app.run_on_main_thread(move || {
         let result = crate::window::open_welcome(&handle).map_err(|err| err.to_string());
+        if result.is_ok() {
+            if let Err(err) = crate::window::close_settings(&handle) {
+                log::warn!("could not close the settings window: {err}");
+            }
+        }
         if sender.try_send(result).is_err() {
             log::error!("could not return the welcome window result to the settings window");
         }
