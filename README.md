@@ -28,7 +28,7 @@ Hold that, then press:
 | Key             | Action                                                             |
 | --------------- | ------------------------------------------------------------------ |
 | `←` `→`         | **Left / right** — half, then two thirds, then a third (see below) |
-| `↑`             | Centred column — third, half, two thirds, then repeat              |
+| `↑`             | Centred column — half, two thirds, third, then repeat              |
 | `↓`             | Restore to the window's previous position                          |
 | `Enter (Return)` | Maximize                                                          |
 

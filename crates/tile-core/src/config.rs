@@ -866,7 +866,7 @@ const DISPLAY_MODIFIERS: Modifiers =
 /// ```text
 ///   Left   ½ → ⅔ → ⅓ → …   anchored left
 ///   Right  ½ → ⅔ → ⅓ → …   anchored right
-///   Up     centred column: ⅓ → ½ → ⅔ → …
+///   Up     centred column: ½ → ⅔ → ⅓ → …
 ///   Down   restore
 ///   Enter  maximize
 /// ```
