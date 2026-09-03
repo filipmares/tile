@@ -897,9 +897,10 @@ const DISPLAY_MODIFIERS: Modifiers =
 ///
 /// The vertical halves are unbound because top/bottom halves are a
 /// portrait-monitor need rather than a universal one. `Up` cycles the centred
-/// column, while `Down` restores; the centred column keeps its full cycling
-/// behaviour — including the backwards step through
-/// [`WindowAction::cycle_anchor`] — behind the shared `Up` binding.
+/// column, while `Down` restores. The centred column keeps its full forward
+/// cycling behaviour behind the shared `Up` binding; the backwards step
+/// through [`WindowAction::cycle_anchor`] is available to users who bind
+/// `CenterHalfBack`.
 ///
 /// # Why Windows uses `Win+Arrow`
 ///
