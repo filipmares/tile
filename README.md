@@ -28,9 +28,9 @@ Hold that, then press:
 | Key             | Action                                                             |
 | --------------- | ------------------------------------------------------------------ |
 | `←` `→`         | **Left / right** — half, then two thirds, then a third (see below) |
-| `↑`             | Center column — third, half, two thirds, then repeat               |
+| `↑`             | Centred column — third, half, two thirds, then repeat              |
 | `↓`             | Restore to the window's previous position                          |
-| `Return`        | Maximize                                                           |
+| `Enter (Return)` | Maximize                                                          |
 
 Moving a window to the adjacent display keeps its slot. This is the one place
 the two platforms differ by more than the base modifier, because each follows
@@ -41,7 +41,7 @@ its own move-window-to-display convention:
 | **macOS** `Control`+`Command`+`Option`+`←` `→` | **Previous / next display** — same slot, adjacent monitor |
 | **Windows** `Win`+`Alt`+`←` `→`     | **Previous / next display** — same slot, adjacent monitor |
 
-That is the whole default set — **the arrows plus Return, and the display
+That is the whole default set — **the arrows plus Enter (Return), and the display
 throws.** Both platforms keep the same shape, with the modifier held in the
 left hand and the arrows in the right.
 
@@ -54,7 +54,7 @@ an arrow cycles its width:
 ```
 
 The vertical pair is the resize/undo axis: `↑` cycles the centred column and
-`↓` restores the window. `Return` maximizes it.
+`↓` restores the window. `Enter (Return)` maximizes it.
 
 Everything is rebindable, and the rest of the catalogue — the explicitly-sized
 thirds and two-thirds, the corners, center, maximize-height, almost-maximize,
