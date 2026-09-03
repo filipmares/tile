@@ -857,25 +857,25 @@ const DISPLAY_MODIFIERS: Modifiers =
 /// throws, which follow each platform's own move-window-to-display convention
 /// — see [`DISPLAY_MODIFIERS`].
 ///
-/// The defaults are the four arrows, plus the platform's own
+/// The defaults are the arrows plus Enter, together with the platform's own
 /// move-window-to-display combination on Left/Right to throw the window to the
-/// adjacent display. `Left` and `Right` place the window and carry the whole
-/// size catalogue by cycling; `Up` and `Down` are the "bigger / undo" axis;
-/// the throws keep the current slot and walk screens:
+/// adjacent display. `Left` and `Right` place the window and carry the side
+/// size catalogue by cycling; `Up` cycles the centred column, `Down` restores,
+/// and Enter maximizes. The throws keep the current slot and walk screens:
 ///
 /// ```text
 ///   Left   ½ → ⅔ → ⅓ → …   anchored left
 ///   Right  ½ → ⅔ → ⅓ → …   anchored right
-///   Up     maximize
+///   Up     centred column: ½ → ⅔ → ⅓ → …
 ///   Down   restore
+///   Enter  maximize
 /// ```
 ///
-/// **No default sits on a letter**, none needs `Enter` or `Backspace`. The
-/// only extra modifiers are the ones [`DISPLAY_MODIFIERS`] adds on the
-/// horizontal arrows, which throws rather than cycling size. Center, the
-/// corners, maximize-height and the centred column are all in the catalogue
-/// but ship unbound, because every letter within reach is a left-hand key and
-/// the modifier is already a left-hand hold.
+/// **No default sits on a letter**, and the only non-arrow key is `Enter` for
+/// maximize. The only extra modifiers are the ones [`DISPLAY_MODIFIERS`] adds
+/// on the horizontal arrows, which throws rather than cycling size. Center,
+/// the corners, maximize-height and the explicitly-sized layouts remain in the
+/// catalogue but ship unbound.
 ///
 /// # Why the arrows, and not letters
 ///
@@ -895,11 +895,12 @@ const DISPLAY_MODIFIERS: Modifiers =
 /// remain in the catalogue for anyone who wants that determinism back; they
 /// are simply not bound by default.
 ///
-/// The vertical halves are unbound for the same reason: `Up` and `Down` are
-/// worth more as maximize and restore, and top/bottom halves are a
-/// portrait-monitor need rather than a universal one. The centred column keeps
-/// its full cycling behaviour — including the backwards step through
-/// [`WindowAction::cycle_anchor`] — for anyone who binds it.
+/// The vertical halves are unbound because top/bottom halves are a
+/// portrait-monitor need rather than a universal one. `Up` cycles the centred
+/// column, while `Down` restores. The centred column keeps its full forward
+/// cycling behaviour behind the shared `Up` binding; the backwards step
+/// through [`WindowAction::cycle_anchor`] is available to users who bind
+/// `CenterHalfBack`.
 ///
 /// # Why Windows uses `Win+Arrow`
 ///
@@ -956,8 +957,9 @@ pub fn default_bindings() -> BTreeMap<WindowAction, Option<Hotkey>> {
     let base = BASE_MODIFIERS;
 
     // Every default sits on the base modifier, so the two platforms differ
-    // only in what that modifier is. The three horizontal arrows carry the
-    // whole size catalogue by cycling; maximize mirrors Rectangle's Enter.
+    // only in what that modifier is. The horizontal arrows carry the side
+    // size catalogue by cycling; Up carries the centred-column cycle and
+    // Enter mirrors Rectangle's maximize shortcut.
     map.insert(
         WindowAction::LeftHalf,
         Some(Hotkey::new(base, KeyCode::Left)),
@@ -966,9 +968,16 @@ pub fn default_bindings() -> BTreeMap<WindowAction, Option<Hotkey>> {
         WindowAction::RightHalf,
         Some(Hotkey::new(base, KeyCode::Right)),
     );
-    // Up maximizes and Down restores: the vertical pair is the "bigger /
-    // undo" axis, while the horizontal pair places the window.
-    map.insert(WindowAction::Maximize, Some(Hotkey::new(base, KeyCode::Up)));
+    // Up cycles the centred column and Down restores: the vertical pair is
+    // the "resize / undo" axis.
+    map.insert(
+        WindowAction::CenterHalf,
+        Some(Hotkey::new(base, KeyCode::Up)),
+    );
+    map.insert(
+        WindowAction::Maximize,
+        Some(Hotkey::new(base, KeyCode::Enter)),
+    );
     map.insert(
         WindowAction::Restore,
         Some(Hotkey::new(base, KeyCode::Down)),
@@ -996,14 +1005,13 @@ mod tests {
 
     /// The actions that ship with a default binding.
     ///
-    /// Four arrows for tiling, plus the display throws on Left/Right.
-    /// Every other action — center, the corners, maximize-height, the centred
-    /// column and the explicitly-sized thirds and two-thirds — ships unbound:
-    /// every letter within reach is a left-hand key and the modifier is
-    /// already a left-hand hold.
-    const CORE_BOUND: [WindowAction; 6] = [
+    /// Four arrows for tiling, plus Enter for maximize and the display throws
+    /// on Left/Right. Every other action — center, the corners, maximize-height
+    /// and the explicitly-sized thirds and two-thirds — ships unbound.
+    const CORE_BOUND: [WindowAction; 7] = [
         WindowAction::LeftHalf,
         WindowAction::RightHalf,
+        WindowAction::CenterHalf,
         WindowAction::Maximize,
         WindowAction::Restore,
         WindowAction::PreviousDisplay,
@@ -1028,16 +1036,18 @@ mod tests {
             );
         }
 
-        // The centred column is still cycleable, just no longer bound: Up and
-        // Down are maximize and restore. Keep the machinery intact so a user
-        // binding CenterHalf gets the full cycle, backwards step included.
+        // The centred column is bound to Up and keeps the full cycle,
+        // including the backwards step for anyone who binds CenterHalfBack.
         assert!(WindowAction::CenterHalf.cycles());
         assert_eq!(
             WindowAction::CenterHalfBack.cycle_anchor(),
             WindowAction::CenterHalf
         );
         assert!(WindowAction::CenterHalfBack.cycles_backwards());
-        assert_eq!(config.binding(WindowAction::CenterHalf), None);
+        assert_eq!(
+            config.binding(WindowAction::CenterHalf),
+            Some(Hotkey::new(BASE_MODIFIERS, KeyCode::Up))
+        );
         assert_eq!(config.binding(WindowAction::CenterHalfBack), None);
 
         // The sizes these arrows stand in for must stay in the catalogue, so
@@ -1079,14 +1089,16 @@ mod tests {
         // "bigger / undo" axis:
         //
         //   Left / Right   place and resize
-        //   Up / Down      maximize and restore
+        //   Up            center and resize
+        //   Down          restore
         //
         // Changing one silently breaks the mnemonic, so they are pinned here.
         let config = Config::default();
         let expected = [
             (WindowAction::LeftHalf, KeyCode::Left),
             (WindowAction::RightHalf, KeyCode::Right),
-            (WindowAction::Maximize, KeyCode::Up),
+            (WindowAction::CenterHalf, KeyCode::Up),
+            (WindowAction::Maximize, KeyCode::Enter),
             (WindowAction::Restore, KeyCode::Down),
         ];
         for (action, key) in expected {
@@ -1111,13 +1123,12 @@ mod tests {
             );
         }
 
-        // Nothing else ships bound: the vertical halves, center, the corners
-        // and the centred column are all catalogue-only.
+        // Nothing else ships bound: the vertical halves, center and corners
+        // are catalogue-only.
         for action in [
             WindowAction::TopHalf,
             WindowAction::BottomHalf,
             WindowAction::Center,
-            WindowAction::CenterHalf,
             WindowAction::CenterHalfBack,
             WindowAction::TopLeft,
             WindowAction::TopRight,
@@ -1144,7 +1155,8 @@ mod tests {
         let expected = [
             (WindowAction::LeftHalf, KeyCode::Left),
             (WindowAction::RightHalf, KeyCode::Right),
-            (WindowAction::Maximize, KeyCode::Up),
+            (WindowAction::CenterHalf, KeyCode::Up),
+            (WindowAction::Maximize, KeyCode::Enter),
             (WindowAction::Restore, KeyCode::Down),
         ];
         for (action, key) in expected {

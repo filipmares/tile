@@ -28,8 +28,9 @@ Hold that, then press:
 | Key             | Action                                                             |
 | --------------- | ------------------------------------------------------------------ |
 | `←` `→`         | **Left / right** — half, then two thirds, then a third (see below) |
-| `↑`             | Maximize                                                           |
+| `↑`             | Centred column — half, two thirds, third, then repeat              |
 | `↓`             | Restore to the window's previous position                          |
+| `Enter (Return)` | Maximize                                                          |
 
 Moving a window to the adjacent display keeps its slot. This is the one place
 the two platforms differ by more than the base modifier, because each follows
@@ -40,9 +41,9 @@ its own move-window-to-display convention:
 | **macOS** `Control`+`Command`+`Option`+`←` `→` | **Previous / next display** — same slot, adjacent monitor |
 | **Windows** `Win`+`Alt`+`←` `→`     | **Previous / next display** — same slot, adjacent monitor |
 
-That is the whole default set — **four arrows, plus the display throws.** Both
-platforms keep the same shape, with the modifier held in the left hand and the
-arrows in the right.
+That is the whole default set — **the arrows plus Enter (Return), and the display
+throws.** Both platforms keep the same shape, with the modifier held in the
+left hand and the arrows in the right.
 
 The horizontal pair places the window and carries every size, because repeating
 an arrow cycles its width:
@@ -52,14 +53,14 @@ an arrow cycles its width:
   →   ½ → ⅔ → ⅓ → …   anchored right
 ```
 
-The vertical pair is the bigger/undo axis: `↑` maximizes and `↓` restores the
-window.
+The vertical pair is the resize/undo axis: `↑` cycles the centred column and
+`↓` restores the window. `Enter (Return)` maximizes it.
 
-Everything is rebindable, and the rest of the catalogue — the centered column,
-the explicitly-sized thirds and two-thirds, the corners, center, maximize-height,
-almost-maximize, plus fourths, sixths, ninths, corner thirds, the top/bottom
-halves, the incremental move/resize/halve-double families and the
-named-display moves — ships unbound, reachable through a binding of your own.
+Everything is rebindable, and the rest of the catalogue — the explicitly-sized
+thirds and two-thirds, the corners, center, maximize-height, almost-maximize,
+plus fourths, sixths, ninths, corner thirds, the top/bottom halves, the
+incremental move/resize/halve-double families and the named-display moves —
+ships unbound, reachable through a binding of your own.
 
 ### Press it again to change the size
 
