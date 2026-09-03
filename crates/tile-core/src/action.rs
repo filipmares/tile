@@ -632,9 +632,8 @@ impl WindowAction {
     ///
     /// `CenterHalfBack` walks the *same* sequence as [`WindowAction::CenterHalf`],
     /// just in the other direction, so both must resolve to one anchor. That is
-    /// what lets `Up` and `Down` share a single cycle: press `Up` twice and
-    /// `Down` once and you land back where the first press put you, rather than
-    /// starting a second, independent cycle.
+    /// what lets multiple bindings share a single cycle without starting a
+    /// second, independent sequence.
     pub const fn cycle_anchor(self) -> WindowAction {
         match self {
             WindowAction::CenterHalfBack => WindowAction::CenterHalf,
