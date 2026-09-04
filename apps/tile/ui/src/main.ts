@@ -402,6 +402,9 @@ const walk = {
   cycleSizes: [] as CycleSize[],
   cycles: false,
   screens: [] as HTMLElement[],
+  /** Real display count and current index; the stage may render at most three. */
+  screenCount: 1,
+  currentScreen: 0,
   pane: FLOATING,
   /** The last action performed, for spotting a repeat. */
   lastAction: null as WindowAction | null,
@@ -504,7 +507,7 @@ function buildSlides(
     add(
       "display",
       displayAction,
-      "Send the window to the other display.",
+      "Send the window to an adjacent display.",
       "It keeps its shape while moving across monitors.",
     );
   }
@@ -600,10 +603,11 @@ function ghostFrame(): PaneFrame | null {
   const action = slide.actions[0];
   if (!action) return null;
   if (DISPLAY_ACTIONS.includes(action)) {
-    const step = action === "next-display" ? 1 : walk.screens.length - 1;
+    const step = action === "next-display" ? 1 : walk.screenCount - 1;
+    const target = (walk.currentScreen + step) % walk.screenCount;
     return {
       ...walk.pane,
-      screen: (walk.pane.screen + step) % walk.screens.length,
+      screen: onStage(target),
     };
   }
   const shape = PANE_SHAPES[action];
@@ -662,14 +666,19 @@ function reflectOnStage(
   // *which* window moved. The walkthrough opened from Settings never had focus
   // to begin with, so the stage cannot work this out for itself. A press that
   // moved nothing reports no display, and the stage keeps its own reckoning.
-  const reported = screen === null ? null : onStage(screen);
+  const realScreen =
+    screen === null
+      ? null
+      : Math.min(Math.max(screen, 0), walk.screenCount - 1);
+  const reported = realScreen === null ? null : onStage(realScreen);
 
   if (DISPLAY_ACTIONS.includes(action)) {
-    const count = walk.screens.length;
-    const step = action === "next-display" ? 1 : count - 1;
+    const step = action === "next-display" ? 1 : walk.screenCount - 1;
+    const target = realScreen ?? (walk.currentScreen + step) % walk.screenCount;
+    walk.currentScreen = target;
     const thrown = {
       ...walk.pane,
-      screen: reported ?? (walk.pane.screen + step) % count,
+      screen: onStage(target),
     };
     const snapped = !isFloating(walk.pane);
     walk.lastAction = action;
@@ -700,6 +709,7 @@ function reflectOnStage(
     renderGhost();
     return;
   }
+  if (realScreen !== null) walk.currentScreen = realScreen;
   const onScreen = reported ?? walk.pane.screen;
   if (action === "restore") {
     movePane({ ...FLOATING, screen: onScreen }, false);
@@ -1691,6 +1701,11 @@ async function bootWelcome(): Promise<void> {
   }
 
   renderStage(status.screenCount);
+  walk.screenCount = Math.max(status.screenCount, 1);
+  walk.currentScreen = Math.min(
+    Math.max(status.currentScreen, 0),
+    walk.screenCount - 1,
+  );
   walk.slides = buildSlides(cfg, status.screenCount, status.currentScreen);
   renderDeck();
   // Start the pane on the display the window really is on. The miniatures run
