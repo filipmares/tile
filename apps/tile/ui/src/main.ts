@@ -352,6 +352,7 @@ const COUNT_WORDS: Record<number, string> = {
   2: "Two",
   3: "Three",
   4: "Four",
+  5: "Five",
 };
 
 /** Actions whose repeat walks the size cycle rather than doing nothing. */
@@ -377,7 +378,7 @@ const ADVANCE_DELAY = 520;
 
 /** One slide: a shortcut to try, and what counts as having tried it. */
 interface Slide {
-  id: "snap-left" | "snap-right" | "cycle" | "maximize";
+  id: "snap-left" | "snap-right" | "cycle" | "maximize" | "display";
   /** The instruction: what to do, in the imperative. */
   line: string;
   /** What the press will actually do — the part the keycap cannot say. */
@@ -401,6 +402,9 @@ const walk = {
   cycleSizes: [] as CycleSize[],
   cycles: false,
   screens: [] as HTMLElement[],
+  /** Real display count and current index; the stage may render at most three. */
+  screenCount: 1,
+  currentScreen: 0,
   pane: FLOATING,
   /** The last action performed, for spotting a repeat. */
   lastAction: null as WindowAction | null,
@@ -428,9 +432,14 @@ const REFUSALS_BEFORE_EXIT = 3;
  *
  * The order is one idea per slide, each one leaning on the last: left, then
  * right so the mirror image is obvious, then the same key again to show that
- * repeating resizes rather than doing nothing, then the whole screen.
+ * repeating resizes rather than doing nothing, then the whole screen and the
+ * adjacent display when one is available.
  */
-function buildSlides(cfg: Config | null): Slide[] {
+function buildSlides(
+  cfg: Config | null,
+  screenCount: number,
+  currentScreen: number,
+): Slide[] {
   const slides: Slide[] = [];
   const combo = (action: WindowAction): string | null => {
     const hk = cfg?.bindings[action];
@@ -492,6 +501,16 @@ function buildSlides(cfg: Config | null): Slide[] {
       ? "The work area, not full-screen: your menu bar stays put."
       : "The work area, not full-screen: your taskbar stays put.",
   );
+  if (screenCount > 1) {
+    const displayAction =
+      currentScreen >= screenCount - 1 ? "previous-display" : "next-display";
+    add(
+      "display",
+      displayAction,
+      "Send the window to an adjacent display.",
+      "It keeps its shape while moving across monitors.",
+    );
+  }
 
   return slides;
 }
@@ -583,6 +602,14 @@ function ghostFrame(): PaneFrame | null {
 
   const action = slide.actions[0];
   if (!action) return null;
+  if (DISPLAY_ACTIONS.includes(action)) {
+    const step = action === "next-display" ? 1 : walk.screenCount - 1;
+    const target = (walk.currentScreen + step) % walk.screenCount;
+    return {
+      ...walk.pane,
+      screen: onStage(target),
+    };
+  }
   const shape = PANE_SHAPES[action];
   if (!shape) return null;
 
@@ -639,14 +666,19 @@ function reflectOnStage(
   // *which* window moved. The walkthrough opened from Settings never had focus
   // to begin with, so the stage cannot work this out for itself. A press that
   // moved nothing reports no display, and the stage keeps its own reckoning.
-  const reported = screen === null ? null : onStage(screen);
+  const realScreen =
+    screen === null
+      ? null
+      : Math.min(Math.max(screen, 0), walk.screenCount - 1);
+  const reported = realScreen === null ? null : onStage(realScreen);
 
   if (DISPLAY_ACTIONS.includes(action)) {
-    const count = walk.screens.length;
-    const step = action === "next-display" ? 1 : count - 1;
+    const step = action === "next-display" ? 1 : walk.screenCount - 1;
+    const target = realScreen ?? (walk.currentScreen + step) % walk.screenCount;
+    walk.currentScreen = target;
     const thrown = {
       ...walk.pane,
-      screen: reported ?? (walk.pane.screen + step) % count,
+      screen: onStage(target),
     };
     const snapped = !isFloating(walk.pane);
     walk.lastAction = action;
@@ -677,6 +709,7 @@ function reflectOnStage(
     renderGhost();
     return;
   }
+  if (realScreen !== null) walk.currentScreen = realScreen;
   const onScreen = reported ?? walk.pane.screen;
   if (action === "restore") {
     movePane({ ...FLOATING, screen: onScreen }, false);
@@ -1668,13 +1701,18 @@ async function bootWelcome(): Promise<void> {
   }
 
   renderStage(status.screenCount);
-  walk.slides = buildSlides(cfg);
+  walk.screenCount = Math.max(status.screenCount, 1);
+  walk.currentScreen = Math.min(
+    Math.max(status.currentScreen, 0),
+    walk.screenCount - 1,
+  );
+  walk.slides = buildSlides(cfg, walk.screenCount, walk.currentScreen);
   renderDeck();
   // Start the pane on the display the window really is on. The miniatures run
   // left to right, and the main display is often not the leftmost one, so
   // starting at zero would mirror the first shortcut on the wrong screen.
   movePane(
-    { ...FLOATING, screen: onStage(status.currentScreen) },
+    { ...FLOATING, screen: onStage(walk.currentScreen) },
     false,
   );
   if (!status.hasMovableWindow && walk.slides.length > 0) {
