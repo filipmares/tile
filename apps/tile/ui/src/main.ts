@@ -352,6 +352,7 @@ const COUNT_WORDS: Record<number, string> = {
   2: "Two",
   3: "Three",
   4: "Four",
+  5: "Five",
 };
 
 /** Actions whose repeat walks the size cycle rather than doing nothing. */
@@ -377,7 +378,7 @@ const ADVANCE_DELAY = 520;
 
 /** One slide: a shortcut to try, and what counts as having tried it. */
 interface Slide {
-  id: "snap-left" | "snap-right" | "cycle" | "maximize";
+  id: "snap-left" | "snap-right" | "cycle" | "maximize" | "display";
   /** The instruction: what to do, in the imperative. */
   line: string;
   /** What the press will actually do — the part the keycap cannot say. */
@@ -428,9 +429,14 @@ const REFUSALS_BEFORE_EXIT = 3;
  *
  * The order is one idea per slide, each one leaning on the last: left, then
  * right so the mirror image is obvious, then the same key again to show that
- * repeating resizes rather than doing nothing, then the whole screen.
+ * repeating resizes rather than doing nothing, then the whole screen and the
+ * other display when one is available.
  */
-function buildSlides(cfg: Config | null): Slide[] {
+function buildSlides(
+  cfg: Config | null,
+  screenCount: number,
+  currentScreen: number,
+): Slide[] {
   const slides: Slide[] = [];
   const combo = (action: WindowAction): string | null => {
     const hk = cfg?.bindings[action];
@@ -492,6 +498,16 @@ function buildSlides(cfg: Config | null): Slide[] {
       ? "The work area, not full-screen: your menu bar stays put."
       : "The work area, not full-screen: your taskbar stays put.",
   );
+  if (screenCount > 1) {
+    const displayAction =
+      currentScreen >= screenCount - 1 ? "previous-display" : "next-display";
+    add(
+      "display",
+      displayAction,
+      "Send the window to the other display.",
+      "It keeps its shape while moving across monitors.",
+    );
+  }
 
   return slides;
 }
@@ -583,6 +599,13 @@ function ghostFrame(): PaneFrame | null {
 
   const action = slide.actions[0];
   if (!action) return null;
+  if (DISPLAY_ACTIONS.includes(action)) {
+    const step = action === "next-display" ? 1 : walk.screens.length - 1;
+    return {
+      ...walk.pane,
+      screen: (walk.pane.screen + step) % walk.screens.length,
+    };
+  }
   const shape = PANE_SHAPES[action];
   if (!shape) return null;
 
@@ -1668,7 +1691,7 @@ async function bootWelcome(): Promise<void> {
   }
 
   renderStage(status.screenCount);
-  walk.slides = buildSlides(cfg);
+  walk.slides = buildSlides(cfg, status.screenCount, status.currentScreen);
   renderDeck();
   // Start the pane on the display the window really is on. The miniatures run
   // left to right, and the main display is often not the leftmost one, so
