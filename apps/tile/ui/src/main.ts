@@ -1706,13 +1706,13 @@ async function bootWelcome(): Promise<void> {
     Math.max(status.currentScreen, 0),
     walk.screenCount - 1,
   );
-  walk.slides = buildSlides(cfg, status.screenCount, status.currentScreen);
+  walk.slides = buildSlides(cfg, walk.screenCount, walk.currentScreen);
   renderDeck();
   // Start the pane on the display the window really is on. The miniatures run
   // left to right, and the main display is often not the leftmost one, so
   // starting at zero would mirror the first shortcut on the wrong screen.
   movePane(
-    { ...FLOATING, screen: onStage(status.currentScreen) },
+    { ...FLOATING, screen: onStage(walk.currentScreen) },
     false,
   );
   if (!status.hasMovableWindow && walk.slides.length > 0) {
