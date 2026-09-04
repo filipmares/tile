@@ -433,7 +433,7 @@ const REFUSALS_BEFORE_EXIT = 3;
  * The order is one idea per slide, each one leaning on the last: left, then
  * right so the mirror image is obvious, then the same key again to show that
  * repeating resizes rather than doing nothing, then the whole screen and the
- * other display when one is available.
+ * adjacent display when one is available.
  */
 function buildSlides(
   cfg: Config | null,
