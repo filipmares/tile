@@ -7,7 +7,7 @@ import {
   checkForUpdates,
   getBuildInfo,
   getConfig,
-  getHotkeyFailures,
+  getHotkeyStatus,
   getPermissionStatus,
   getUpdateStatus,
   getWelcomeStatus,
@@ -25,7 +25,14 @@ import {
   setLaunchOnLogin,
   takeOrientation,
 } from "./api";
-import { formatHotkey, interpret, isMac } from "./hotkey";
+import {
+  formatHotkey,
+  hasAltGrRisk,
+  interpret,
+  isMac,
+  knownWindowsShortcutWarning,
+  windowsHotkeyProblem,
+} from "./hotkey";
 import {
   ACTIONS,
   ActionPerformed,
@@ -36,7 +43,8 @@ import {
   FAMILIES,
   Gaps,
   Hotkey,
-  HotkeyFailure,
+  HotkeyBindingStatus,
+  HotkeyStatus,
   SubsequentExecutionMode,
   UpdateStatus,
   WindowAction,
@@ -73,6 +81,7 @@ const dom = {
   assignedBindings: el<HTMLUListElement>("#assigned-bindings"),
   allShortcutsCount: el<HTMLSpanElement>("#all-shortcuts-count"),
   shortcutFilter: el<HTMLInputElement>("#shortcut-filter"),
+  hotkeyApplyError: el<HTMLParagraphElement>("#hotkey-apply-error"),
   recordingStatus: el<HTMLParagraphElement>("#recording-status"),
   gapWindow: el<HTMLInputElement>("#gap-window"),
   gapWindowNumber: el<HTMLInputElement>("#gap-window-number"),
@@ -131,7 +140,11 @@ const dom = {
 };
 
 let config: Config | null = null;
-let failures: HotkeyFailure[] = [];
+let hotkeyStatus: HotkeyStatus = {
+  bindings: [],
+  hookInstalled: false,
+  applyError: null,
+};
 let recording: WindowAction | null = null;
 /** Current text in the shortcut filter. Empty means "show everything". */
 let shortcutFilter = "";
@@ -160,12 +173,28 @@ function conflictingActions(cfg: Config): Set<WindowAction> {
   return clashing;
 }
 
-function failureFor(action: WindowAction): HotkeyFailure | undefined {
-  return failures.find((f) => f.action === action);
+function sameHotkey(left: Hotkey, right: Hotkey): boolean {
+  return left.modifiers === right.modifiers && left.key === right.key;
+}
+
+function statusFor(
+  action: WindowAction,
+  hotkey: Hotkey | null,
+): HotkeyBindingStatus | undefined {
+  if (!hotkey) return undefined;
+  return hotkeyStatus.bindings.find(
+    (status) =>
+      status.action === action && sameHotkey(status.hotkey, hotkey),
+  );
+}
+
+async function refreshHotkeyStatus(): Promise<void> {
+  hotkeyStatus = await getHotkeyStatus();
 }
 
 function renderBindings(): void {
   if (!config) return;
+  renderHotkeyApplyError();
   const cfg = config;
   const conflicts = conflictingActions(cfg);
   const assignedActions = ACTIONS.filter(({ id }) => cfg.bindings[id]);
@@ -183,6 +212,7 @@ function renderBindings(): void {
         renderBinding(cfg, conflicts, action.id, action.label, "assigned"),
       );
     }
+
   }
 
   const filter = shortcutFilter.trim().toLowerCase();
@@ -205,6 +235,15 @@ function renderBindings(): void {
     openBeforeFilter = currentlyOpen;
   } else if (!filter) {
     openBeforeFilter = null;
+  }
+
+  function renderHotkeyApplyError(): void {
+    const error = hotkeyStatus.applyError;
+    dom.hotkeyApplyError.hidden = error === null;
+    dom.hotkeyApplyError.textContent =
+      error === null
+        ? ""
+        : `Windows could not apply the latest shortcut change. A previously active shortcut may still be in effect. ${error}`;
   }
   const openFamilies = filter ? currentlyOpen : (restore ?? currentlyOpen);
 
@@ -1083,11 +1122,23 @@ function renderBinding(
 
   li.append(name, controls);
 
-  const failure = failureFor(id);
+  const route = statusFor(id, hk);
   if (conflicts.has(id)) {
     li.append(note("This shortcut is used by more than one action.", "error"));
-  } else if (failure) {
-    li.append(note(`The system rejected this shortcut: ${failure.reason}`, "error"));
+  } else if (route?.route === "unavailable") {
+    li.append(
+      note(
+        `This shortcut is unavailable: ${route.reason ?? "Windows rejected it."}`,
+        "error",
+      ),
+    );
+  } else if (hk && hotkeyStatus.applyError) {
+    li.append(
+      note(
+        "This shortcut is configured, but its active route could not be confirmed.",
+        "error",
+      ),
+    );
   }
 
   return li;
@@ -1145,6 +1196,27 @@ function onRecordKey(e: KeyboardEvent): void {
     }
     case "bound": {
       const action = recording;
+      if (!isMac()) {
+        const problem = windowsHotkeyProblem(outcome.hotkey);
+        if (problem) {
+          setRecordingStatus(problem);
+          return;
+        }
+        if (
+          hasAltGrRisk(outcome.hotkey) &&
+          !window.confirm(
+            "Windows treats Ctrl+Alt as AltGr on many keyboard layouts. This shortcut may prevent typing characters such as @, €, {, or }. Save it anyway?",
+          )
+        ) {
+          setRecordingStatus("Shortcut was not saved.");
+          return;
+        }
+        const warning = knownWindowsShortcutWarning(outcome.hotkey);
+        if (warning && !window.confirm(`${warning}\n\nSave it anyway?`)) {
+          setRecordingStatus("Shortcut was not saved.");
+          return;
+        }
+      }
       stopRecording();
       setRecordingStatus("");
       void applyBinding(action, outcome.hotkey);
@@ -1159,8 +1231,9 @@ async function applyBinding(
 ): Promise<void> {
   try {
     config = await setBinding(action, hotkey);
-    failures = await getHotkeyFailures();
+    await refreshHotkeyStatus();
     renderBindings();
+    renderBehaviour();
   } catch (err) {
     setRecordingStatus(`Could not save shortcut: ${String(err)}`);
   }
@@ -1506,8 +1579,8 @@ async function refreshPermission(prompt: boolean): Promise<void> {
   } else if (!denied && permissionTimer !== null) {
     window.clearInterval(permissionTimer);
     permissionTimer = null;
-    // Permission just became available: surface any late hotkey failures.
-    failures = await getHotkeyFailures();
+    // Permission just became available: surface any late hotkey status.
+    await refreshHotkeyStatus();
     renderBindings();
   }
 }
@@ -1551,7 +1624,6 @@ function wireEvents(): void {
   dom.gapSkipTop.addEventListener("change", () => void commitGaps());
   dom.gapMainOnly.addEventListener("change", () => void commitGaps());
   dom.subsequentMode.addEventListener("change", () => void commitCycling());
-
   dom.animate.addEventListener("change", async () => {
     try {
       config = await setAnimation(dom.animate.checked);
@@ -1605,7 +1677,7 @@ function wireEvents(): void {
   dom.reset.addEventListener("click", async () => {
     try {
       config = await resetToDefaults();
-      failures = await getHotkeyFailures();
+      await refreshHotkeyStatus();
       renderBindings();
       renderBehaviour();
       setRecordingStatus("Defaults restored.");
@@ -1835,7 +1907,7 @@ async function boot(): Promise<void> {
   }
   try {
     config = await getConfig();
-    failures = await getHotkeyFailures();
+    await refreshHotkeyStatus();
   } catch (err) {
     setRecordingStatus(`Could not load settings: ${String(err)}`);
     return;

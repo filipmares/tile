@@ -580,6 +580,27 @@ impl WindowAction {
         )
     }
 
+    /// Whether holding this action's shortcut should repeat it.
+    ///
+    /// Only incremental move and resize actions repeat while held. Placement,
+    /// cycling, restore, display movement and halve/double actions require one
+    /// physical press per operation.
+    pub const fn repeats_while_held(self) -> bool {
+        matches!(
+            self,
+            WindowAction::MoveLeft
+                | WindowAction::MoveRight
+                | WindowAction::MoveUp
+                | WindowAction::MoveDown
+                | WindowAction::Larger
+                | WindowAction::Smaller
+                | WindowAction::LargerWidth
+                | WindowAction::SmallerWidth
+                | WindowAction::LargerHeight
+                | WindowAction::SmallerHeight
+        )
+    }
+
     /// The display this action names outright, as an index into
     /// [`crate::Screen::geometrically_ordered`].
     ///
@@ -1743,6 +1764,29 @@ mod tests {
             let json = serde_json::to_string(&a).unwrap();
             assert_eq!(json, format!("\"{}\"", a.id()));
         }
+    }
+
+    #[test]
+    fn only_incremental_move_and_resize_repeat_while_held() {
+        let repeating: Vec<_> = WindowAction::ALL
+            .into_iter()
+            .filter(|action| action.repeats_while_held())
+            .collect();
+        assert_eq!(
+            repeating,
+            [
+                WindowAction::MoveLeft,
+                WindowAction::MoveRight,
+                WindowAction::MoveUp,
+                WindowAction::MoveDown,
+                WindowAction::Larger,
+                WindowAction::Smaller,
+                WindowAction::LargerWidth,
+                WindowAction::SmallerWidth,
+                WindowAction::LargerHeight,
+                WindowAction::SmallerHeight,
+            ]
+        );
     }
 
     #[test]

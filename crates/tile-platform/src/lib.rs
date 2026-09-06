@@ -44,6 +44,11 @@ pub enum PlatformError {
     #[error("failed to register hotkey {hotkey}: {reason}")]
     HotkeyRegistration { hotkey: String, reason: String },
 
+    /// A hotkey operation failed after native ownership may have changed. The
+    /// caller must not present its previous route report as current truth.
+    #[error("hotkey state could not be confirmed: {0}")]
+    HotkeyStateUnknown(String),
+
     /// A native API returned an unexpected failure.
     #[error("{context}: {source_message}")]
     Os {
@@ -206,21 +211,56 @@ pub trait HotkeyBackend: Send {
     /// everything it previously held and then registers `bindings`, so the
     /// settings UI can simply re-apply the whole config after any edit.
     ///
-    /// Individual bindings that the OS refuses are reported in the returned
-    /// vector rather than failing the whole call, so one bad binding cannot
-    /// leave the app with no working hotkeys.
-    fn apply(&mut self, bindings: &[(Hotkey, WindowAction)]) -> Result<Vec<HotkeyFailure>>;
+    /// Individual bindings that the OS refuses are marked
+    /// [`HotkeyRoute::Unavailable`] in the returned report rather than failing
+    /// the whole call, so one bad binding cannot leave the app with no working
+    /// hotkeys.
+    fn apply(&mut self, bindings: &[HotkeyBinding]) -> Result<HotkeyApplyReport>;
 
     /// Releases every hotkey and stops any background thread.
     fn shutdown(&mut self);
 }
 
-/// A binding the OS refused to hand over.
-#[derive(Debug, Clone, PartialEq)]
-pub struct HotkeyFailure {
+/// One requested global shortcut and the behavior its action requires.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HotkeyBinding {
     pub hotkey: Hotkey,
     pub action: WindowAction,
-    pub reason: String,
+    pub repeat: bool,
+}
+
+/// The mechanism currently serving a configured binding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HotkeyRoute {
+    Registered,
+    Intercepted,
+    Unavailable,
+}
+
+/// Current status of one requested binding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HotkeyBindingStatus {
+    pub binding: HotkeyBinding,
+    pub route: HotkeyRoute,
+    pub reason: Option<String>,
+}
+
+/// Complete result of one successful apply operation.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HotkeyApplyReport {
+    pub bindings: Vec<HotkeyBindingStatus>,
+    pub hook_installed: bool,
+    /// A non-fatal cleanup problem. The binding routes are current, but the
+    /// backend could not fully release obsolete native state.
+    pub warning: Option<String>,
+}
+
+impl HotkeyApplyReport {
+    pub fn unavailable(&self) -> impl Iterator<Item = &HotkeyBindingStatus> {
+        self.bindings
+            .iter()
+            .filter(|status| status.route == HotkeyRoute::Unavailable)
+    }
 }
 
 /// Creates the window backend for the current platform.

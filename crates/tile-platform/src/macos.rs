@@ -55,11 +55,11 @@ use objc2::runtime::AnyObject;
 use objc2::{class, msg_send, sel};
 use objc2_foundation::NSRect;
 
-use tile_core::{Hotkey, Rect, Screen, WindowAction, WindowId, WindowSnapshot};
+use tile_core::{Rect, Screen, WindowAction, WindowId, WindowSnapshot};
 
 use crate::{
-    AnimationSession, HotkeyBackend, HotkeyFailure, PermissionStatus, PlatformError, Result,
-    WindowBackend,
+    AnimationSession, HotkeyApplyReport, HotkeyBackend, HotkeyBinding, HotkeyBindingStatus,
+    HotkeyRoute, PermissionStatus, PlatformError, Result, WindowBackend,
 };
 
 // The pure, host-testable helpers (`flip_rect`, `carbon_key_code`,
@@ -1846,7 +1846,7 @@ impl MacHotkeyBackend {
 }
 
 impl HotkeyBackend for MacHotkeyBackend {
-    fn apply(&mut self, bindings: &[(Hotkey, WindowAction)]) -> Result<Vec<HotkeyFailure>> {
+    fn apply(&mut self, bindings: &[HotkeyBinding]) -> Result<HotkeyApplyReport> {
         self.ensure_handler_installed()?;
 
         // Drop everything previously held.
@@ -1859,16 +1859,18 @@ impl HotkeyBackend for MacHotkeyBackend {
             map.clear();
         }
 
-        let mut failures = Vec::new();
-        for (hotkey, action) in bindings {
+        let mut statuses = Vec::new();
+        for binding in bindings {
+            let hotkey = binding.hotkey;
+            let action = binding.action;
             // A few keys (F21-F24) have no Carbon virtual key code at all.
             // Report them as a per-binding failure instead of registering some
             // other physical key.
             let Some(code) = carbon_key_code(hotkey.key) else {
-                failures.push(HotkeyFailure {
-                    hotkey: *hotkey,
-                    action: *action,
-                    reason: format!("macOS has no key code for {}", hotkey.key.label()),
+                statuses.push(HotkeyBindingStatus {
+                    binding: *binding,
+                    route: HotkeyRoute::Unavailable,
+                    reason: Some(format!("macOS has no key code for {}", hotkey.key.label())),
                 });
                 continue;
             };
@@ -1897,8 +1899,13 @@ impl HotkeyBackend for MacHotkeyBackend {
             if status == ffi::noErr && !hotkey_ref.is_null() {
                 self.registered.push(hotkey_ref as usize);
                 if let Ok(mut map) = self.state.actions.lock() {
-                    map.insert(id, *action);
+                    map.insert(id, action);
                 }
+                statuses.push(HotkeyBindingStatus {
+                    binding: *binding,
+                    route: HotkeyRoute::Registered,
+                    reason: None,
+                });
             } else {
                 let reason = if status == ffi::eventHotKeyExistsErr {
                     "hotkey is already registered by another application".to_string()
@@ -1906,15 +1913,19 @@ impl HotkeyBackend for MacHotkeyBackend {
                     format!("RegisterEventHotKey failed with OSStatus {status}")
                 };
                 // One bad binding must not abort the rest.
-                failures.push(HotkeyFailure {
-                    hotkey: *hotkey,
-                    action: *action,
-                    reason,
+                statuses.push(HotkeyBindingStatus {
+                    binding: *binding,
+                    route: HotkeyRoute::Unavailable,
+                    reason: Some(reason),
                 });
             }
         }
 
-        Ok(failures)
+        Ok(HotkeyApplyReport {
+            bindings: statuses,
+            hook_installed: false,
+            warning: None,
+        })
     }
 
     fn shutdown(&mut self) {

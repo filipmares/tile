@@ -162,6 +162,48 @@ export function keyCodeFromEvent(e: KeyboardEvent): KeyCode | null {
   return CODE_LOOKUP[e.code] ?? null;
 }
 
+export function windowsHotkeyProblem(hotkey: Hotkey): string | null {
+  if (hotkey.key === "f12") {
+    return "F12 is reserved by the Windows debugger.";
+  }
+  if (hotkey.key === "l" && (hotkey.modifiers & MOD.META) !== 0) {
+    return "Win+L is reserved for locking Windows.";
+  }
+  if (
+    hotkey.key === "delete" &&
+    (hotkey.modifiers & (MOD.CONTROL | MOD.ALT)) ===
+      (MOD.CONTROL | MOD.ALT)
+  ) {
+    return "Ctrl+Alt+Delete is reserved by Windows.";
+  }
+  return null;
+}
+
+export function hasAltGrRisk(hotkey: Hotkey): boolean {
+  return (
+    (hotkey.modifiers & (MOD.CONTROL | MOD.ALT)) ===
+    (MOD.CONTROL | MOD.ALT)
+  );
+}
+
+export function knownWindowsShortcutWarning(hotkey: Hotkey): string | null {
+  const arrows: KeyCode[] = ["left", "right", "up", "down"];
+  if (
+    hotkey.modifiers === MOD.META &&
+    arrows.includes(hotkey.key)
+  ) {
+    return "Windows uses this shortcut for snapping or maximizing windows. Tile will intercept it so the Tile action takes precedence.";
+  }
+  if (
+    hotkey.modifiers === (MOD.META | MOD.ALT) &&
+    (arrows.includes(hotkey.key) ||
+      ["b", "d", "g", "m", "r", "t", "w"].includes(hotkey.key))
+  ) {
+    return "Windows or Game Bar commonly uses this shortcut. Tile may need to intercept it, or it may remain unavailable.";
+  }
+  return null;
+}
+
 const PURE_MODIFIERS = new Set([
   "Control",
   "Alt",

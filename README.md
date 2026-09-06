@@ -150,10 +150,12 @@ platform profile supplies the native-feeling ease-out tuning.
 
 ### Windows shortcut notes
 
-Tile's keyboard hook replaces Aero Snap for the bound `Win`+Arrow shortcuts,
-and claims `Win`+`Alt`+`←`/`→` — Windows 11's snap variants — for the display
-throws. `Win`+`Shift`+Arrow (Windows' own move-between-monitors shortcut) and
-`Win`+`Ctrl`+`←`/`→` (virtual desktops) both remain available.
+Tile intercepts the bound `Win`+Arrow shortcuts to replace Aero Snap, and claims
+`Win`+`Alt`+`←`/`→` — Windows 11's snap variants — for the display throws.
+Other shortcuts are registered directly with Windows whenever possible, without
+passing every keystroke through Tile. `Win`+`Shift`+Arrow (Windows' own
+move-between-monitors shortcut) and `Win`+`Ctrl`+`←`/`→` (virtual desktops) both
+remain available.
 
 Windows treats `Ctrl`+`Alt` as `AltGr` on many international layouts, so Tile
 does not use that modifier by default; doing so could interfere with characters
@@ -164,24 +166,27 @@ such as `@`, `€`, `{` and `}`.
 
 ## Platform notes
 
-### Windows: the keyboard hook
+### Windows: registered shortcuts and selective interception
 
-On Windows, Tile installs a **low-level keyboard hook** (`WH_KEYBOARD_LL`)
-rather than registering its shortcuts with the OS. That is what lets it claim
-combinations the shell already owns — `Win`+Arrow is Aero Snap, for instance.
-This means:
+Tile registers shortcuts with Windows using `RegisterHotKey` whenever the OS
+will grant them. A **low-level keyboard hook** (`WH_KEYBOARD_LL`) is installed
+only while at least one configured shortcut needs behavior that registration
+cannot provide:
 
-- Tile's shortcuts take precedence over the OS's for the combinations it binds.
-  The default `Win`+Arrow set **replaces Aero Snap**.
-- The hook **cannot see input directed at windows owned by elevated
-  (administrator) processes** unless Tile itself is running as administrator. If
-  a shortcut seems to do nothing over an elevated app, that's why.
-- Some corporate security software is suspicious of global keyboard hooks and
-  may flag or block them.
+- overriding a shortcut Windows already owns, including the default
+  `Win`+Arrow set that **replaces Aero Snap**;
+- distinguishing main Enter from numpad Enter.
 
-Replacing the hook with `RegisterHotKey` wherever the OS will grant the
-combination is tracked in
-[#19](https://github.com/filipmares/tile/issues/19).
+Assigning a shortcut means Tile claims it exclusively whenever Windows permits.
+Tile chooses the mechanism automatically: ordinary shortcuts are registered,
+while Windows-owned and key-identity-sensitive shortcuts are intercepted. When
+no active shortcut needs interception, Tile installs no keyboard hook at all.
+
+Input delivery and permission to move a window are separate. A registered
+shortcut can reach Tile while an elevated (administrator) app is focused, but
+Windows may still deny Tile permission to manipulate that app unless Tile is
+also elevated. Some corporate security software may flag or block the hook when
+interception is active.
 
 ### macOS: Accessibility permission
 
@@ -312,15 +317,32 @@ rather than tests:
 # Pass a window handle to target a specific window instead of the focused one.
 cargo run --example live_smoke -p tile-platform
 
-# Installs the real keyboard hook, injects Ctrl+Alt+Shift+M, and checks the
-# bound action is delivered, repeats, and stops firing once unbound.
+# Exercises real RegisterHotKey and conditional-hook routes, injects safe test
+# combinations, and checks delivery, route transitions, and unbinding.
 cargo run --example live_hotkey -p tile-platform
 ```
 
 To test the shortcuts end to end, build and start the app, open a window you
-do not mind moving, and press <kbd>Win</kbd>+<kbd>←</kbd>. Note
-that the keyboard hook cannot see input aimed at windows owned by elevated
-processes unless Tile is itself running as administrator.
+do not mind moving, and press <kbd>Win</kbd>+<kbd>←</kbd>. An elevated target
+may reject the window operation even when the shortcut itself was delivered
+successfully.
+
+For a local Windows debugging session, enable Tile's app and platform logs in
+the PowerShell window that launches Tauri:
+
+```powershell
+$env:RUST_LOG = "tile_app=debug,tile_platform=debug"
+Set-Location apps\tile
+.\ui\node_modules\.bin\tauri dev
+```
+
+The terminal reports each applied shortcut's route (`Registered`,
+`Intercepted`, or `Unavailable`), whether the keyboard hook was
+installed or removed, registered-shortcut dispatch, performed window actions,
+and apply/rollback failures. The hook callback itself deliberately does not log:
+Windows can silently remove a low-level hook if its callback blocks for too
+long. `env_logger` writes to the launching terminal; Tile does not create a log
+file.
 
 ## Architecture
 

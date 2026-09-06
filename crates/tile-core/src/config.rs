@@ -1342,6 +1342,17 @@ mod tests {
         }
     }
 
+    #[test]
+    fn retired_windows_hotkey_policy_is_ignored() {
+        let config = Config::from_json(
+            r#"{"bindings":{},"windowsHotkeys":{"mode":"future-mode","passThrough":[]}}"#,
+        )
+        .unwrap();
+        let json = config.to_json().unwrap();
+        assert!(!json.contains("windowsHotkeys"));
+        assert!(!json.contains("passThrough"));
+    }
+
     /// Xbox Game Bar owns eight shortcuts that Tile cannot win, listed against
     /// `default_bindings`. `Win+Alt+G` fires even with Tile shut down, because
     /// Game Bar's `Win+G` matches loosely; the others are handled by GameDVR

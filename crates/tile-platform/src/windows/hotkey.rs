@@ -1,140 +1,197 @@
-//! Global hotkeys on Windows via a low-level keyboard hook.
+//! Global Windows hotkeys through native registration with conditional
+//! low-level interception.
 //!
-//! We deliberately use `WH_KEYBOARD_LL` rather than `RegisterHotKey`: the shell
-//! already owns `Win+Left/Right/Up/Down` for Aero Snap, so `RegisterHotKey`
-//! fails with `ERROR_HOTKEY_ALREADY_REGISTERED` for exactly the bindings Tile
-//! most wants. A low-level hook sees the keystrokes first and can *swallow*
-//! them (return 1) so Aero Snap never fires.
-//!
-//! A low-level hook is only serviced while its owning thread pumps messages, so
-//! the hook lives on a dedicated thread with a `GetMessageW` loop. The hook
-//! callback is `extern "system"` and cannot borrow `self`, so the binding table
-//! and the action `Sender` live in a `static`. The callback does nothing but a
-//! cheap table lookup and a non-blocking channel send — Windows silently drops
-//! hooks whose callback exceeds `LowLevelHooksTimeout` (~300ms), so it must
-//! never block, allocate heavily or do I/O.
-//!
-//! Note: a low-level hook cannot intercept input directed at an elevated
-//! process or the secure desktop unless Tile itself runs elevated.
+//! `RegisterHotKey` is the normal path. A `WH_KEYBOARD_LL` hook is installed
+//! only while a binding needs extended-key identity or permission to override a
+//! shortcut already owned by Windows.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::Sender;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use tile_core::{Hotkey, KeyCode, Modifiers, WindowAction};
 
-use windows::core::PCWSTR;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::core::{HRESULT, PCWSTR};
+use windows::Win32::Foundation::{
+    ERROR_HOTKEY_ALREADY_REGISTERED, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM,
+};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
-    KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_ADD, VK_BACK, VK_CONTROL, VK_DECIMAL, VK_DELETE, VK_DIVIDE,
-    VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_F10, VK_F11, VK_F12, VK_F13, VK_F14, VK_F15, VK_F16,
-    VK_F17, VK_F18, VK_F19, VK_F2, VK_F20, VK_F21, VK_F22, VK_F23, VK_F24, VK_F3, VK_F4, VK_F5,
-    VK_F6, VK_F7, VK_F8, VK_F9, VK_HOME, VK_INSERT, VK_LEFT, VK_LWIN, VK_MENU, VK_MULTIPLY,
-    VK_NEXT, VK_NONAME, VK_NUMPAD0, VK_NUMPAD1, VK_NUMPAD2, VK_NUMPAD3, VK_NUMPAD4, VK_NUMPAD5,
-    VK_NUMPAD6, VK_NUMPAD7, VK_NUMPAD8, VK_NUMPAD9, VK_OEM_1, VK_OEM_2, VK_OEM_3, VK_OEM_4,
-    VK_OEM_5, VK_OEM_6, VK_OEM_7, VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_PRIOR,
-    VK_RETURN, VK_RIGHT, VK_RWIN, VK_SHIFT, VK_SPACE, VK_SUBTRACT, VK_TAB, VK_UP,
+    GetAsyncKeyState, RegisterHotKey, SendInput, UnregisterHotKey, HOT_KEY_MODIFIERS, INPUT,
+    INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, MOD_ALT, MOD_CONTROL,
+    MOD_NOREPEAT, MOD_SHIFT, MOD_WIN, VIRTUAL_KEY, VK_ADD, VK_BACK, VK_CONTROL, VK_DECIMAL,
+    VK_DELETE, VK_DIVIDE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_F10, VK_F11, VK_F12, VK_F13,
+    VK_F14, VK_F15, VK_F16, VK_F17, VK_F18, VK_F19, VK_F2, VK_F20, VK_F21, VK_F22, VK_F23, VK_F24,
+    VK_F3, VK_F4, VK_F5, VK_F6, VK_F7, VK_F8, VK_F9, VK_HOME, VK_INSERT, VK_LEFT, VK_LWIN, VK_MENU,
+    VK_MULTIPLY, VK_NEXT, VK_NONAME, VK_NUMPAD0, VK_NUMPAD1, VK_NUMPAD2, VK_NUMPAD3, VK_NUMPAD4,
+    VK_NUMPAD5, VK_NUMPAD6, VK_NUMPAD7, VK_NUMPAD8, VK_NUMPAD9, VK_OEM_1, VK_OEM_2, VK_OEM_3,
+    VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_7, VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS,
+    VK_PRIOR, VK_RETURN, VK_RIGHT, VK_RWIN, VK_SHIFT, VK_SPACE, VK_SUBTRACT, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, DispatchMessageW, GetMessageW, PostThreadMessageW, SetWindowsHookExW,
-    TranslateMessage, UnhookWindowsHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, MSG,
-    WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    CallNextHookEx, DispatchMessageW, GetMessageW, PeekMessageW, PostThreadMessageW,
+    SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT,
+    LLKHF_EXTENDED, MSG, PM_NOREMOVE, WH_KEYBOARD_LL, WM_APP, WM_HOTKEY, WM_KEYDOWN, WM_KEYUP,
+    WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
-use crate::{HotkeyBackend, HotkeyFailure, PlatformError, Result};
+use crate::{
+    HotkeyApplyReport, HotkeyBackend, HotkeyBinding, HotkeyBindingStatus, HotkeyRoute,
+    PlatformError, Result,
+};
 
-/// One resolved binding, in the form the hook callback compares against.
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct Binding {
+const COMMAND_MESSAGE: u32 = WM_APP + 0x544;
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
+const INJECTED_TAG: usize = 0x54_49_4C_45;
+const REQUEST_PENDING: u8 = 0;
+const REQUEST_COMMITTING: u8 = 1;
+const REQUEST_CANCELLED: u8 = 2;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HookBinding {
     vk: u16,
-    /// Required state of the keystroke's *extended* flag, or `None` when the
-    /// flag does not matter.
-    ///
-    /// Windows has no virtual key of its own for the numeric keypad's Enter:
-    /// it reports `VK_RETURN` just like the main Enter, and the only thing
-    /// telling them apart is `LLKHF_EXTENDED`. Without this field the two keys
-    /// would be indistinguishable and one binding would fire for both.
     extended: Option<bool>,
     mods: Modifiers,
     action: WindowAction,
+    repeat: bool,
 }
 
-/// Shared state read by the hook callback and written by `apply`/`shutdown`.
 struct HookState {
     sender: Sender<WindowAction>,
-    bindings: Vec<Binding>,
+    bindings: Vec<HookBinding>,
 }
 
-/// The hook callback cannot capture state, so it reaches the binding table and
-/// action channel through this global. A `Mutex` keeps the critical section
-/// tiny; the callback never holds it across a `SendInput`.
 static HOOK_STATE: OnceLock<Mutex<Option<HookState>>> = OnceLock::new();
+static SWALLOWED_KEYS: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
+static HELD_KEYS: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
 
-/// Marker stamped into `dwExtraInfo` of the keystrokes we inject ourselves so
-/// the hook can recognise and ignore them (and so it never recurses).
-const INJECTED_TAG: usize = 0x54_49_4C_45; // "TILE"
-
-/// Tracks which key-*down* events the hook swallowed, so the matching key-*up*
-/// can be swallowed too.
-///
-/// Swallowing only the key-down is not enough. Anything else listening for the
-/// combination — the shell, Game Bar, another app's hook further along the
-/// chain — can still observe the key-up and treat the keystroke as having
-/// happened, which is why a bound shortcut could fire Tile's action *and* the
-/// OS action. Suppressing both halves makes the keystroke invisible to
-/// everything downstream.
-///
-/// A lock-free bitset rather than the `HOOK_STATE` mutex: the hook runs for
-/// every key event, and Windows silently removes hooks whose callback exceeds
-/// `LowLevelHooksTimeout` (300 ms by default), so the key-up path must never
-/// contend on a lock.
-///
-/// Indexed by virtual key *and* the extended flag — `VK_RETURN` is both Enter
-/// and numpad Enter, distinguished only by that flag — giving 512 slots.
-static SWALLOWED_KEYS: [AtomicU64; 8] = [
-    AtomicU64::new(0),
-    AtomicU64::new(0),
-    AtomicU64::new(0),
-    AtomicU64::new(0),
-    AtomicU64::new(0),
-    AtomicU64::new(0),
-    AtomicU64::new(0),
-    AtomicU64::new(0),
-];
-
-/// Bit position for a `(vk, extended)` pair within [`SWALLOWED_KEYS`].
-const fn swallow_index(vk: u16, extended: bool) -> usize {
+const fn key_index(vk: u16, extended: bool) -> usize {
     (vk as usize & 0xFF) + if extended { 256 } else { 0 }
 }
 
-/// Records that a key-down was swallowed, so its key-up will be too.
-fn mark_swallowed(vk: u16, extended: bool) {
-    let index = swallow_index(vk, extended);
-    SWALLOWED_KEYS[index / 64].fetch_or(1u64 << (index % 64), Ordering::Relaxed);
-}
-
-/// Consumes the record for a key-up, returning whether its key-down had been
-/// swallowed (and so this key-up should be swallowed as well).
-fn take_swallowed(vk: u16, extended: bool) -> bool {
-    let index = swallow_index(vk, extended);
+fn set_key_bit(bits: &[AtomicU64; 8], vk: u16, extended: bool) -> bool {
+    let index = key_index(vk, extended);
     let bit = 1u64 << (index % 64);
-    SWALLOWED_KEYS[index / 64].fetch_and(!bit, Ordering::Relaxed) & bit != 0
+    bits[index / 64].fetch_or(bit, Ordering::Relaxed) & bit != 0
 }
 
-/// Clears every pending record. Used when the binding table changes or the
-/// hook shuts down, so a key-up cannot be swallowed on behalf of a binding
-/// that no longer exists.
-fn clear_swallowed() {
-    for word in &SWALLOWED_KEYS {
+fn take_key_bit(bits: &[AtomicU64; 8], vk: u16, extended: bool) -> bool {
+    let index = key_index(vk, extended);
+    let bit = 1u64 << (index % 64);
+    bits[index / 64].fetch_and(!bit, Ordering::Relaxed) & bit != 0
+}
+
+fn key_bit_is_set(bits: &[AtomicU64; 8], vk: u16, extended: bool) -> bool {
+    let index = key_index(vk, extended);
+    let bit = 1u64 << (index % 64);
+    bits[index / 64].load(Ordering::Relaxed) & bit != 0
+}
+
+fn clear_key_bits(bits: &[AtomicU64; 8]) {
+    for word in bits {
         word.store(0, Ordering::Relaxed);
     }
 }
 
+fn mark_swallowed(vk: u16, extended: bool) {
+    set_key_bit(&SWALLOWED_KEYS, vk, extended);
+}
+
+fn take_swallowed(vk: u16, extended: bool) -> bool {
+    take_key_bit(&SWALLOWED_KEYS, vk, extended)
+}
+
+fn clear_transient_keys() {
+    clear_key_bits(&SWALLOWED_KEYS);
+    clear_key_bits(&HELD_KEYS);
+}
+
+#[cfg(test)]
+fn clear_swallowed() {
+    clear_key_bits(&SWALLOWED_KEYS);
+}
+
+#[cfg(test)]
+const fn swallow_index(vk: u16, extended: bool) -> usize {
+    key_index(vk, extended)
+}
+
+enum Command {
+    Start,
+    Apply {
+        bindings: Vec<HotkeyBinding>,
+        deadline: Instant,
+        control: std::sync::Arc<ApplyControl>,
+        reply: Sender<Result<HotkeyApplyReport>>,
+    },
+    Shutdown,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RegisteredBinding {
+    id: i32,
+    binding: HotkeyBinding,
+    enabled: bool,
+}
+
+struct ApplyControl {
+    state: AtomicU8,
+}
+
+impl ApplyControl {
+    fn new() -> Self {
+        Self {
+            state: AtomicU8::new(REQUEST_PENDING),
+        }
+    }
+
+    fn cancelled_or_expired(&self, deadline: Instant) -> bool {
+        if Instant::now() >= deadline {
+            self.cancel();
+        }
+        self.is_cancelled()
+    }
+
+    fn cancel(&self) -> bool {
+        self.state
+            .compare_exchange(
+                REQUEST_PENDING,
+                REQUEST_CANCELLED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.state.load(Ordering::Acquire) == REQUEST_CANCELLED
+    }
+
+    fn begin_commit(&self) -> bool {
+        self.state
+            .compare_exchange(
+                REQUEST_PENDING,
+                REQUEST_COMMITTING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+}
+
+struct OwnerState {
+    events: Sender<WindowAction>,
+    registered: Vec<RegisteredBinding>,
+    hook: Option<HHOOK>,
+    next_id: i32,
+    module: HINSTANCE,
+}
+
 pub struct WindowsHotkeyBackend {
+    commands: Sender<Command>,
     thread: Option<JoinHandle<()>>,
     thread_id: u32,
     shutdown_done: bool,
@@ -142,106 +199,121 @@ pub struct WindowsHotkeyBackend {
 
 impl WindowsHotkeyBackend {
     pub fn new(events: Sender<WindowAction>) -> Result<Self> {
-        let state = HOOK_STATE.get_or_init(|| Mutex::new(None));
-        {
-            let mut guard = state
-                .lock()
-                .map_err(|_| PlatformError::os("hotkey", "hook state mutex poisoned"))?;
-            *guard = Some(HookState {
-                sender: events,
+        let hook_state = HOOK_STATE.get_or_init(|| Mutex::new(None));
+        *hook_state
+            .lock()
+            .map_err(|_| PlatformError::os("hotkey", "hook state mutex poisoned"))? =
+            Some(HookState {
+                sender: events.clone(),
                 bindings: Vec::new(),
             });
-        }
 
-        // The hook thread reports back its thread id (needed to post WM_QUIT)
-        // once the hook is installed, or an error if installation failed.
-        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<u32>>();
+        let (commands, command_rx) = mpsc::channel();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let startup_cancelled = std::sync::Arc::new(AtomicBool::new(false));
+        let thread_cancelled = std::sync::Arc::clone(&startup_cancelled);
         let handle = thread::Builder::new()
-            .name("tile-hotkey-hook".to_string())
-            .spawn(move || hook_thread_main(ready_tx))
-            .map_err(|e| PlatformError::os("spawn hook thread", e.to_string()))?;
+            .name("tile-hotkey-owner".to_string())
+            .spawn(move || owner_thread_main(events, command_rx, ready_tx, thread_cancelled))
+            .map_err(|e| PlatformError::os("spawn hotkey thread", e.to_string()))?;
 
-        let thread_id = match ready_rx.recv() {
+        let thread_id = match ready_rx.recv_timeout(COMMAND_TIMEOUT) {
             Ok(Ok(id)) => id,
-            Ok(Err(e)) => {
+            Ok(Err(err)) => {
                 let _ = handle.join();
-                return Err(e);
+                return Err(err);
             }
-            Err(_) => {
+            Err(err) => {
+                startup_cancelled.store(true, Ordering::Release);
+                drop(ready_rx);
+                drop(commands);
                 let _ = handle.join();
                 return Err(PlatformError::os(
-                    "hook thread",
-                    "thread exited before installing the keyboard hook",
+                    "hotkey thread readiness",
+                    err.to_string(),
                 ));
             }
         };
+        if let Err(err) = commands.send(Command::Start) {
+            startup_cancelled.store(true, Ordering::Release);
+            drop(commands);
+            let _ = handle.join();
+            return Err(PlatformError::os("start hotkey thread", err.to_string()));
+        }
+        log::debug!("Windows hotkey owner thread ready (thread_id={thread_id})");
 
         Ok(Self {
+            commands,
             thread: Some(handle),
             thread_id,
             shutdown_done: false,
         })
     }
+
+    fn wake_owner(&self) -> Result<()> {
+        unsafe {
+            PostThreadMessageW(self.thread_id, COMMAND_MESSAGE, WPARAM(0), LPARAM(0))
+                .map_err(|e| PlatformError::os("wake hotkey thread", e.message()))
+        }
+    }
 }
 
 impl HotkeyBackend for WindowsHotkeyBackend {
-    fn apply(&mut self, bindings: &[(Hotkey, WindowAction)]) -> Result<Vec<HotkeyFailure>> {
-        // Every `KeyCode` maps to a virtual key (see `keycode_to_vk`, which is
-        // exhaustive), so there is nothing the hook cannot represent and no
-        // per-binding failures to report.
-        let table: Vec<Binding> = bindings
-            .iter()
-            .map(|(hk, action)| Binding {
-                vk: keycode_to_vk(hk.key).0,
-                extended: keycode_extended(hk.key),
-                mods: hk.modifiers,
-                action: *action,
+    fn apply(&mut self, bindings: &[HotkeyBinding]) -> Result<HotkeyApplyReport> {
+        log::debug!("applying {} Windows hotkeys", bindings.len());
+        let (reply_tx, reply_rx) = mpsc::channel();
+        let control = std::sync::Arc::new(ApplyControl::new());
+        self.commands
+            .send(Command::Apply {
+                bindings: bindings.to_vec(),
+                deadline: Instant::now() + COMMAND_TIMEOUT,
+                control: std::sync::Arc::clone(&control),
+                reply: reply_tx,
             })
-            .collect();
-
-        if let Some(state) = HOOK_STATE.get() {
-            if let Ok(mut guard) = state.lock() {
-                if let Some(hs) = guard.as_mut() {
-                    hs.bindings = table;
+            .map_err(|e| PlatformError::os("queue hotkey apply", e.to_string()))?;
+        if let Err(err) = self.wake_owner() {
+            control.cancel();
+            return Err(err);
+        }
+        match reply_rx.recv_timeout(COMMAND_TIMEOUT) {
+            Ok(result) => result,
+            Err(err) => {
+                if control.cancel() {
+                    reply_rx.recv_timeout(COMMAND_TIMEOUT).unwrap_or_else(|rollback| {
+                        Err(PlatformError::HotkeyStateUnknown(format!(
+                            "hotkey apply timed out and rollback was not acknowledged: {err}; {rollback}"
+                        )))
+                    })
+                } else {
+                    reply_rx
+                        .recv_timeout(COMMAND_TIMEOUT)
+                        .unwrap_or_else(|late| {
+                            Err(PlatformError::HotkeyStateUnknown(format!(
+                                "owner began committing but did not acknowledge it: {late}"
+                            )))
+                        })
                 }
             }
         }
-        // A key-down swallowed under the old table must not cause its key-up to
-        // be swallowed under the new one.
-        clear_swallowed();
-        Ok(Vec::new())
     }
 
     fn shutdown(&mut self) {
-        // Idempotent: guard against a second call (e.g. explicit shutdown then
-        // Drop).
         if self.shutdown_done {
             return;
         }
         self.shutdown_done = true;
-
-        if self.thread_id != 0 {
-            // SAFETY: posting WM_QUIT to our own hook thread's queue; the
-            // wparam/lparam are inert. Failure only means the thread already
-            // exited, which we tolerate.
-            unsafe {
-                let _ = PostThreadMessageW(self.thread_id, WM_QUIT, WPARAM(0), LPARAM(0));
-            }
-        }
-
-        // The actual `UnhookWindowsHookEx` runs on the hook thread as it leaves
-        // its message loop: `HHOOK` is a non-Send raw handle, so unhooking where
-        // it was created avoids smuggling it across threads. Joining here waits
-        // for that unhook to complete.
+        log::debug!("shutting down Windows hotkey owner thread");
+        let _ = self.commands.send(Command::Shutdown);
+        let _ = self.wake_owner();
         if let Some(handle) = self.thread.take() {
             let _ = handle.join();
         }
-
         if let Some(state) = HOOK_STATE.get() {
             if let Ok(mut guard) = state.lock() {
                 *guard = None;
             }
         }
+        clear_transient_keys();
     }
 }
 
@@ -251,62 +323,613 @@ impl Drop for WindowsHotkeyBackend {
     }
 }
 
-/// Entry point for the dedicated hook thread: installs the hook, reports
-/// readiness, then pumps messages until WM_QUIT.
-fn hook_thread_main(ready: Sender<Result<u32>>) {
-    // SAFETY: standard hook-installation sequence. `low_level_keyboard_proc` is
-    // a valid `extern "system"` callback; `hmod` is this module's instance
-    // handle (required for a WH_KEYBOARD_LL hook); thread id 0 makes it global.
+fn owner_thread_main(
+    events: Sender<WindowAction>,
+    commands: Receiver<Command>,
+    ready: Sender<Result<u32>>,
+    startup_cancelled: std::sync::Arc<AtomicBool>,
+) {
     unsafe {
-        let hmod = match GetModuleHandleW(PCWSTR(std::ptr::null())) {
-            Ok(h) => h,
-            Err(e) => {
-                let _ = ready.send(Err(PlatformError::os("GetModuleHandleW", e.message())));
+        let module = match GetModuleHandleW(PCWSTR::null()) {
+            Ok(module) => module,
+            Err(err) => {
+                let _ = ready.send(Err(PlatformError::os("GetModuleHandleW", err.message())));
                 return;
             }
         };
-
-        let hook = match SetWindowsHookExW(
-            WH_KEYBOARD_LL,
-            Some(low_level_keyboard_proc),
-            Some(hmod.into()),
+        let mut seed: MSG = std::mem::zeroed();
+        let _ = PeekMessageW(
+            &mut seed,
+            Some(HWND(std::ptr::null_mut())),
             0,
-        ) {
-            Ok(h) => h,
-            Err(e) => {
-                let _ = ready.send(Err(PlatformError::HotkeyRegistration {
-                    hotkey: "WH_KEYBOARD_LL".to_string(),
-                    reason: e.message(),
-                }));
-                return;
-            }
+            0,
+            PM_NOREMOVE,
+        );
+
+        let mut owner = OwnerState {
+            events,
+            registered: Vec::new(),
+            hook: None,
+            next_id: 1,
+            module: module.into(),
         };
+        if startup_cancelled.load(Ordering::Acquire)
+            || ready.send(Ok(GetCurrentThreadId())).is_err()
+        {
+            return;
+        }
+        if !await_start(&commands, &startup_cancelled) {
+            return;
+        }
+        log::debug!("Windows hotkey owner thread entered its message loop");
 
-        let _ = ready.send(Ok(GetCurrentThreadId()));
-
-        // Message loop. A low-level hook is only dispatched while this thread
-        // pumps messages; WM_QUIT (posted by `shutdown`) makes GetMessageW
-        // return 0 and ends the loop.
         let mut msg: MSG = std::mem::zeroed();
         loop {
             let result = GetMessageW(&mut msg, Some(HWND(std::ptr::null_mut())), 0, 0).0;
             if result == 0 || result == -1 {
-                // 0 = WM_QUIT, -1 = error; either way we stop.
                 break;
+            }
+            if msg.message == COMMAND_MESSAGE {
+                if !drain_commands(&commands, &mut owner) {
+                    break;
+                }
+                continue;
+            }
+            if msg.message == WM_HOTKEY {
+                owner.dispatch_registered(msg.wParam.0 as i32);
+                continue;
             }
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
-
-        let _ = UnhookWindowsHookEx(hook);
+        owner.release_all();
+        log::debug!("Windows hotkey owner thread released all native state");
     }
 }
 
-/// The low-level keyboard hook. Runs on the hook thread for every key event.
-///
-/// # Safety
-/// Called by the OS with a valid `KBDLLHOOKSTRUCT` pointer in `lparam` when
-/// `code == HC_ACTION`. Must stay fast and non-blocking (see module docs).
+fn await_start(commands: &Receiver<Command>, cancelled: &AtomicBool) -> bool {
+    if cancelled.load(Ordering::Acquire) {
+        return false;
+    }
+    match commands.recv_timeout(COMMAND_TIMEOUT) {
+        Ok(Command::Start) => true,
+        Ok(Command::Apply { reply, .. }) => {
+            let _ = reply.send(Err(PlatformError::os(
+                "hotkey thread startup",
+                "received apply before startup acknowledgement",
+            )));
+            false
+        }
+        Ok(Command::Shutdown) | Err(_) => false,
+    }
+}
+
+fn drain_commands(commands: &Receiver<Command>, owner: &mut OwnerState) -> bool {
+    while let Ok(command) = commands.try_recv() {
+        match command {
+            Command::Start => {}
+            Command::Apply {
+                bindings,
+                deadline,
+                control,
+                reply,
+            } => {
+                let result = if control.is_cancelled() || Instant::now() >= deadline {
+                    Err(PlatformError::os(
+                        "hotkey apply",
+                        "request was cancelled or expired before processing",
+                    ))
+                } else {
+                    owner.apply(&bindings, deadline, &control)
+                };
+                let _ = reply.send(result);
+            }
+            Command::Shutdown => return false,
+        }
+    }
+    true
+}
+
+impl OwnerState {
+    fn apply(
+        &mut self,
+        bindings: &[HotkeyBinding],
+        deadline: Instant,
+        control: &ApplyControl,
+    ) -> Result<HotkeyApplyReport> {
+        self.cleanup_disabled_registrations()?;
+        let old_registered: Vec<_> = self
+            .registered
+            .iter()
+            .copied()
+            .filter(|binding| binding.enabled)
+            .collect();
+        let old_hook_bindings = current_hook_bindings();
+        let mut retained = Vec::new();
+        let mut removed = Vec::new();
+
+        for old in &old_registered {
+            let reusable = bindings
+                .iter()
+                .any(|new| can_reuse_registration(old.binding, *new));
+            if reusable {
+                retained.push(*old);
+            } else {
+                if let Err(err) = unsafe { UnregisterHotKey(None, old.id) } {
+                    return self.rollback_apply(
+                        &[],
+                        &removed,
+                        &old_hook_bindings,
+                        false,
+                        &format!("failed to remove hotkey {}: {}", old.id, err.message()),
+                    );
+                }
+                self.registered.retain(|binding| binding.id != old.id);
+                removed.push(*old);
+            }
+        }
+
+        let mut staged = Vec::new();
+        let mut hook_bindings = Vec::new();
+        let mut statuses = Vec::with_capacity(bindings.len());
+
+        for binding in bindings {
+            if control.cancelled_or_expired(deadline) {
+                return self.rollback_apply(
+                    &staged,
+                    &removed,
+                    &old_hook_bindings,
+                    false,
+                    "request expired",
+                );
+            }
+            if let Some(reason) = impossible_reason(binding.hotkey) {
+                statuses.push(unavailable(*binding, reason));
+                continue;
+            }
+            if requires_extended_identity(binding.hotkey.key) {
+                hook_bindings.push(to_hook_binding(*binding));
+                statuses.push(status(
+                    *binding,
+                    HotkeyRoute::Intercepted,
+                    Some("uses the hook to preserve Enter key identity".to_string()),
+                ));
+                continue;
+            }
+
+            if let Some(existing) = retained
+                .iter_mut()
+                .find(|old| can_reuse_registration(old.binding, *binding))
+            {
+                existing.binding = *binding;
+                statuses.push(status(*binding, HotkeyRoute::Registered, None));
+                continue;
+            }
+
+            let id = self.allocate_id();
+            match register_binding(id, *binding) {
+                Ok(()) => {
+                    let registered = RegisteredBinding {
+                        id,
+                        binding: *binding,
+                        enabled: false,
+                    };
+                    self.registered.push(registered);
+                    staged.push(registered);
+                    statuses.push(status(*binding, HotkeyRoute::Registered, None));
+                }
+                Err(err) if is_already_registered(&err) => {
+                    hook_bindings.push(to_hook_binding(*binding));
+                    statuses.push(status(
+                        *binding,
+                        HotkeyRoute::Intercepted,
+                        Some("already owned by Windows or another application".to_string()),
+                    ));
+                }
+                Err(err) => {
+                    let reason = format!("RegisterHotKey failed: {}", err.message());
+                    statuses.push(status(*binding, HotkeyRoute::Unavailable, Some(reason)));
+                }
+            }
+        }
+
+        if control.cancelled_or_expired(deadline) {
+            return self.rollback_apply(
+                &staged,
+                &removed,
+                &old_hook_bindings,
+                false,
+                "request expired",
+            );
+        }
+
+        let installed_for_apply = if !hook_bindings.is_empty() && self.hook.is_none() {
+            if let Err(err) = self.install_hook() {
+                let rollback = self
+                    .rollback_apply(
+                        &staged,
+                        &removed,
+                        &old_hook_bindings,
+                        false,
+                        "hook installation failed",
+                    )
+                    .expect_err("rollback always reports the triggering apply failure");
+                return match rollback {
+                    PlatformError::HotkeyStateUnknown(details) => {
+                        Err(PlatformError::HotkeyStateUnknown(format!(
+                            "hook installation failed: {err}; {details}"
+                        )))
+                    }
+                    rollback => Err(PlatformError::os(
+                        "hotkey apply",
+                        format!("{err}; {rollback}"),
+                    )),
+                };
+            }
+            true
+        } else {
+            false
+        };
+
+        if control.cancelled_or_expired(deadline) {
+            return self.rollback_apply(
+                &staged,
+                &removed,
+                &old_hook_bindings,
+                installed_for_apply,
+                "request expired before commit",
+            );
+        }
+
+        if !control.begin_commit() {
+            return self.rollback_apply(
+                &staged,
+                &removed,
+                &old_hook_bindings,
+                installed_for_apply,
+                "request was cancelled before commit",
+            );
+        }
+
+        set_hook_bindings(hook_bindings.clone()).map_err(|err| {
+            PlatformError::HotkeyStateUnknown(format!(
+                "native registrations changed but hook dispatch could not be published: {err}"
+            ))
+        })?;
+        for committed in retained.iter().chain(&staged) {
+            if let Some(owned) = self
+                .registered
+                .iter_mut()
+                .find(|binding| binding.id == committed.id)
+            {
+                owned.binding = committed.binding;
+                owned.enabled = true;
+            }
+        }
+        clear_transient_keys();
+
+        let mut warning = None;
+        if hook_bindings.is_empty() {
+            if let Some(hook) = self.hook {
+                match unsafe { UnhookWindowsHookEx(hook) } {
+                    Ok(()) => {
+                        self.hook = None;
+                        log::info!("Windows keyboard hook removed; all active shortcuts use native registration");
+                    }
+                    Err(err) => {
+                        warning = Some(format!(
+                            "shortcuts were updated, but the obsolete keyboard hook could not be removed: {}",
+                            err.message()
+                        ));
+                    }
+                }
+            }
+        } else if installed_for_apply {
+            log::info!(
+                "Windows keyboard hook installed for {} shortcut(s)",
+                hook_bindings.len()
+            );
+        }
+
+        let report = HotkeyApplyReport {
+            bindings: statuses,
+            hook_installed: self.hook.is_some(),
+            warning,
+        };
+        Self::log_apply_report(&report);
+        Ok(report)
+    }
+
+    fn rollback_apply(
+        &mut self,
+        staged: &[RegisteredBinding],
+        removed: &[RegisteredBinding],
+        old_hook_bindings: &[HookBinding],
+        provisional_hook: bool,
+        reason: &str,
+    ) -> Result<HotkeyApplyReport> {
+        let mut rollback_errors = Vec::new();
+        if provisional_hook {
+            if let Some(hook) = self.hook {
+                match unsafe { UnhookWindowsHookEx(hook) } {
+                    Ok(()) => self.hook = None,
+                    Err(err) => rollback_errors.push(format!(
+                        "remove provisional keyboard hook: {}",
+                        err.message()
+                    )),
+                }
+            }
+        }
+        for binding in staged {
+            match unsafe { UnregisterHotKey(None, binding.id) } {
+                Ok(()) => self.registered.retain(|owned| owned.id != binding.id),
+                Err(err) => {
+                    rollback_errors.push(format!(
+                        "unregister staged {}: {}",
+                        binding.id,
+                        err.message()
+                    ));
+                }
+            }
+        }
+        for binding in removed {
+            match register_binding(binding.id, binding.binding) {
+                Ok(()) => {
+                    if !self.registered.iter().any(|owned| owned.id == binding.id) {
+                        self.registered.push(RegisteredBinding {
+                            enabled: true,
+                            ..*binding
+                        });
+                    }
+                }
+                Err(err) => {
+                    rollback_errors.push(format!("restore {}: {}", binding.id, err.message()));
+                }
+            }
+        }
+        if let Err(err) = set_hook_bindings(old_hook_bindings.to_vec()) {
+            rollback_errors.push(err.to_string());
+        }
+        if rollback_errors.is_empty() {
+            log::warn!("Windows hotkey apply rolled back: {reason}");
+            Err(PlatformError::os("hotkey apply", reason))
+        } else {
+            log::error!(
+                "Windows hotkey apply rollback is incomplete: {}; {}",
+                reason,
+                rollback_errors.join("; ")
+            );
+            Err(PlatformError::HotkeyStateUnknown(format!(
+                "{reason}; rollback incomplete: {}",
+                rollback_errors.join("; ")
+            )))
+        }
+    }
+
+    fn install_hook(&mut self) -> Result<()> {
+        let hook = unsafe {
+            SetWindowsHookExW(
+                WH_KEYBOARD_LL,
+                Some(low_level_keyboard_proc),
+                Some(self.module),
+                0,
+            )
+            .map_err(|e| PlatformError::os("SetWindowsHookExW", e.message()))?
+        };
+        self.hook = Some(hook);
+        Ok(())
+    }
+
+    fn cleanup_disabled_registrations(&mut self) -> Result<()> {
+        let disabled: Vec<_> = self
+            .registered
+            .iter()
+            .copied()
+            .filter(|binding| !binding.enabled)
+            .collect();
+        for binding in disabled {
+            unsafe { UnregisterHotKey(None, binding.id) }.map_err(|err| {
+                PlatformError::HotkeyStateUnknown(format!(
+                    "could not clean residual hotkey {}: {}",
+                    binding.id,
+                    err.message()
+                ))
+            })?;
+            self.registered.retain(|owned| owned.id != binding.id);
+        }
+        Ok(())
+    }
+
+    fn allocate_id(&mut self) -> i32 {
+        loop {
+            let id = self.next_id;
+            self.next_id = if self.next_id >= 0xBFFF {
+                1
+            } else {
+                self.next_id + 1
+            };
+            if !self.registered.iter().any(|entry| entry.id == id) {
+                return id;
+            }
+        }
+    }
+
+    fn dispatch_registered(&self, id: i32) {
+        let Some(binding) = self
+            .registered
+            .iter()
+            .find(|entry| entry.id == id && entry.enabled)
+        else {
+            return;
+        };
+        log::debug!(
+            "Windows registered hotkey {} dispatched {}",
+            binding.binding.hotkey,
+            binding.binding.action
+        );
+        let _ = self.events.send(binding.binding.action);
+    }
+
+    fn log_apply_report(report: &HotkeyApplyReport) {
+        let mut registered = 0;
+        let mut intercepted = 0;
+        let mut unavailable = 0;
+        for binding in &report.bindings {
+            match binding.route {
+                HotkeyRoute::Registered => registered += 1,
+                HotkeyRoute::Intercepted => intercepted += 1,
+                HotkeyRoute::Unavailable => unavailable += 1,
+            }
+            log::debug!(
+                "Windows hotkey {} -> {}: {:?}{}",
+                binding.binding.hotkey,
+                binding.binding.action,
+                binding.route,
+                binding
+                    .reason
+                    .as_deref()
+                    .map(|reason| format!(" ({reason})"))
+                    .unwrap_or_default()
+            );
+        }
+        log::info!(
+            "Windows hotkeys applied: registered={registered}, intercepted={intercepted}, \
+             unavailable={unavailable}, hook_installed={}",
+            report.hook_installed
+        );
+        if let Some(warning) = &report.warning {
+            log::warn!("Windows hotkey apply warning: {warning}");
+        }
+    }
+
+    fn release_all(&mut self) {
+        set_hook_bindings(Vec::new()).ok();
+        clear_transient_keys();
+        for binding in self.registered.drain(..) {
+            let _ = unsafe { UnregisterHotKey(None, binding.id) };
+        }
+        if let Some(hook) = self.hook.take() {
+            let _ = unsafe { UnhookWindowsHookEx(hook) };
+        }
+    }
+}
+
+fn register_binding(id: i32, binding: HotkeyBinding) -> windows::core::Result<()> {
+    let mut modifiers = native_modifiers(binding.hotkey.modifiers);
+    if !binding.repeat {
+        modifiers |= MOD_NOREPEAT;
+    }
+    unsafe {
+        RegisterHotKey(
+            None,
+            id,
+            modifiers,
+            keycode_to_vk(binding.hotkey.key).0 as u32,
+        )
+    }
+}
+
+fn native_modifiers(modifiers: Modifiers) -> HOT_KEY_MODIFIERS {
+    let mut native = HOT_KEY_MODIFIERS(0);
+    if modifiers.contains(Modifiers::ALT) {
+        native |= MOD_ALT;
+    }
+    if modifiers.contains(Modifiers::CONTROL) {
+        native |= MOD_CONTROL;
+    }
+    if modifiers.contains(Modifiers::SHIFT) {
+        native |= MOD_SHIFT;
+    }
+    if modifiers.contains(Modifiers::META) {
+        native |= MOD_WIN;
+    }
+    native
+}
+
+fn is_already_registered(error: &windows::core::Error) -> bool {
+    error.code() == HRESULT::from_win32(ERROR_HOTKEY_ALREADY_REGISTERED.0)
+}
+
+fn requires_extended_identity(key: KeyCode) -> bool {
+    matches!(key, KeyCode::Enter | KeyCode::NumpadEnter)
+}
+
+fn can_reuse_registration(old: HotkeyBinding, new: HotkeyBinding) -> bool {
+    old.hotkey == new.hotkey
+        && old.repeat == new.repeat
+        && !requires_extended_identity(new.hotkey.key)
+        && !is_impossible(new.hotkey)
+}
+
+fn impossible_reason(hotkey: Hotkey) -> Option<&'static str> {
+    if hotkey.key == KeyCode::F12 {
+        return Some("F12 is reserved by the Windows debugger");
+    }
+    if hotkey.key == KeyCode::L && hotkey.modifiers.contains(Modifiers::META) {
+        return Some("Win+L is reserved for locking Windows");
+    }
+    if hotkey.key == KeyCode::Delete
+        && hotkey
+            .modifiers
+            .contains(Modifiers::CONTROL | Modifiers::ALT)
+    {
+        return Some("Ctrl+Alt+Delete is reserved by Windows");
+    }
+    None
+}
+
+fn is_impossible(hotkey: Hotkey) -> bool {
+    impossible_reason(hotkey).is_some()
+}
+
+fn to_hook_binding(binding: HotkeyBinding) -> HookBinding {
+    HookBinding {
+        vk: keycode_to_vk(binding.hotkey.key).0,
+        extended: keycode_extended(binding.hotkey.key),
+        mods: binding.hotkey.modifiers,
+        action: binding.action,
+        repeat: binding.repeat,
+    }
+}
+
+fn status(
+    binding: HotkeyBinding,
+    route: HotkeyRoute,
+    reason: Option<String>,
+) -> HotkeyBindingStatus {
+    HotkeyBindingStatus {
+        binding,
+        route,
+        reason,
+    }
+}
+
+fn unavailable(binding: HotkeyBinding, reason: impl Into<String>) -> HotkeyBindingStatus {
+    status(binding, HotkeyRoute::Unavailable, Some(reason.into()))
+}
+
+fn current_hook_bindings() -> Vec<HookBinding> {
+    HOOK_STATE
+        .get()
+        .and_then(|state| state.lock().ok())
+        .and_then(|guard| guard.as_ref().map(|state| state.bindings.clone()))
+        .unwrap_or_default()
+}
+
+fn set_hook_bindings(bindings: Vec<HookBinding>) -> Result<()> {
+    let state = HOOK_STATE
+        .get()
+        .ok_or_else(|| PlatformError::os("hotkey", "hook state is not initialized"))?;
+    let mut guard = state
+        .lock()
+        .map_err(|_| PlatformError::os("hotkey", "hook state mutex poisoned"))?;
+    let hook_state = guard
+        .as_mut()
+        .ok_or_else(|| PlatformError::os("hotkey", "hook state is unavailable"))?;
+    hook_state.bindings = bindings;
+    Ok(())
+}
+
 unsafe extern "system" fn low_level_keyboard_proc(
     code: i32,
     wparam: WPARAM,
@@ -314,154 +937,113 @@ unsafe extern "system" fn low_level_keyboard_proc(
 ) -> LRESULT {
     if code == HC_ACTION as i32 {
         let message = wparam.0 as u32;
-        // Alt-modified keys arrive as WM_SYSKEYDOWN, everything else as
-        // WM_KEYDOWN; we care about both.
-        if message == WM_KEYDOWN || message == WM_SYSKEYDOWN {
-            let kb = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
+        let kb = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
+        if kb.dwExtraInfo != INJECTED_TAG {
+            let vk = kb.vkCode as u16;
+            let extended = (kb.flags.0 & LLKHF_EXTENDED.0) != 0;
+            if message == WM_KEYDOWN || message == WM_SYSKEYDOWN {
+                if key_bit_is_set(&SWALLOWED_KEYS, vk, extended) {
+                    if !is_modifier_vk(vk) {
+                        let mods = current_modifiers();
+                        if let Some(binding) = match_binding(vk, extended, mods) {
+                            repeat_action(binding)
+                                .into_iter()
+                                .for_each(send_hook_action);
+                        }
+                    }
+                    return LRESULT(1);
+                }
 
-            // Skip our own injected suppressor keystrokes to avoid recursion.
-            if kb.dwExtraInfo != INJECTED_TAG {
-                let vk = kb.vkCode as u16;
-
-                // Never treat a modifier key press itself as a hotkey trigger.
-                // Auto-repeat is intentionally allowed to pass through as
-                // repeated triggers: re-applying a tiling action is idempotent
-                // (the engine reports "already in position"), so holding a key
-                // cannot cause runaway behaviour and no de-bounce is needed.
                 if !is_modifier_vk(vk) {
                     let mods = current_modifiers();
-                    let extended = (kb.flags.0 & LLKHF_EXTENDED.0) != 0;
-                    if dispatch(vk, extended, mods) {
-                        // The key-up must be swallowed too, or anything else
-                        // watching for this combination still sees a completed
-                        // keystroke and fires its own action alongside ours.
+                    if let Some(binding) = match_binding(vk, extended, mods) {
+                        let repeated = !binding.repeat && set_key_bit(&HELD_KEYS, vk, extended);
+                        if !repeated {
+                            send_hook_action(binding.action);
+                        }
                         mark_swallowed(vk, extended);
-                        // A Win-based combo was consumed. Without this, releasing
-                        // the Win key would open the Start menu, because the shell
-                        // opens Start on Win-*up* when no other key was seen as
-                        // pressed with it. Injecting an inert keystroke makes the
-                        // shell treat Win as a held modifier, not a tap.
                         if mods.contains(Modifiers::META) {
                             suppress_start_menu();
                         }
-                        // Return 1 to swallow the event so Aero Snap never fires.
                         return LRESULT(1);
                     }
                 }
-            }
-        } else if message == WM_KEYUP || message == WM_SYSKEYUP {
-            let kb = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
-            if kb.dwExtraInfo != INJECTED_TAG {
-                let vk = kb.vkCode as u16;
-                let extended = (kb.flags.0 & LLKHF_EXTENDED.0) != 0;
-                // Only swallowed if we swallowed the matching key-down, so a
-                // key-up we never claimed is always passed through.
+            } else if message == WM_KEYUP || message == WM_SYSKEYUP {
+                take_key_bit(&HELD_KEYS, vk, extended);
                 if take_swallowed(vk, extended) {
                     return LRESULT(1);
                 }
             }
         }
     }
-
-    // SAFETY: forwarding to the next hook with the OS-provided parameters is
-    // always sound; the ignored `HHOOK` argument is documented as unused.
     CallNextHookEx(Some(HHOOK(std::ptr::null_mut())), code, wparam, lparam)
 }
 
-/// Looks up `(vk, extended, mods)` in the shared table and, on an exact match,
-/// sends the bound action. Returns whether a binding matched (and should be
-/// swallowed).
-fn dispatch(vk: u16, extended: bool, mods: Modifiers) -> bool {
-    let Some(state) = HOOK_STATE.get() else {
-        return false;
-    };
-    let Ok(guard) = state.lock() else {
-        return false;
-    };
-    let Some(hs) = guard.as_ref() else {
-        return false;
-    };
-    match match_binding(&hs.bindings, vk, extended, mods) {
-        Some(action) => {
-            // Unbounded std channel: `send` never blocks, so this is safe inside
-            // the hook's tight time budget.
-            let _ = hs.sender.send(action);
-            true
-        }
-        None => false,
-    }
+fn repeat_action(binding: HookBinding) -> Option<WindowAction> {
+    binding.repeat.then_some(binding.action)
 }
 
-/// Pure binding lookup with **exact** modifier matching.
-///
-/// Exactness matters: a `Win+Left` binding must NOT fire while `Ctrl+Win+Left`
-/// is held. Using a subset/`contains` check here is a classic bug that makes
-/// unrelated chords steal each other's keys.
-fn match_binding(
-    bindings: &[Binding],
+fn match_binding(vk: u16, extended: bool, mods: Modifiers) -> Option<HookBinding> {
+    let state = HOOK_STATE.get()?;
+    let guard = state.lock().ok()?;
+    match_binding_in(&guard.as_ref()?.bindings, vk, extended, mods)
+}
+
+fn match_binding_in(
+    bindings: &[HookBinding],
     vk: u16,
     extended: bool,
     mods: Modifiers,
-) -> Option<WindowAction> {
-    bindings
-        .iter()
-        .find(|b| b.vk == vk && b.mods == mods && b.extended.map_or(true, |want| want == extended))
-        .map(|b| b.action)
+) -> Option<HookBinding> {
+    bindings.iter().copied().find(|binding| {
+        binding.vk == vk
+            && binding.mods == mods
+            && binding
+                .extended
+                .map_or(true, |required| required == extended)
+    })
 }
 
-/// Reads the current modifier state. Uses `GetAsyncKeyState` for the modifiers
-/// only (never for the pressed key itself). The Win flag reflects the physical
-/// left/right Win keys.
-///
-/// A low-level hook runs before Windows updates async state for the event being
-/// delivered. That does not make this stale for a binding lookup: the event
-/// being delivered is the non-modifier trigger, while every modifier key-down
-/// is an earlier event whose state has already been committed. Querying the OS
-/// is more robust than reconstructing state indefinitely from a hook stream,
-/// which can begin midway through a chord or miss a key-up if Windows removes a
-/// timed-out hook.
+fn send_hook_action(action: WindowAction) {
+    let Some(state) = HOOK_STATE.get() else {
+        return;
+    };
+    let Ok(guard) = state.lock() else {
+        return;
+    };
+    if let Some(hook_state) = guard.as_ref() {
+        let _ = hook_state.sender.send(action);
+    }
+}
+
 fn current_modifiers() -> Modifiers {
-    let mut m = Modifiers::NONE;
+    let mut modifiers = Modifiers::NONE;
     if key_down(VK_CONTROL) {
-        m = m | Modifiers::CONTROL;
+        modifiers = modifiers | Modifiers::CONTROL;
     }
     if key_down(VK_MENU) {
-        m = m | Modifiers::ALT;
+        modifiers = modifiers | Modifiers::ALT;
     }
     if key_down(VK_SHIFT) {
-        m = m | Modifiers::SHIFT;
+        modifiers = modifiers | Modifiers::SHIFT;
     }
     if key_down(VK_LWIN) || key_down(VK_RWIN) {
-        m = m | Modifiers::META;
+        modifiers = modifiers | Modifiers::META;
     }
-    m
+    modifiers
 }
 
 fn key_down(vk: VIRTUAL_KEY) -> bool {
-    // SAFETY: `GetAsyncKeyState` is a pure, side-effect-free state query with no
-    // pointer arguments. The high bit of the result means the key is down.
     (unsafe { GetAsyncKeyState(vk.0 as i32) } as u16 & 0x8000) != 0
 }
 
-/// True for any left/right/generic modifier virtual-key, which must never be
-/// treated as a hotkey's main key.
 fn is_modifier_vk(vk: u16) -> bool {
     matches!(
         vk,
-        0x10 | 0x11 | 0x12 // VK_SHIFT, VK_CONTROL, VK_MENU (generic)
-            | 0xA0 | 0xA1  // VK_LSHIFT, VK_RSHIFT
-            | 0xA2 | 0xA3  // VK_LCONTROL, VK_RCONTROL
-            | 0xA4 | 0xA5  // VK_LMENU, VK_RMENU
-            | 0x5B | 0x5C // VK_LWIN, VK_RWIN
+        0x10 | 0x11 | 0x12 | 0xA0 | 0xA1 | 0xA2 | 0xA3 | 0xA4 | 0xA5 | 0x5B | 0x5C
     )
 }
 
-/// Injects a tagged, inert keystroke so the shell does not open Start when the
-/// Win key is released after a swallowed Win-combo.
-///
-/// # Safety
-/// Builds a well-formed `INPUT` array and passes its true byte size to
-/// `SendInput`; no borrowing or lifetime concerns.
 unsafe fn suppress_start_menu() {
     let inputs = [
         make_key_input(VK_NONAME, false),
@@ -787,19 +1369,21 @@ mod tests {
         assert_eq!(keycode_to_vk(KeyCode::Quote).0, 0xDE); // VK_OEM_7
     }
 
-    fn table() -> Vec<Binding> {
+    fn table() -> Vec<HookBinding> {
         vec![
-            Binding {
+            HookBinding {
                 vk: VK_LEFT.0,
                 extended: None,
                 mods: Modifiers::META,
                 action: WindowAction::LeftHalf,
+                repeat: false,
             },
-            Binding {
+            HookBinding {
                 vk: VK_LEFT.0,
                 extended: None,
                 mods: Modifiers::META | Modifiers::CONTROL,
                 action: WindowAction::TopHalf,
+                repeat: false,
             },
         ]
     }
@@ -808,11 +1392,12 @@ mod tests {
     fn exact_modifier_match_fires_the_right_action() {
         let t = table();
         assert_eq!(
-            match_binding(&t, VK_LEFT.0, true, Modifiers::META),
+            match_binding_in(&t, VK_LEFT.0, true, Modifiers::META).map(|binding| binding.action),
             Some(WindowAction::LeftHalf)
         );
         assert_eq!(
-            match_binding(&t, VK_LEFT.0, true, Modifiers::META | Modifiers::CONTROL),
+            match_binding_in(&t, VK_LEFT.0, true, Modifiers::META | Modifiers::CONTROL)
+                .map(|binding| binding.action),
             Some(WindowAction::TopHalf)
         );
     }
@@ -821,14 +1406,15 @@ mod tests {
     fn win_left_does_not_fire_when_ctrl_is_also_held() {
         // The whole point of exact matching: Ctrl+Win+Left must not be treated
         // as Win+Left. A `contains`-style bug would wrongly return LeftHalf.
-        let only_win = vec![Binding {
+        let only_win = vec![HookBinding {
             vk: VK_LEFT.0,
             extended: None,
             mods: Modifiers::META,
             action: WindowAction::LeftHalf,
+            repeat: false,
         }];
         assert_eq!(
-            match_binding(
+            match_binding_in(
                 &only_win,
                 VK_LEFT.0,
                 true,
@@ -841,33 +1427,40 @@ mod tests {
     #[test]
     fn no_match_for_unbound_key_or_bare_modifier() {
         let t = table();
-        assert_eq!(match_binding(&t, VK_RIGHT.0, true, Modifiers::META), None);
-        assert_eq!(match_binding(&t, VK_LEFT.0, true, Modifiers::NONE), None);
+        assert_eq!(
+            match_binding_in(&t, VK_RIGHT.0, true, Modifiers::META),
+            None
+        );
+        assert_eq!(match_binding_in(&t, VK_LEFT.0, true, Modifiers::NONE), None);
     }
 
     #[test]
     fn the_two_enter_keys_do_not_trigger_each_other() {
         // Both report VK_RETURN; only LLKHF_EXTENDED tells them apart.
         let bindings = vec![
-            Binding {
+            HookBinding {
                 vk: VK_RETURN.0,
                 extended: keycode_extended(KeyCode::Enter),
                 mods: Modifiers::META,
                 action: WindowAction::Maximize,
+                repeat: false,
             },
-            Binding {
+            HookBinding {
                 vk: VK_RETURN.0,
                 extended: keycode_extended(KeyCode::NumpadEnter),
                 mods: Modifiers::META,
                 action: WindowAction::Center,
+                repeat: false,
             },
         ];
         assert_eq!(
-            match_binding(&bindings, VK_RETURN.0, false, Modifiers::META),
+            match_binding_in(&bindings, VK_RETURN.0, false, Modifiers::META)
+                .map(|binding| binding.action),
             Some(WindowAction::Maximize)
         );
         assert_eq!(
-            match_binding(&bindings, VK_RETURN.0, true, Modifiers::META),
+            match_binding_in(&bindings, VK_RETURN.0, true, Modifiers::META)
+                .map(|binding| binding.action),
             Some(WindowAction::Center)
         );
     }
@@ -879,7 +1472,8 @@ mod tests {
         let t = table();
         for extended in [false, true] {
             assert_eq!(
-                match_binding(&t, VK_LEFT.0, extended, Modifiers::META),
+                match_binding_in(&t, VK_LEFT.0, extended, Modifiers::META)
+                    .map(|binding| binding.action),
                 Some(WindowAction::LeftHalf)
             );
         }
@@ -894,5 +1488,107 @@ mod tests {
         }
         assert!(!is_modifier_vk(VK_LEFT.0));
         assert!(!is_modifier_vk(VK_NUMPAD0.0));
+    }
+
+    #[test]
+    fn reserved_windows_shortcuts_are_rejected_before_registration() {
+        for hotkey in [
+            Hotkey::new(Modifiers::CONTROL, KeyCode::F12),
+            Hotkey::new(Modifiers::META, KeyCode::L),
+            Hotkey::new(Modifiers::CONTROL | Modifiers::ALT, KeyCode::Delete),
+        ] {
+            assert!(impossible_reason(hotkey).is_some(), "{hotkey} must fail");
+        }
+        assert!(impossible_reason(Hotkey::new(Modifiers::CONTROL, KeyCode::L)).is_none());
+    }
+
+    #[test]
+    fn hook_route_preserves_repeat_policy_and_is_exclusive() {
+        let binding = HotkeyBinding {
+            hotkey: Hotkey::new(Modifiers::META, KeyCode::Left),
+            action: WindowAction::MoveLeft,
+            repeat: true,
+        };
+        let repeating = to_hook_binding(binding);
+        assert!(repeating.repeat);
+        assert_eq!(repeat_action(repeating), Some(WindowAction::MoveLeft));
+
+        let exclusive = to_hook_binding(HotkeyBinding {
+            repeat: false,
+            ..binding
+        });
+        assert!(!exclusive.repeat);
+        assert_eq!(repeat_action(exclusive), None);
+    }
+
+    #[test]
+    fn native_modifier_translation_is_complete() {
+        let all = Modifiers::CONTROL | Modifiers::ALT | Modifiers::SHIFT | Modifiers::META;
+        assert_eq!(
+            native_modifiers(all),
+            MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_WIN
+        );
+    }
+
+    #[test]
+    fn changing_repeat_policy_requires_native_reregistration() {
+        let old = HotkeyBinding {
+            hotkey: Hotkey::new(Modifiers::CONTROL, KeyCode::M),
+            action: WindowAction::MoveLeft,
+            repeat: true,
+        };
+        assert!(can_reuse_registration(
+            old,
+            HotkeyBinding {
+                action: WindowAction::MoveRight,
+                ..old
+            }
+        ));
+        assert!(!can_reuse_registration(
+            old,
+            HotkeyBinding {
+                action: WindowAction::Maximize,
+                repeat: false,
+                ..old
+            }
+        ));
+    }
+
+    #[test]
+    fn cancellation_and_commit_have_one_winner() {
+        let cancelled = ApplyControl::new();
+        assert!(cancelled.cancel());
+        assert!(!cancelled.begin_commit());
+
+        let committing = ApplyControl::new();
+        assert!(committing.begin_commit());
+        assert!(!committing.cancel());
+    }
+
+    #[test]
+    fn owner_requires_start_acknowledgement_before_message_loop() {
+        let cancelled = AtomicBool::new(false);
+        let (tx, rx) = mpsc::channel();
+        tx.send(Command::Start).unwrap();
+        assert!(await_start(&rx, &cancelled));
+
+        let cancelled = AtomicBool::new(true);
+        let (_tx, rx) = mpsc::channel();
+        assert!(!await_start(&rx, &cancelled));
+
+        let cancelled = AtomicBool::new(false);
+        let (tx, rx) = mpsc::channel::<Command>();
+        drop(tx);
+        assert!(!await_start(&rx, &cancelled));
+    }
+
+    #[test]
+    fn swallowed_identity_stays_marked_until_key_up() {
+        clear_swallowed();
+        mark_swallowed(VK_LEFT.0, true);
+        assert!(key_bit_is_set(&SWALLOWED_KEYS, VK_LEFT.0, true));
+        assert!(!key_bit_is_set(&SWALLOWED_KEYS, VK_LEFT.0, false));
+        assert!(take_swallowed(VK_LEFT.0, true));
+        assert!(!key_bit_is_set(&SWALLOWED_KEYS, VK_LEFT.0, true));
     }
 }
