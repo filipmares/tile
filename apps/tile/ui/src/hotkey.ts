@@ -192,7 +192,7 @@ export function knownWindowsShortcutWarning(hotkey: Hotkey): string | null {
     hotkey.modifiers === MOD.META &&
     arrows.includes(hotkey.key)
   ) {
-    return "Windows uses this shortcut for snapping or maximizing windows. Tile will need to intercept it in hybrid mode.";
+    return "Windows uses this shortcut for snapping or maximizing windows. Tile will intercept it so the Tile action takes precedence.";
   }
   if (
     hotkey.modifiers === (MOD.META | MOD.ALT) &&

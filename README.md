@@ -170,8 +170,8 @@ such as `@`, `€`, `{` and `}`.
 
 Tile registers shortcuts with Windows using `RegisterHotKey` whenever the OS
 will grant them. A **low-level keyboard hook** (`WH_KEYBOARD_LL`) is installed
-only while at least one configured shortcut needs behavior registration cannot
-provide:
+only while at least one configured shortcut needs behavior that registration
+cannot provide:
 
 - overriding a shortcut Windows already owns, including the default
   `Win`+Arrow set that **replaces Aero Snap**;

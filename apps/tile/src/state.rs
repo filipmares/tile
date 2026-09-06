@@ -266,8 +266,8 @@ impl AppState {
         )
     }
 
-    /// Registers the currently bound hotkeys, recording any the OS refused.
-    /// Returns the failures for convenience.
+    /// Applies the currently bound hotkeys and records their last confirmed
+    /// routes plus any apply error.
     pub fn apply_hotkeys(&self) -> HotkeyStatus {
         let config = lock(&self.engine).config.clone();
         let bindings: Vec<_> = config
@@ -283,7 +283,10 @@ impl AppState {
         let mut status = lock(&self.hotkey_status);
         match result {
             Ok(report) => {
-                status.apply_error = report.warning.clone();
+                if let Some(warning) = &report.warning {
+                    log::warn!("hotkeys applied with a cleanup warning: {warning}");
+                }
+                status.apply_error = None;
                 status.report = Some(report);
             }
             Err(err) => {

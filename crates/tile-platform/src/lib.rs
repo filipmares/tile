@@ -211,9 +211,10 @@ pub trait HotkeyBackend: Send {
     /// everything it previously held and then registers `bindings`, so the
     /// settings UI can simply re-apply the whole config after any edit.
     ///
-    /// Individual bindings that the OS refuses are reported in the returned
-    /// vector rather than failing the whole call, so one bad binding cannot
-    /// leave the app with no working hotkeys.
+    /// Individual bindings that the OS refuses are marked
+    /// [`HotkeyRoute::Unavailable`] in the returned report rather than failing
+    /// the whole call, so one bad binding cannot leave the app with no working
+    /// hotkeys.
     fn apply(&mut self, bindings: &[HotkeyBinding]) -> Result<HotkeyApplyReport>;
 
     /// Releases every hotkey and stops any background thread.
