@@ -7,7 +7,7 @@ import {
   CycleSize,
   Gaps,
   Hotkey,
-  HotkeyFailure,
+  HotkeyStatus,
   PermissionStatus,
   SubsequentExecutionMode,
   UpdateStatus,
@@ -79,8 +79,8 @@ export const getPermissionStatus = (
   prompt: boolean,
 ): Promise<PermissionStatus> => invoke("get_permission_status", { prompt });
 
-export const getHotkeyFailures = (): Promise<HotkeyFailure[]> =>
-  invoke("get_hotkey_failures");
+export const getHotkeyStatus = (): Promise<HotkeyStatus> =>
+  invoke("get_hotkey_status");
 
 export const getUpdateStatus = (): Promise<UpdateStatus> =>
   invoke("get_update_status");

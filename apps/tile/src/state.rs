@@ -42,7 +42,8 @@ use tile_core::{
     WindowSnapshot,
 };
 use tile_platform::{
-    AnimationSession, HotkeyBackend, HotkeyFailure, PermissionStatus, PlatformError, WindowBackend,
+    AnimationSession, HotkeyApplyReport, HotkeyBackend, HotkeyBinding, PermissionStatus,
+    PlatformError, WindowBackend,
 };
 
 use crate::animate::{self, Interruption, Pacer, SleepPacer};
@@ -52,6 +53,12 @@ use crate::ratelimit::RateLimiter;
 
 /// How long a `PermissionDenied` dialog is suppressed after being shown once.
 const PERMISSION_DIALOG_COOLDOWN: Duration = Duration::from_secs(20);
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HotkeyStatus {
+    pub report: Option<HotkeyApplyReport>,
+    pub apply_error: Option<String>,
+}
 
 /// Locks a mutex, recovering the guard even if a previous holder panicked, so a
 /// poisoned lock can never crash the tray app.
@@ -66,7 +73,7 @@ pub struct AppState {
     engine: Mutex<Engine>,
     build_kind: BuildKind,
     config_dir: Option<PathBuf>,
-    hotkey_failures: Mutex<Vec<HotkeyFailure>>,
+    hotkey_status: Mutex<HotkeyStatus>,
     permission_dialog_limiter: Mutex<RateLimiter>,
     /// Whether the one-time first-run orientation is still owed to the user.
     /// Set once at startup and cleared as soon as the settings UI claims it,
@@ -89,7 +96,7 @@ impl AppState {
             engine: Mutex::new(Engine::new(config)),
             build_kind,
             config_dir,
-            hotkey_failures: Mutex::new(Vec::new()),
+            hotkey_status: Mutex::new(HotkeyStatus::default()),
             permission_dialog_limiter: Mutex::new(RateLimiter::new(PERMISSION_DIALOG_COOLDOWN)),
             orientation_pending: AtomicBool::new(orientation_pending),
         }
@@ -136,9 +143,9 @@ impl AppState {
         lock(&self.engine).config.clone()
     }
 
-    /// The hotkey registrations the OS most recently refused.
-    pub fn hotkey_failures(&self) -> Vec<HotkeyFailure> {
-        lock(&self.hotkey_failures).clone()
+    /// The last confirmed native routes and the latest apply error, if any.
+    pub fn hotkey_status(&self) -> HotkeyStatus {
+        lock(&self.hotkey_status).clone()
     }
 
     /// Reports the OS permission status, optionally prompting the user. The
@@ -261,18 +268,33 @@ impl AppState {
 
     /// Registers the currently bound hotkeys, recording any the OS refused.
     /// Returns the failures for convenience.
-    pub fn apply_hotkeys(&self) -> Vec<HotkeyFailure> {
-        let bindings = lock(&self.engine).config.active_bindings();
+    pub fn apply_hotkeys(&self) -> HotkeyStatus {
+        let config = lock(&self.engine).config.clone();
+        let bindings: Vec<_> = config
+            .active_bindings()
+            .into_iter()
+            .map(|(hotkey, action)| HotkeyBinding {
+                hotkey,
+                action,
+                repeat: action.repeats_while_held(),
+            })
+            .collect();
         let result = lock(&self.hotkeys).apply(&bindings);
-        let failures = match result {
-            Ok(failures) => failures,
+        let mut status = lock(&self.hotkey_status);
+        match result {
+            Ok(report) => {
+                status.apply_error = report.warning.clone();
+                status.report = Some(report);
+            }
             Err(err) => {
                 log::error!("failed to apply hotkeys: {err}");
-                Vec::new()
+                if matches!(err, PlatformError::HotkeyStateUnknown(_)) {
+                    status.report = None;
+                }
+                status.apply_error = Some(err.to_string());
             }
-        };
-        *lock(&self.hotkey_failures) = failures.clone();
-        failures
+        }
+        status.clone()
     }
 
     /// Persists the current config atomically, logging (never panicking) on
@@ -761,7 +783,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use tile_core::{AnimationConfig, Screen};
+    use tile_core::{AnimationConfig, Hotkey, KeyCode, Modifiers, Screen};
 
     use super::*;
 
@@ -1774,10 +1796,10 @@ mod tests {
     impl HotkeyBackend for CountingHotkeyBackend {
         fn apply(
             &mut self,
-            _bindings: &[(tile_core::Hotkey, WindowAction)],
-        ) -> tile_platform::Result<Vec<HotkeyFailure>> {
+            _bindings: &[HotkeyBinding],
+        ) -> tile_platform::Result<HotkeyApplyReport> {
             self.applies.fetch_add(1, Ordering::Relaxed);
-            Ok(Vec::new())
+            Ok(HotkeyApplyReport::default())
         }
 
         fn shutdown(&mut self) {}
@@ -1901,5 +1923,78 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    struct SequencedHotkeyBackend {
+        results: VecDeque<tile_platform::Result<HotkeyApplyReport>>,
+    }
+
+    impl HotkeyBackend for SequencedHotkeyBackend {
+        fn apply(
+            &mut self,
+            _bindings: &[HotkeyBinding],
+        ) -> tile_platform::Result<HotkeyApplyReport> {
+            self.results
+                .pop_front()
+                .expect("unexpected extra hotkey apply")
+        }
+
+        fn shutdown(&mut self) {}
+    }
+
+    #[test]
+    fn failed_reapply_preserves_the_last_confirmed_hotkey_report() {
+        let binding = HotkeyBinding {
+            hotkey: Hotkey::new(Modifiers::META, KeyCode::Left),
+            action: WindowAction::LeftHalf,
+            repeat: false,
+        };
+        let report = HotkeyApplyReport {
+            bindings: vec![tile_platform::HotkeyBindingStatus {
+                binding,
+                route: tile_platform::HotkeyRoute::Registered,
+                reason: None,
+            }],
+            hook_installed: false,
+            warning: None,
+        };
+        let state = AppState::new(
+            Box::new(InertWindowBackend),
+            Box::new(SequencedHotkeyBackend {
+                results: VecDeque::from([
+                    Ok(report.clone()),
+                    Err(PlatformError::os("hotkey apply", "simulated failure")),
+                    Err(PlatformError::HotkeyStateUnknown(
+                        "simulated uncertain ownership".into(),
+                    )),
+                ]),
+            }),
+            Config::default(),
+            BuildKind::Development,
+            None,
+            false,
+        );
+
+        let first = state.apply_hotkeys();
+        assert_eq!(first.report, Some(report.clone()));
+        assert_eq!(first.apply_error, None);
+
+        let second = state.apply_hotkeys();
+        assert_eq!(second.report, Some(report));
+        assert!(second
+            .apply_error
+            .as_deref()
+            .is_some_and(|error| error.contains("simulated failure")));
+
+        let permission_error = PlatformError::PermissionDenied("elevated target".into());
+        assert!(is_permission_denied(&permission_error));
+        assert_eq!(state.hotkey_status(), second);
+
+        let unknown = state.apply_hotkeys();
+        assert_eq!(unknown.report, None);
+        assert!(unknown
+            .apply_error
+            .as_deref()
+            .is_some_and(|error| error.contains("uncertain ownership")));
     }
 }

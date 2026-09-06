@@ -1,7 +1,8 @@
 //! Platform-independent hotkey description.
 //!
-//! Backends translate [`Hotkey`] into native registrations: a `WH_KEYBOARD_LL`
-//! hook on Windows and `RegisterEventHotKey` on macOS.
+//! Backends translate [`Hotkey`] into native registrations. Windows prefers
+//! `RegisterHotKey` and uses `WH_KEYBOARD_LL` only for interception or key
+//! identity that registration cannot provide; macOS uses `RegisterEventHotKey`.
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -240,9 +241,7 @@ impl Hotkey {
         !self.modifiers.is_empty()
     }
 
-    /// True when this hotkey uses the Windows key. Such hotkeys cannot be
-    /// registered with `RegisterHotKey` when the shell already owns them, which
-    /// is why the Windows backend uses a low-level keyboard hook instead.
+    /// True when this hotkey uses the platform meta key.
     pub const fn uses_meta(&self) -> bool {
         self.modifiers.contains(Modifiers::META)
     }

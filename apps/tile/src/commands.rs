@@ -12,7 +12,8 @@ use tile_core::{Config, CycleSize, Gaps, Hotkey, SubsequentExecutionMode, Window
 
 use crate::autostart;
 use crate::dto::{
-    BuildInfoDto, HotkeyFailureDto, PermissionStatusDto, UpdateStatusDto, WelcomeStatusDto,
+    BuildInfoDto, HotkeyBindingStatusDto, HotkeyStatusDto, PermissionStatusDto, UpdateStatusDto,
+    WelcomeStatusDto,
 };
 use crate::state::AppState;
 use crate::update::UpdateManager;
@@ -215,12 +216,26 @@ pub fn get_permission_status(
 }
 
 #[tauri::command]
-pub fn get_hotkey_failures(state: State<'_, Shared>) -> Vec<HotkeyFailureDto> {
-    state
-        .hotkey_failures()
-        .iter()
-        .map(HotkeyFailureDto::from)
-        .collect()
+pub fn get_hotkey_status(state: State<'_, Shared>) -> HotkeyStatusDto {
+    let status = state.hotkey_status();
+    HotkeyStatusDto {
+        bindings: status
+            .report
+            .as_ref()
+            .map(|report| {
+                report
+                    .bindings
+                    .iter()
+                    .map(HotkeyBindingStatusDto::from)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        hook_installed: status
+            .report
+            .as_ref()
+            .is_some_and(|report| report.hook_installed),
+        apply_error: status.apply_error,
+    }
 }
 
 #[tauri::command]

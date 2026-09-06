@@ -233,6 +233,10 @@ body {
   font-size: 13px;
 }
 
+.section__hint--error {
+  color: var(--danger);
+}
+
 .shortcut-subsection {
   margin-bottom: 12px;
 }

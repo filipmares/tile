@@ -80,7 +80,7 @@ pub fn run() {
             commands::get_welcome_status,
             commands::perform_action,
             commands::get_permission_status,
-            commands::get_hotkey_failures,
+            commands::get_hotkey_status,
             commands::get_update_status,
             commands::open_update_window,
             commands::check_for_updates,

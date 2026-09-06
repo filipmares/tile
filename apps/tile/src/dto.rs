@@ -1,13 +1,13 @@
 //! Serializable mirrors of the `tile-platform` types that cross the Tauri
 //! bridge.
 //!
-//! `PermissionStatus` and `HotkeyFailure` live in `tile-platform` and do not
+//! `PermissionStatus` and hotkey route types live in `tile-platform` and do not
 //! derive serde, and that crate is owned by other agents, so we mirror them
 //! here rather than editing it.
 
 use serde::{Deserialize, Serialize};
 use tile_core::{Hotkey, WindowAction};
-use tile_platform::{HotkeyFailure, PermissionStatus};
+use tile_platform::{HotkeyBindingStatus, HotkeyRoute, PermissionStatus};
 
 use crate::build_kind::BuildKind;
 use crate::update::UpdateStatus;
@@ -59,12 +59,30 @@ impl From<PermissionStatus> for PermissionStatusDto {
     }
 }
 
-/// Serializable form of [`HotkeyFailure`].
+/// Serializable form of one binding's current native route.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct HotkeyFailureDto {
+#[serde(rename_all = "camelCase")]
+pub struct HotkeyBindingStatusDto {
     pub hotkey: Hotkey,
     pub action: WindowAction,
-    pub reason: String,
+    pub route: HotkeyRouteDto,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HotkeyRouteDto {
+    Registered,
+    Intercepted,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HotkeyStatusDto {
+    pub bindings: Vec<HotkeyBindingStatusDto>,
+    pub hook_installed: bool,
+    pub apply_error: Option<String>,
 }
 
 /// Serializable update state consumed by the tray-adjacent settings UI.
@@ -129,12 +147,23 @@ impl From<UpdateStatus> for UpdateStatusDto {
     }
 }
 
-impl From<&HotkeyFailure> for HotkeyFailureDto {
-    fn from(failure: &HotkeyFailure) -> Self {
+impl From<HotkeyRoute> for HotkeyRouteDto {
+    fn from(route: HotkeyRoute) -> Self {
+        match route {
+            HotkeyRoute::Registered => Self::Registered,
+            HotkeyRoute::Intercepted => Self::Intercepted,
+            HotkeyRoute::Unavailable => Self::Unavailable,
+        }
+    }
+}
+
+impl From<&HotkeyBindingStatus> for HotkeyBindingStatusDto {
+    fn from(status: &HotkeyBindingStatus) -> Self {
         Self {
-            hotkey: failure.hotkey,
-            action: failure.action,
-            reason: failure.reason.clone(),
+            hotkey: status.binding.hotkey,
+            action: status.binding.action,
+            route: status.route.into(),
+            reason: status.reason.clone(),
         }
     }
 }

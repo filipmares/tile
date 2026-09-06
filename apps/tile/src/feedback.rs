@@ -64,12 +64,42 @@ fn on_permission_denied<R: Runtime>(app: &AppHandle<R>, err: &PlatformError) {
     }
 
     app.dialog()
-        .message(format!(
-            "Tile needs Accessibility permission to move windows.\n\n{err}\n\nGrant it in System \
-             Settings ▸ Privacy & Security ▸ Accessibility, then try again."
-        ))
+        .message(permission_message(err))
         .title("Permission needed")
         .kind(MessageDialogKind::Warning)
         .buttons(MessageDialogButtons::Ok)
         .show(|_| {});
+}
+
+fn permission_message(err: &PlatformError) -> String {
+    if cfg!(target_os = "windows") {
+        format!(
+            "Windows denied Tile permission to move this window.\n\n{err}\n\nThe target may be \
+             running as administrator. Run Tile at the same privilege level, then try again."
+        )
+    } else if cfg!(target_os = "macos") {
+        format!(
+            "Tile needs Accessibility permission to move windows.\n\n{err}\n\nGrant it in System \
+             Settings ▸ Privacy & Security ▸ Accessibility, then try again."
+        )
+    } else {
+        format!("Tile does not have permission to move this window.\n\n{err}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn permission_message_matches_the_platform_boundary() {
+        let error = PlatformError::PermissionDenied("denied".into());
+        let message = permission_message(&error);
+        #[cfg(target_os = "windows")]
+        assert!(message.contains("administrator"));
+        #[cfg(target_os = "macos")]
+        assert!(message.contains("Accessibility"));
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        assert!(message.contains("does not have permission"));
+    }
 }

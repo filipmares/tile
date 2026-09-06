@@ -397,10 +397,22 @@ export interface Config {
 
 export type PermissionStatus = "granted" | "denied" | "not-required";
 
-export interface HotkeyFailure {
+export type HotkeyRoute =
+  | "registered"
+  | "intercepted"
+  | "unavailable";
+
+export interface HotkeyBindingStatus {
   hotkey: Hotkey;
   action: WindowAction;
-  reason: string;
+  route: HotkeyRoute;
+  reason: string | null;
+}
+
+export interface HotkeyStatus {
+  bindings: HotkeyBindingStatus[];
+  hookInstalled: boolean;
+  applyError: string | null;
 }
 
 /** `BuildKindDto` — serde `rename_all = "kebab-case"`. */
