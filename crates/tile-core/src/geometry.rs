@@ -7,6 +7,15 @@
 
 use serde::{Deserialize, Serialize};
 
+/// A direction in the desktop's top-left-origin coordinate space.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
 /// A rectangle in logical (device-independent) pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Rect {
@@ -186,6 +195,61 @@ impl Screen {
         let next = (index as i32 + step).rem_euclid(len) as usize;
         Some(ordered[next])
     }
+
+    /// Nearest display beyond the requested edge, without wrapping. Prefer
+    /// displays overlapping the perpendicular axis over diagonal ones. Full
+    /// bounds, not work areas or DPI scales, describe the physical layout.
+    pub fn in_direction<'a>(
+        screens: &'a [Screen],
+        current: &Screen,
+        direction: Direction,
+    ) -> Option<&'a Screen> {
+        let a = current.frame;
+        screens
+            .iter()
+            .filter(|s| s.id != current.id)
+            .filter_map(|s| {
+                let b = s.frame;
+                let (forward, overlap, cross_gap) = match direction {
+                    Direction::Left | Direction::Right => (
+                        if direction == Direction::Left {
+                            a.x - b.max_x()
+                        } else {
+                            b.x - a.max_x()
+                        },
+                        a.max_y().min(b.max_y()) - a.y.max(b.y),
+                        (a.y - b.max_y()).max(b.y - a.max_y()).max(0.0),
+                    ),
+                    Direction::Up | Direction::Down => (
+                        if direction == Direction::Up {
+                            a.y - b.max_y()
+                        } else {
+                            b.y - a.max_y()
+                        },
+                        a.max_x().min(b.max_x()) - a.x.max(b.x),
+                        (a.x - b.max_x()).max(b.x - a.max_x()).max(0.0),
+                    ),
+                };
+                if forward < 0.0 {
+                    return None;
+                }
+                let (ax, ay) = a.center();
+                let (bx, by) = b.center();
+                Some((
+                    s,
+                    overlap <= 0.0,
+                    forward.hypot(cross_gap),
+                    (ax - bx).hypot(ay - by),
+                ))
+            })
+            .min_by(|a, b| {
+                a.1.cmp(&b.1)
+                    .then(a.2.total_cmp(&b.2))
+                    .then(a.3.total_cmp(&b.3))
+                    .then(a.0.id.cmp(&b.0.id))
+            })
+            .map(|candidate| candidate.0)
+    }
 }
 
 #[cfg(test)]
@@ -278,6 +342,128 @@ mod tests {
             work_area: frame,
             scale_factor: scale,
             is_primary: false,
+        }
+    }
+
+    #[test]
+    fn directions_follow_horizontal_and_vertical_layouts_without_wrapping() {
+        for (x, y, forward, backward, absent) in [
+            (
+                100.0,
+                0.0,
+                Direction::Right,
+                Direction::Left,
+                [Direction::Up, Direction::Down],
+            ),
+            (
+                0.0,
+                -100.0,
+                Direction::Up,
+                Direction::Down,
+                [Direction::Left, Direction::Right],
+            ),
+        ] {
+            let screens = [screen("a", 0.0, 0.0), screen("b", x, y)];
+            assert_eq!(
+                Screen::in_direction(&screens, &screens[0], forward)
+                    .unwrap()
+                    .id,
+                "b"
+            );
+            assert_eq!(
+                Screen::in_direction(&screens, &screens[1], backward)
+                    .unwrap()
+                    .id,
+                "a"
+            );
+            assert!(Screen::in_direction(&screens, &screens[1], forward).is_none());
+            assert!(Screen::in_direction(&screens, &screens[0], backward).is_none());
+            for direction in absent {
+                for current in &screens {
+                    assert!(Screen::in_direction(&screens, current, direction).is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn directional_selection_handles_offsets_gaps_and_mixed_dpi() {
+        let screens = [
+            sized_screen("a", Rect::new(0.0, 0.0, 3840.0, 2160.0), 2.0),
+            sized_screen("above", Rect::new(900.0, -1100.0, 1920.0, 1080.0), 1.0),
+            sized_screen("left", Rect::new(-1080.0, 200.0, 1080.0, 1920.0), 1.5),
+        ];
+        assert_eq!(
+            Screen::in_direction(&screens, &screens[0], Direction::Up)
+                .unwrap()
+                .id,
+            "above"
+        );
+        assert_eq!(
+            Screen::in_direction(&screens, &screens[0], Direction::Left)
+                .unwrap()
+                .id,
+            "left"
+        );
+        assert_eq!(
+            Screen::in_direction(&screens, &screens[1], Direction::Down)
+                .unwrap()
+                .id,
+            "a"
+        );
+        assert!(Screen::in_direction(&screens, &screens[0], Direction::Right).is_none());
+        assert!(Screen::in_direction(&screens, &screens[0], Direction::Down).is_none());
+    }
+
+    #[test]
+    fn directions_prefer_aligned_then_nearest_with_stable_ties() {
+        let current = screen("current", 0.0, 0.0);
+        let mut screens = vec![
+            screen("diagonal", 100.0, 110.0),
+            screen("far", 500.0, 0.0),
+            screen("b", 300.0, 0.0),
+            screen("a", 300.0, 0.0),
+        ];
+        assert_eq!(
+            Screen::in_direction(&screens, &current, Direction::Right)
+                .unwrap()
+                .id,
+            "a"
+        );
+        screens.reverse();
+        assert_eq!(
+            Screen::in_direction(&screens, &current, Direction::Right)
+                .unwrap()
+                .id,
+            "a"
+        );
+        let diagonal = [screen("diagonal", 120.0, -120.0)];
+        assert_eq!(
+            Screen::in_direction(&diagonal, &current, Direction::Right)
+                .unwrap()
+                .id,
+            "diagonal"
+        );
+        assert_eq!(
+            Screen::in_direction(&diagonal, &current, Direction::Up)
+                .unwrap()
+                .id,
+            "diagonal"
+        );
+    }
+
+    #[test]
+    fn directions_ignore_self_and_mirrored_displays() {
+        let screens = [screen("a", 0.0, 0.0), screen("mirror", 0.0, 0.0)];
+        for direction in [
+            Direction::Left,
+            Direction::Right,
+            Direction::Up,
+            Direction::Down,
+        ] {
+            assert!(Screen::in_direction(&[], &screens[0], direction).is_none());
+            assert!(Screen::in_direction(&screens[..1], &screens[0], direction).is_none());
+            assert!(Screen::in_direction(&screens, &screens[0], direction).is_none());
         }
     }
 

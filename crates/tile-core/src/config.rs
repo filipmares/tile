@@ -671,6 +671,7 @@ impl Config {
     pub fn from_json(json: &str) -> Result<Self, ConfigError> {
         let mut config: Config = serde_json::from_str(json)?;
         config.normalize();
+        config.migrate_directional_displays();
         Ok(config)
     }
 
@@ -728,6 +729,44 @@ impl Config {
                 .any(|(a, h)| *a != action && *h == Some(replacement));
             self.bindings
                 .insert(action, (!taken).then_some(replacement));
+        }
+    }
+
+    /// Upgrade the old default arrows once, without stealing custom shortcuts
+    /// or re-enabling actions explicitly unbound in a directional config.
+    fn migrate_directional_displays(&mut self) {
+        if self
+            .bindings
+            .keys()
+            .any(|a| a.display_direction().is_some())
+        {
+            return;
+        }
+        for (action, key, legacy) in [
+            (
+                WindowAction::DisplayLeft,
+                KeyCode::Left,
+                Some(WindowAction::PreviousDisplay),
+            ),
+            (
+                WindowAction::DisplayRight,
+                KeyCode::Right,
+                Some(WindowAction::NextDisplay),
+            ),
+            (WindowAction::DisplayUp, KeyCode::Up, None),
+            (WindowAction::DisplayDown, KeyCode::Down, None),
+        ] {
+            let hotkey = Hotkey::new(DISPLAY_MODIFIERS, key);
+            let upgrade = legacy.map_or(true, |old| self.binding(old) == Some(hotkey));
+            if let Some(old) = legacy.filter(|_| upgrade) {
+                self.bindings.insert(old, None);
+            }
+            let taken = self
+                .bindings
+                .values()
+                .any(|binding| *binding == Some(hotkey));
+            self.bindings
+                .insert(action, (upgrade && !taken).then_some(hotkey));
         }
     }
 
@@ -832,8 +871,7 @@ const BASE_MODIFIERS: Modifiers = Modifiers(Modifiers::CONTROL.0 | Modifiers::AL
 #[cfg(not(target_os = "macos"))]
 const BASE_MODIFIERS: Modifiers = Modifiers::META;
 
-/// The modifier carrying the display throws ([`WindowAction::PreviousDisplay`]
-/// and [`WindowAction::NextDisplay`]).
+/// The modifier carrying the directional display throws.
 ///
 /// The base modifier plus whichever of `Alt`/`Option` and `Win`/`Command` it
 /// does not already hold, which lands on the platform-conventional
@@ -858,8 +896,8 @@ const DISPLAY_MODIFIERS: Modifiers =
 /// — see [`DISPLAY_MODIFIERS`].
 ///
 /// The defaults are the arrows plus Enter, together with the platform's own
-/// move-window-to-display combination on Left/Right to throw the window to the
-/// adjacent display. `Left` and `Right` place the window and carry the side
+/// move-window-to-display combination on all four arrows to throw the window
+/// to a display in that direction. `Left` and `Right` place the window and carry the side
 /// size catalogue by cycling; `Up` cycles the centred column, `Down` restores,
 /// and Enter maximizes. The throws keep the current slot and walk screens:
 ///
@@ -988,12 +1026,20 @@ pub fn default_bindings() -> BTreeMap<WindowAction, Option<Hotkey>> {
     // slot. Size cycling stays on the unmodified arrows.
     let throw = DISPLAY_MODIFIERS;
     map.insert(
-        WindowAction::PreviousDisplay,
+        WindowAction::DisplayLeft,
         Some(Hotkey::new(throw, KeyCode::Left)),
     );
     map.insert(
-        WindowAction::NextDisplay,
+        WindowAction::DisplayRight,
         Some(Hotkey::new(throw, KeyCode::Right)),
+    );
+    map.insert(
+        WindowAction::DisplayUp,
+        Some(Hotkey::new(throw, KeyCode::Up)),
+    );
+    map.insert(
+        WindowAction::DisplayDown,
+        Some(Hotkey::new(throw, KeyCode::Down)),
     );
 
     map
@@ -1006,16 +1052,18 @@ mod tests {
     /// The actions that ship with a default binding.
     ///
     /// Four arrows for tiling, plus Enter for maximize and the display throws
-    /// on Left/Right. Every other action — center, the corners, maximize-height
+    /// on all four arrows. Every other action — center, the corners, maximize-height
     /// and the explicitly-sized thirds and two-thirds — ships unbound.
-    const CORE_BOUND: [WindowAction; 7] = [
+    const CORE_BOUND: [WindowAction; 9] = [
         WindowAction::LeftHalf,
         WindowAction::RightHalf,
         WindowAction::CenterHalf,
         WindowAction::Maximize,
         WindowAction::Restore,
-        WindowAction::PreviousDisplay,
-        WindowAction::NextDisplay,
+        WindowAction::DisplayLeft,
+        WindowAction::DisplayRight,
+        WindowAction::DisplayUp,
+        WindowAction::DisplayDown,
     ];
 
     /// Both horizontal arrows must cycle, because that is the only way the
@@ -1112,8 +1160,10 @@ mod tests {
 
         let throw = DISPLAY_MODIFIERS;
         for (action, key) in [
-            (WindowAction::PreviousDisplay, KeyCode::Left),
-            (WindowAction::NextDisplay, KeyCode::Right),
+            (WindowAction::DisplayLeft, KeyCode::Left),
+            (WindowAction::DisplayRight, KeyCode::Right),
+            (WindowAction::DisplayUp, KeyCode::Up),
+            (WindowAction::DisplayDown, KeyCode::Down),
         ] {
             let hotkey = config.binding(action).expect("display throw must be bound");
             assert_eq!(hotkey.key, key, "{action} lost its throw key");
@@ -1173,8 +1223,10 @@ mod tests {
 
         let throw = DISPLAY_MODIFIERS;
         for (action, key) in [
-            (WindowAction::PreviousDisplay, KeyCode::Left),
-            (WindowAction::NextDisplay, KeyCode::Right),
+            (WindowAction::DisplayLeft, KeyCode::Left),
+            (WindowAction::DisplayRight, KeyCode::Right),
+            (WindowAction::DisplayUp, KeyCode::Up),
+            (WindowAction::DisplayDown, KeyCode::Down),
         ] {
             let hotkey = config.binding(action).expect("display throw must be bound");
             assert_eq!(
@@ -1241,8 +1293,10 @@ mod tests {
 
         let config = Config::default();
         for (action, key) in [
-            (WindowAction::PreviousDisplay, KeyCode::Left),
-            (WindowAction::NextDisplay, KeyCode::Right),
+            (WindowAction::DisplayLeft, KeyCode::Left),
+            (WindowAction::DisplayRight, KeyCode::Right),
+            (WindowAction::DisplayUp, KeyCode::Up),
+            (WindowAction::DisplayDown, KeyCode::Down),
         ] {
             let hotkey = config.binding(action).expect("display throw must be bound");
             assert_eq!(hotkey.key, key);
@@ -1555,6 +1609,9 @@ mod tests {
     fn a_saved_shift_display_throw_migrates_to_the_new_modifiers() {
         let retired = BASE_MODIFIERS.union(Modifiers::SHIFT);
         let mut saved = Config::default();
+        saved
+            .bindings
+            .retain(|action, _| action.display_direction().is_none());
         saved.bindings.insert(
             WindowAction::PreviousDisplay,
             Some(Hotkey::new(retired, KeyCode::Left)),
@@ -1567,11 +1624,11 @@ mod tests {
         let config = Config::from_json(&saved.to_json().unwrap()).unwrap();
 
         assert_eq!(
-            config.binding(WindowAction::PreviousDisplay),
+            config.binding(WindowAction::DisplayLeft),
             Some(Hotkey::new(DISPLAY_MODIFIERS, KeyCode::Left))
         );
         assert_eq!(
-            config.binding(WindowAction::NextDisplay),
+            config.binding(WindowAction::DisplayRight),
             Some(Hotkey::new(DISPLAY_MODIFIERS, KeyCode::Right))
         );
         for (hotkey, action) in config.active_bindings() {
@@ -1616,6 +1673,66 @@ mod tests {
 
         assert_eq!(config.binding(WindowAction::Center), Some(replacement));
         assert_eq!(config.binding(WindowAction::NextDisplay), None);
+        assert!(config.conflicts().is_empty());
+    }
+
+    fn legacy_display_config() -> Config {
+        let mut saved = Config::default();
+        saved
+            .bindings
+            .retain(|action, _| action.display_direction().is_none());
+        saved.set_binding(
+            WindowAction::PreviousDisplay,
+            Some(Hotkey::new(DISPLAY_MODIFIERS, KeyCode::Left)),
+        );
+        saved.set_binding(
+            WindowAction::NextDisplay,
+            Some(Hotkey::new(DISPLAY_MODIFIERS, KeyCode::Right)),
+        );
+        saved
+    }
+
+    #[test]
+    fn legacy_default_arrows_upgrade_to_all_four_directions_once() {
+        let saved = legacy_display_config();
+        let mut config = Config::from_json(&saved.to_json().unwrap()).unwrap();
+        for action in WindowAction::ALL
+            .into_iter()
+            .filter(|a| a.display_direction().is_some())
+        {
+            assert_eq!(config.binding(action), Config::default().binding(action));
+        }
+        assert_eq!(config.binding(WindowAction::PreviousDisplay), None);
+        assert_eq!(config.binding(WindowAction::NextDisplay), None);
+        config.set_binding(WindowAction::DisplayUp, None);
+        config.set_binding(
+            WindowAction::NextDisplay,
+            Some(Hotkey::new(DISPLAY_MODIFIERS, KeyCode::Right)),
+        );
+        let reloaded = Config::from_json(&config.to_json().unwrap()).unwrap();
+        assert_eq!(reloaded.bindings, config.bindings);
+        assert!(reloaded.conflicts().is_empty());
+    }
+
+    #[test]
+    fn directional_upgrade_preserves_custom_disabled_and_conflicting_bindings() {
+        let mut saved = legacy_display_config();
+        let custom = Hotkey::new(Modifiers::CONTROL, KeyCode::F1);
+        saved.set_binding(WindowAction::PreviousDisplay, None);
+        saved.set_binding(WindowAction::NextDisplay, Some(custom));
+        let occupied = Hotkey::new(DISPLAY_MODIFIERS, KeyCode::Up);
+        saved.set_binding(WindowAction::Center, Some(occupied));
+        let config = Config::from_json(&saved.to_json().unwrap()).unwrap();
+        assert_eq!(config.binding(WindowAction::PreviousDisplay), None);
+        assert_eq!(config.binding(WindowAction::NextDisplay), Some(custom));
+        assert_eq!(config.binding(WindowAction::DisplayLeft), None);
+        assert_eq!(config.binding(WindowAction::DisplayRight), None);
+        assert_eq!(config.binding(WindowAction::DisplayUp), None);
+        assert_eq!(config.binding(WindowAction::Center), Some(occupied));
+        assert_eq!(
+            config.binding(WindowAction::DisplayDown),
+            Config::default().binding(WindowAction::DisplayDown)
+        );
         assert!(config.conflicts().is_empty());
     }
 

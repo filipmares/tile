@@ -38,8 +38,8 @@ its own move-window-to-display convention:
 
 | Shortcut                            | Action                                       |
 | ----------------------------------- | -------------------------------------------- |
-| **macOS** `Control`+`Command`+`Option`+`←` `→` | **Previous / next display** — same slot, adjacent monitor |
-| **Windows** `Win`+`Alt`+`←` `→`     | **Previous / next display** — same slot, adjacent monitor |
+| **macOS** `Control`+`Command`+`Option`+`←` `→` `↑` `↓` | **Display left / right / above / below** — same slot |
+| **Windows** `Win`+`Alt`+`←` `→` `↑` `↓` | **Display left / right / above / below** — same slot |
 
 That is the whole default set — **the arrows plus Enter (Return), and the display
 throws.** Both platforms keep the same shape, with the modifier held in the
@@ -76,24 +76,27 @@ The cycle restarts whenever you run a different action, switch to another
 window, or move the window yourself, and `↓` always restores the window
 to where it was **before** Tile first touched it, however long you cycled for.
 
-### Reaching a display by name
+### Moving between displays
 
-The display throw (`Control`+`Command`+`Option`+`←`/`→` on macOS,
-`Win`+`Alt`+`←`/`→` on Windows) steps to the adjacent display and wraps around
-the ends. When you would rather name the monitor outright, **First** through
-**Fourth Display** are also available, unbound by default.
+The display arrows follow the physical layout configured in your OS: use
+`←`/`→` for side-by-side monitors and `↑`/`↓` for stacked monitors. The nearest
+display beyond that edge is selected, preferring displays aligned on that axis
+over diagonal ones. If there is no display in that direction, nothing moves;
+these shortcuts do not wrap.
 
-These throws used to sit on `Shift`+`←`/`→`. Upgrading moves them across
-automatically; `Shift` no longer triggers them, and there is no compatibility
-alias. A throw you had rebound yourself is left exactly as you set it.
+Upgrading replaces the old default previous/next arrows (including the retired
+`Shift` shortcuts) with directional moves and adds up/down when those shortcuts
+are free. Custom bindings are preserved. **Previous / Next Display** remain
+available as rebindable actions that cycle through displays with wraparound.
 
-They count in the same geometric order as the arrows — left to right by
+When you would rather name the monitor outright, **First** through **Fourth
+Display** are also available, unbound by default. They count left to right by
 position, then top to bottom — so "second display" means the same monitor every
 time, whatever order Windows or macOS happened to enumerate them in, and
 whatever the window is doing now. Naming a display that is not plugged in does
 nothing.
 
-Both kinds of throw keep the window's slot where they can: a left third stays a
+All display moves keep the window's slot where they can: a left third stays a
 left third on arrival. A window that is not in a recognisable slot keeps its
 **relative** place instead, so something filling the right half of a 4K panel
 fills the right half of a 1080p one rather than hanging off its edge. That holds

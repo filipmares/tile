@@ -47,6 +47,7 @@ import {
   HotkeyStatus,
   SubsequentExecutionMode,
   UpdateStatus,
+  WelcomeStatus,
   WindowAction,
 } from "./types";
 
@@ -406,7 +407,14 @@ const CYCLING_ACTIONS: WindowAction[] = [
   "bottom-right",
 ];
 
-const DISPLAY_ACTIONS: WindowAction[] = ["previous-display", "next-display"];
+const DISPLAY_ACTIONS: WindowAction[] = [
+  "display-left",
+  "display-right",
+  "display-up",
+  "display-down",
+  "previous-display",
+  "next-display",
+];
 
 /**
  * How long the pane and the tick are given before the deck moves on. The pane
@@ -444,6 +452,7 @@ const walk = {
   /** Real display count and current index; the stage may render at most three. */
   screenCount: 1,
   currentScreen: 0,
+  displayNeighbors: [] as WelcomeStatus["displayNeighbors"],
   pane: FLOATING,
   /** The last action performed, for spotting a repeat. */
   lastAction: null as WindowAction | null,
@@ -541,14 +550,17 @@ function buildSlides(
       : "The work area, not full-screen: your taskbar stays put.",
   );
   if (screenCount > 1) {
-    const displayAction =
-      currentScreen >= screenCount - 1 ? "previous-display" : "next-display";
-    add(
-      "display",
-      displayAction,
-      "Send the window to an adjacent display.",
-      "It keeps its shape while moving across monitors.",
+    const displayAction = DISPLAY_ACTIONS.find(
+      (action) => combo(action) && displayTarget(action, currentScreen) !== null,
     );
+    if (displayAction) {
+      add(
+        "display",
+        displayAction,
+        "Send the window to an adjacent display.",
+        "It keeps its shape while moving across monitors.",
+      );
+    }
   }
 
   return slides;
@@ -631,9 +643,17 @@ function movePane(frame: PaneFrame, snapped: boolean): void {
   renderGhost();
 }
 
+function displayTarget(action: WindowAction, from: number): number | null {
+  if (action === "previous-display" || action === "next-display") {
+    const step = action === "next-display" ? 1 : walk.screenCount - 1;
+    return (from + step) % walk.screenCount;
+  }
+  return walk.displayNeighbors[from]?.[action] ?? null;
+}
+
 /**
- * Where the current slide's shortcut would put the window. This is a promise
- * the engine keeps: the same shapes, the same cycle order, the same wrap.
+ * Where the current slide's shortcut would put the window, using the engine's
+ * directional destinations and the same shapes and cycle order.
  */
 function ghostFrame(): PaneFrame | null {
   const slide = walk.slides[walk.at];
@@ -642,8 +662,8 @@ function ghostFrame(): PaneFrame | null {
   const action = slide.actions[0];
   if (!action) return null;
   if (DISPLAY_ACTIONS.includes(action)) {
-    const step = action === "next-display" ? 1 : walk.screenCount - 1;
-    const target = (walk.currentScreen + step) % walk.screenCount;
+    const target = displayTarget(action, walk.currentScreen);
+    if (target === null) return null;
     return {
       ...walk.pane,
       screen: onStage(target),
@@ -712,8 +732,8 @@ function reflectOnStage(
   const reported = realScreen === null ? null : onStage(realScreen);
 
   if (DISPLAY_ACTIONS.includes(action)) {
-    const step = action === "next-display" ? 1 : walk.screenCount - 1;
-    const target = realScreen ?? (walk.currentScreen + step) % walk.screenCount;
+    const target =
+      realScreen ?? displayTarget(action, walk.currentScreen) ?? walk.currentScreen;
     walk.currentScreen = target;
     const thrown = {
       ...walk.pane,
@@ -1763,7 +1783,12 @@ async function bootWelcome(): Promise<void> {
     cfg?.subsequentExecutionMode === "cycle-sizes" &&
     walk.cycleSizes.length > 0;
 
-  let status = { screenCount: 1, hasMovableWindow: true, currentScreen: 0 };
+  let status: WelcomeStatus = {
+    screenCount: 1,
+    hasMovableWindow: true,
+    currentScreen: 0,
+    displayNeighbors: [],
+  };
   try {
     status = await getWelcomeStatus();
   } catch (err) {
@@ -1774,6 +1799,7 @@ async function bootWelcome(): Promise<void> {
 
   renderStage(status.screenCount);
   walk.screenCount = Math.max(status.screenCount, 1);
+  walk.displayNeighbors = status.displayNeighbors;
   walk.currentScreen = Math.min(
     Math.max(status.currentScreen, 0),
     walk.screenCount - 1,

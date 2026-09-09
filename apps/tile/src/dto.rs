@@ -170,7 +170,7 @@ impl From<&HotkeyBindingStatus> for HotkeyBindingStatusDto {
 
 /// What the welcome window needs to know about the machine it is running on,
 /// so it can only ask the user to do things that would actually work.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WelcomeStatusDto {
     /// Connected displays. One means there is nowhere to throw a window to.
@@ -183,6 +183,7 @@ pub struct WelcomeStatusDto {
     /// to the primary display when `has_movable_window` is false, since there
     /// is then no window to take the answer from.
     pub current_screen: usize,
+    pub display_neighbors: Vec<std::collections::BTreeMap<WindowAction, usize>>,
 }
 
 /// An action the user just performed, reported to the welcome window.
