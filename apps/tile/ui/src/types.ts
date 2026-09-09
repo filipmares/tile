@@ -27,6 +27,10 @@ export const ACTIONS = [
   { id: "right-half", label: "Right Half", family: "halves" },
   { id: "top-half", label: "Top Half", family: "halves" },
   { id: "bottom-half", label: "Bottom Half", family: "halves" },
+  { id: "display-left", label: "Display Left", family: "displays" },
+  { id: "display-right", label: "Display Right", family: "displays" },
+  { id: "display-up", label: "Display Above", family: "displays" },
+  { id: "display-down", label: "Display Below", family: "displays" },
   { id: "previous-display", label: "Previous Display", family: "displays" },
   { id: "next-display", label: "Next Display", family: "displays" },
   { id: "first-display", label: "First Display", family: "displays" },
@@ -454,6 +458,7 @@ export interface WelcomeStatus {
    * is then no window to take the answer from.
    */
   currentScreen: number;
+  displayNeighbors: Partial<Record<WindowAction, number>>[];
 }
 
 /**

@@ -201,6 +201,7 @@ pub fn get_welcome_status(state: State<'_, Shared>) -> Result<WelcomeStatusDto, 
         screen_count,
         has_movable_window,
         current_screen,
+        display_neighbors: state.display_neighbors().map_err(|err| err.to_string())?,
     })
 }
 

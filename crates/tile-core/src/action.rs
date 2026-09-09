@@ -6,7 +6,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use crate::config::{Gaps, SharedEdges, SizeOptions};
-use crate::geometry::Rect;
+use crate::geometry::{Direction, Rect};
 
 /// The family a [`WindowAction`] belongs to.
 ///
@@ -91,6 +91,10 @@ pub enum WindowAction {
     BottomHalf,
     PreviousDisplay,
     NextDisplay,
+    DisplayLeft,
+    DisplayRight,
+    DisplayUp,
+    DisplayDown,
     TopLeft,
     TopRight,
     BottomLeft,
@@ -166,13 +170,17 @@ pub enum WindowAction {
 impl WindowAction {
     /// All actions, grouped by [`WindowFamily`] in the order they appear in
     /// the UI.
-    pub const ALL: [WindowAction; 76] = [
+    pub const ALL: [WindowAction; 80] = [
         // Halves
         WindowAction::LeftHalf,
         WindowAction::RightHalf,
         WindowAction::TopHalf,
         WindowAction::BottomHalf,
         // Displays
+        WindowAction::DisplayLeft,
+        WindowAction::DisplayRight,
+        WindowAction::DisplayUp,
+        WindowAction::DisplayDown,
         WindowAction::PreviousDisplay,
         WindowAction::NextDisplay,
         WindowAction::FirstDisplay,
@@ -270,6 +278,10 @@ impl WindowAction {
             WindowAction::BottomHalf => "bottom-half",
             WindowAction::PreviousDisplay => "previous-display",
             WindowAction::NextDisplay => "next-display",
+            WindowAction::DisplayLeft => "display-left",
+            WindowAction::DisplayRight => "display-right",
+            WindowAction::DisplayUp => "display-up",
+            WindowAction::DisplayDown => "display-down",
             WindowAction::TopLeft => "top-left",
             WindowAction::TopRight => "top-right",
             WindowAction::BottomLeft => "bottom-left",
@@ -352,6 +364,10 @@ impl WindowAction {
             WindowAction::BottomHalf => "Bottom Half",
             WindowAction::PreviousDisplay => "Previous Display",
             WindowAction::NextDisplay => "Next Display",
+            WindowAction::DisplayLeft => "Display Left",
+            WindowAction::DisplayRight => "Display Right",
+            WindowAction::DisplayUp => "Display Above",
+            WindowAction::DisplayDown => "Display Below",
             WindowAction::TopLeft => "Top Left",
             WindowAction::TopRight => "Top Right",
             WindowAction::BottomLeft => "Bottom Left",
@@ -432,7 +448,12 @@ impl WindowAction {
             | WindowAction::RightHalf
             | WindowAction::TopHalf
             | WindowAction::BottomHalf => WindowFamily::Halves,
-            WindowAction::PreviousDisplay | WindowAction::NextDisplay => WindowFamily::Displays,
+            WindowAction::PreviousDisplay
+            | WindowAction::NextDisplay
+            | WindowAction::DisplayLeft
+            | WindowAction::DisplayRight
+            | WindowAction::DisplayUp
+            | WindowAction::DisplayDown => WindowFamily::Displays,
             WindowAction::TopLeft
             | WindowAction::TopRight
             | WindowAction::BottomLeft
@@ -514,8 +535,8 @@ impl WindowAction {
 
     /// Throws that pick another display rather than a rectangle on this one.
     ///
-    /// Covers both the relative throws ([`WindowAction::NextDisplay`] and
-    /// [`WindowAction::PreviousDisplay`]) and the absolute ones that name a
+    /// Covers directional throws, relative throws ([`WindowAction::NextDisplay`]
+    /// and [`WindowAction::PreviousDisplay`]), and the absolute ones that name a
     /// display by its position in [`crate::Screen::geometrically_ordered`].
     /// All of them resolve their destination from the whole screen list, so
     /// like [`WindowAction::uses_history`] they have no computable
@@ -525,6 +546,10 @@ impl WindowAction {
             self,
             WindowAction::PreviousDisplay
                 | WindowAction::NextDisplay
+                | WindowAction::DisplayLeft
+                | WindowAction::DisplayRight
+                | WindowAction::DisplayUp
+                | WindowAction::DisplayDown
                 | WindowAction::FirstDisplay
                 | WindowAction::SecondDisplay
                 | WindowAction::ThirdDisplay
@@ -538,6 +563,16 @@ impl WindowAction {
             WindowAction::PreviousDisplay => -1,
             WindowAction::NextDisplay => 1,
             _ => 0,
+        }
+    }
+
+    pub const fn display_direction(self) -> Option<Direction> {
+        match self {
+            WindowAction::DisplayLeft => Some(Direction::Left),
+            WindowAction::DisplayRight => Some(Direction::Right),
+            WindowAction::DisplayUp => Some(Direction::Up),
+            WindowAction::DisplayDown => Some(Direction::Down),
+            _ => None,
         }
     }
 
@@ -904,6 +939,10 @@ impl WindowAction {
             // function does not have; `Engine::plan` handles them.
             WindowAction::NextDisplay
             | WindowAction::PreviousDisplay
+            | WindowAction::DisplayLeft
+            | WindowAction::DisplayRight
+            | WindowAction::DisplayUp
+            | WindowAction::DisplayDown
             | WindowAction::FirstDisplay
             | WindowAction::SecondDisplay
             | WindowAction::ThirdDisplay
@@ -2177,7 +2216,7 @@ mod tests {
     }
 
     #[test]
-    fn display_actions_are_relative_or_absolute_but_never_both() {
+    fn display_actions_have_exactly_one_destination_strategy() {
         let moving: Vec<&str> = WindowAction::ALL
             .into_iter()
             .filter(|a| a.moves_display())
@@ -2186,6 +2225,10 @@ mod tests {
         assert_eq!(
             moving,
             [
+                "display-left",
+                "display-right",
+                "display-up",
+                "display-down",
                 "previous-display",
                 "next-display",
                 "first-display",
@@ -2197,15 +2240,18 @@ mod tests {
         for action in WindowAction::ALL.into_iter().filter(|a| a.moves_display()) {
             let relative = action.display_step() != 0;
             let absolute = action.display_index().is_some();
-            assert!(
-                relative ^ absolute,
-                "{action} must be exactly one of relative or absolute"
+            let directional = action.display_direction().is_some();
+            assert_eq!(
+                usize::from(relative) + usize::from(absolute) + usize::from(directional),
+                1,
+                "{action} must have exactly one destination strategy"
             );
         }
         // And an action that does not move displays claims neither.
         for action in WindowAction::ALL.into_iter().filter(|a| !a.moves_display()) {
             assert_eq!(action.display_step(), 0, "{action}");
             assert_eq!(action.display_index(), None, "{action}");
+            assert_eq!(action.display_direction(), None, "{action}");
         }
     }
 

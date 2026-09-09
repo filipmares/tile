@@ -163,6 +163,29 @@ impl AppState {
         Ok(lock(&self.backend).screens()?.len())
     }
 
+    /// Directional destinations in the same geometric order as the welcome
+    /// stage. Resolve them with the engine's geometry rather than guessing in JS.
+    pub fn display_neighbors(
+        &self,
+    ) -> tile_platform::Result<Vec<std::collections::BTreeMap<WindowAction, usize>>> {
+        let screens = lock(&self.backend).screens()?;
+        let ordered = Screen::geometrically_ordered(&screens);
+        Ok(ordered
+            .iter()
+            .map(|screen| {
+                WindowAction::ALL
+                    .iter()
+                    .filter_map(|action| {
+                        let direction = action.display_direction()?;
+                        let destination = Screen::in_direction(&screens, screen, direction)?;
+                        let index = ordered.iter().position(|s| s.id == destination.id)?;
+                        Some((*action, index))
+                    })
+                    .collect()
+            })
+            .collect())
+    }
+
     /// Whether anything Tile could move is focused right now.
     ///
     /// Tile skips its own windows, so this stays true while the welcome window
@@ -1731,6 +1754,21 @@ mod tests {
     }
 
     #[test]
+    fn welcome_display_neighbors_match_directional_moves_and_bridge_keys() {
+        let state = state_looking_at(None);
+        let neighbors = state.display_neighbors().unwrap();
+        assert_eq!(neighbors.len(), 2);
+        assert_eq!(neighbors[0].len(), 1);
+        assert_eq!(neighbors[0].get(&WindowAction::DisplayRight), Some(&1));
+        assert_eq!(neighbors[1].len(), 1);
+        assert_eq!(neighbors[1].get(&WindowAction::DisplayLeft), Some(&0));
+        assert_eq!(
+            serde_json::to_value(&neighbors).unwrap(),
+            serde_json::json!([{"display-right": 1}, {"display-left": 0}])
+        );
+    }
+
+    #[test]
     fn a_window_on_the_leftmost_display_is_the_first_screen() {
         let state = state_looking_at(Some(Rect::new(-1800.0, 300.0, 800.0, 600.0)));
         assert_eq!(state.current_screen_index().unwrap(), 0);
@@ -1758,7 +1796,7 @@ mod tests {
         apply_once(
             &backend,
             &mut engine,
-            WindowAction::PreviousDisplay,
+            WindowAction::DisplayLeft,
             &mut |report| seen.push(report.screen),
         )
         .unwrap();

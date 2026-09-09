@@ -18,7 +18,7 @@ pub use config::{
     AnimationConfig, Config, ConfigError, Conflict, CycleSize, Gaps, SharedEdges, SizeOptions,
     SubsequentExecutionMode, CONFIG_FILE_NAME, MAX_GAP,
 };
-pub use geometry::{Rect, Screen};
+pub use geometry::{Direction, Rect, Screen};
 pub use history::{WindowHistory, WindowId};
 pub use hotkey::{Hotkey, KeyCode, Modifiers, ParseHotkeyError};
 
@@ -192,7 +192,8 @@ impl Engine {
     /// Throws `window` to another display, keeping its current tile slot when
     /// the frame matches one, otherwise mapping it proportionally.
     ///
-    /// Handles both kinds of display action. The relative throws step through
+    /// Directional throws follow the desktop layout without wrapping.
+    /// The relative throws step through
     /// [`Screen::geometrically_ordered`] and wrap; the absolute ones name a
     /// position in that same order, so "second display" means the same screen
     /// however many times it is pressed.
@@ -205,18 +206,25 @@ impl Engine {
         let Some(from) = Screen::best_match(screens, &window.frame) else {
             return Plan::NoOp(NoOpReason::NoScreen);
         };
-        let dest = match action.display_index() {
-            // An index past the end means that display is not plugged in,
-            // which is a no-op rather than a move to the nearest one — a
-            // window silently landing on the wrong screen would be worse.
-            Some(index) => match Screen::geometrically_ordered(screens).get(index) {
-                Some(screen) => *screen,
-                None => return Plan::NoOp(NoOpReason::NoScreen),
-            },
-            None => match Screen::adjacent(screens, from, action.display_step()) {
+        let dest = if let Some(direction) = action.display_direction() {
+            match Screen::in_direction(screens, from, direction) {
                 Some(screen) => screen,
-                None => return Plan::NoOp(NoOpReason::AlreadyInPosition),
-            },
+                None => return Plan::NoOp(NoOpReason::NoScreen),
+            }
+        } else {
+            match action.display_index() {
+                // An index past the end means that display is not plugged in,
+                // which is a no-op rather than a move to the nearest one — a
+                // window silently landing on the wrong screen would be worse.
+                Some(index) => match Screen::geometrically_ordered(screens).get(index) {
+                    Some(screen) => *screen,
+                    None => return Plan::NoOp(NoOpReason::NoScreen),
+                },
+                None => match Screen::adjacent(screens, from, action.display_step()) {
+                    Some(screen) => screen,
+                    None => return Plan::NoOp(NoOpReason::AlreadyInPosition),
+                },
+            }
         };
         if dest.id == from.id {
             return Plan::NoOp(NoOpReason::AlreadyInPosition);
@@ -921,6 +929,107 @@ mod tests {
                 is_primary: false,
             },
         ]
+    }
+
+    #[test]
+    fn directional_display_moves_preserve_slots_and_restore() {
+        for (action, reverse, x, y) in [
+            (
+                WindowAction::DisplayLeft,
+                WindowAction::DisplayRight,
+                -1280.0,
+                0.0,
+            ),
+            (
+                WindowAction::DisplayRight,
+                WindowAction::DisplayLeft,
+                1920.0,
+                0.0,
+            ),
+            (
+                WindowAction::DisplayUp,
+                WindowAction::DisplayDown,
+                300.0,
+                -800.0,
+            ),
+            (
+                WindowAction::DisplayDown,
+                WindowAction::DisplayUp,
+                300.0,
+                1080.0,
+            ),
+        ] {
+            let mut engine = Engine::default();
+            let mut screens = dual_screens();
+            screens[1].frame.x = x;
+            screens[1].frame.y = y;
+            screens[1].work_area.x = x;
+            screens[1].work_area.y = y;
+            screens[1].scale_factor = 1.5;
+            let win = WindowSnapshot {
+                id: 1,
+                frame: Rect::new(0.0, 0.0, 960.0, 1040.0),
+            };
+            let target = moved_to(engine.plan(action, &win, &screens));
+            assert_eq!(target, Rect::new(x, y, 640.0, 760.0));
+            engine.commit(action, &win, target);
+            let moved = WindowSnapshot {
+                id: win.id,
+                frame: target,
+            };
+            assert_eq!(
+                engine.plan(action, &moved, &screens),
+                Plan::NoOp(NoOpReason::NoScreen)
+            );
+            assert_eq!(moved_to(engine.plan(reverse, &moved, &screens)), win.frame);
+            assert_eq!(
+                moved_to(engine.plan(WindowAction::Restore, &moved, &screens)),
+                win.frame
+            );
+        }
+    }
+
+    #[test]
+    fn directional_moves_use_live_layout_and_do_not_move_on_missing_sides() {
+        let engine = Engine::default();
+        let win = WindowSnapshot {
+            id: 1,
+            frame: Rect::new(192.0, 104.0, 384.0, 208.0),
+        };
+        let mut screens = dual_screens();
+        assert_eq!(
+            moved_to(engine.plan(WindowAction::DisplayRight, &win, &screens)),
+            Rect::new(2048.0, 76.0, 256.0, 152.0)
+        );
+        screens[1].frame = Rect::new(0.0, -800.0, 1280.0, 800.0);
+        screens[1].work_area = Rect::new(0.0, -800.0, 1280.0, 760.0);
+        assert_eq!(
+            moved_to(engine.plan(WindowAction::DisplayUp, &win, &screens)),
+            Rect::new(128.0, -724.0, 256.0, 152.0)
+        );
+        for action in [
+            WindowAction::DisplayLeft,
+            WindowAction::DisplayRight,
+            WindowAction::DisplayDown,
+        ] {
+            assert_eq!(
+                engine.plan(action, &win, &screens),
+                Plan::NoOp(NoOpReason::NoScreen)
+            );
+        }
+        for action in WindowAction::ALL
+            .into_iter()
+            .filter(|a| a.display_direction().is_some())
+        {
+            assert_eq!(
+                engine.plan(action, &win, &screens[..1]),
+                Plan::NoOp(NoOpReason::NoScreen)
+            );
+            assert_eq!(
+                engine.plan(action, &win, &[]),
+                Plan::NoOp(NoOpReason::NoScreen)
+            );
+        }
     }
 
     #[test]
