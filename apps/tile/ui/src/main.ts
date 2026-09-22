@@ -1796,6 +1796,7 @@ async function bootWelcome(): Promise<void> {
       dom.welcomeDismiss.disabled = false;
     }
   });
+  dom.welcomeLaunch.disabled = false;
   walk.cycleSizes = cfg?.cycleSizes ?? [];
   walk.cycles =
     cfg?.subsequentExecutionMode === "cycle-sizes" &&
