@@ -650,7 +650,7 @@ impl Default for Config {
         Self {
             bindings: default_bindings(),
             gaps: Gaps::default(),
-            launch_on_login: false,
+            launch_on_login: true,
             almost_maximize_width: default_almost_maximize_fraction(),
             almost_maximize_height: default_almost_maximize_fraction(),
             size_step: default_step(),
@@ -1763,6 +1763,12 @@ mod tests {
             config.animation.duration_ms
         )));
         assert_eq!(Config::from_json(&json).unwrap(), config);
+    }
+
+    #[test]
+    fn launch_on_login_defaults_on() {
+        assert!(Config::default().launch_on_login);
+        assert!(Config::from_json("{}").unwrap().launch_on_login);
     }
 
     #[test]

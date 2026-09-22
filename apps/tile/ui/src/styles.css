@@ -980,6 +980,19 @@ select {
   line-height: 1.5;
 }
 
+.welcome__startup {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.welcome__startup input {
+  margin: 0;
+}
+
 /* The cycle laid out as its actual fractions: what is left to see, and what
    the cycle contains. Tabular figures keep the row from shifting as states
    change. */

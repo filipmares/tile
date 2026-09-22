@@ -6,6 +6,10 @@ Tile is a cross-platform window management app built from scratch in Rust. Snap
 the focused window to halves and thirds of the screen, maximize it, or undo the
 last move — all from the arrow keys.
 
+The first-run guide offers **Launch Tile when I log in**, enabled by default so
+the shortcuts are ready after a restart. The same setting remains available in
+Settings and is restored to on by **Restore defaults**.
+
 > **Status: early days.** Tile implements 76 window actions — halves, thirds,
 > two-thirds, fourths, corner thirds, sixths, ninths, corners, maximize,
 > maximize-height, almost-maximize, center, restore, display throws, and

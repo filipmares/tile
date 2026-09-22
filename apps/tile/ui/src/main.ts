@@ -119,6 +119,7 @@ const dom = {
   welcomeProgress: el<HTMLParagraphElement>("#welcome-progress"),
   welcomeNote: el<HTMLParagraphElement>("#welcome-note"),
   welcomeDismiss: el<HTMLButtonElement>("#welcome-dismiss"),
+  welcomeLaunch: el<HTMLInputElement>("#welcome-launch-on-login"),
   grant: el<HTMLButtonElement>("#grant-permission"),
   openAccessibility: el<HTMLButtonElement>("#open-accessibility"),
   developmentPanel: el<HTMLElement>("#development-panel"),
@@ -1778,6 +1779,23 @@ async function bootWelcome(): Promise<void> {
   } catch (err) {
     console.error("could not load settings for the welcome screen", err);
   }
+  dom.welcomeLaunch.checked = cfg?.launchOnLogin ?? true;
+  dom.welcomeLaunch.addEventListener("change", async () => {
+    const desired = dom.welcomeLaunch.checked;
+    dom.welcomeLaunch.disabled = true;
+    dom.welcomeDismiss.disabled = true;
+    try {
+      cfg = await setLaunchOnLogin(desired);
+      dom.welcomeLaunch.checked = cfg.launchOnLogin;
+      setWalkNote(null);
+    } catch (err) {
+      dom.welcomeLaunch.checked = cfg?.launchOnLogin ?? true;
+      setWalkNote(`Could not update launch-at-login: ${String(err)}`);
+    } finally {
+      dom.welcomeLaunch.disabled = false;
+      dom.welcomeDismiss.disabled = false;
+    }
+  });
   walk.cycleSizes = cfg?.cycleSizes ?? [];
   walk.cycles =
     cfg?.subsequentExecutionMode === "cycle-sizes" &&
