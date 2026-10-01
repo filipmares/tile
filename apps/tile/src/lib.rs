@@ -11,6 +11,7 @@ mod commands;
 mod config_store;
 mod dto;
 mod feedback;
+mod logging;
 mod ratelimit;
 mod state;
 mod tray;
@@ -36,8 +37,9 @@ const PERMISSION_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Runs the Tile application. Blocks until the app exits.
 pub fn run() {
-    // Logging must never take down the app; ignore a double-init.
-    let _ = env_logger::try_init();
+    let build_kind = BuildKind::detect();
+    logging::init(build_kind);
+    log_launch(build_kind);
 
     let context = tauri::generate_context!();
     let mut builder = tauri::Builder::default();
@@ -45,7 +47,7 @@ pub fn run() {
     // Before every other plugin, which is what this one requires: it has to
     // claim the lock and hand off to the running copy before anything else
     // starts building state this process is about to throw away.
-    if BuildKind::detect().enforces_single_instance() {
+    if build_kind.enforces_single_instance() {
         builder = builder.plugin(tauri_plugin_single_instance::init(answer_second_launch));
     }
 
@@ -55,7 +57,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
-            None,
+            Some(vec![autostart::AUTOSTART_ARG]),
         ))
         .invoke_handler(tauri::generate_handler![
             commands::get_config,
@@ -83,7 +85,13 @@ pub fn run() {
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
-            setup_app(&handle)?;
+            if let Err(err) = setup_app(&handle) {
+                // `setup_app` claimed the session, and this process now exits
+                // without entering the event loop, so `RunEvent::Exit` will
+                // never clear the marker. This is a handled failure, not a crash.
+                logging::end_session(&format!("setup failed: {err}"));
+                return Err(err);
+            }
             Ok(())
         })
         .build(context);
@@ -98,18 +106,57 @@ pub fn run() {
             RunEvent::ExitRequested { code, api, .. } => {
                 if code.is_none() {
                     api.prevent_exit();
+                } else {
+                    log::info!("exit requested with code {code:?}");
                 }
             }
             // Release the keyboard hook however the app is being torn down, not
-            // just via the tray, so the hook never outlives the process.
+            // just via the tray, so the hook never outlives the process. This
+            // also fires when Windows ends the session (sign-out, shutdown).
             RunEvent::Exit => {
                 if let Some(state) = app.try_state::<Arc<AppState>>() {
                     state.shutdown_hotkeys();
                 }
+                logging::end_session("event loop finished");
             }
             _ => {}
         }),
-        Err(err) => log::error!("failed to start Tile: {err}"),
+        Err(err) => {
+            // Setup failed, so Tile is about to exit without ever showing a
+            // tray icon. At sign-in that is indistinguishable from "did not
+            // start" unless it is written down.
+            log::error!("failed to start Tile: {err}");
+            log::logger().flush();
+        }
+    }
+}
+
+/// The first lines of every log session: enough to tell from the log alone
+/// which build ran, from where, and whether the OS login item launched it.
+fn log_launch(build_kind: BuildKind) {
+    let args: Vec<String> = std::env::args().collect();
+    let exe = std::env::current_exe()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|err| format!("<unknown: {err}>"));
+    let source = if autostart::launched_by_login_item(args.iter().skip(1)) {
+        "the OS login item"
+    } else {
+        "a manual launch, an installer, or an updater"
+    };
+    log::info!(
+        "Tile {} starting (pid {}, {build_kind:?} build, {} {}) via {source}",
+        env!("CARGO_PKG_VERSION"),
+        std::process::id(),
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    );
+    log::info!(
+        "executable: {exe}; arguments: {:?}",
+        &args[1.min(args.len())..]
+    );
+    match logging::active_log_dir() {
+        Some(dir) => log::info!("logging to {}", dir.display()),
+        None => log::warn!("no log directory; logging to stderr only"),
     }
 }
 
@@ -121,8 +168,15 @@ pub fn run() {
 /// Exiting in silence would look like a failure to start, so the running copy
 /// opens settings: the same window the tray offers, and proof of which process
 /// owns the shortcuts.
-fn answer_second_launch<R: Runtime>(app: &AppHandle<R>, _argv: Vec<String>, _cwd: String) {
-    log::info!("a second Tile was launched; surfacing the copy that is already running");
+fn answer_second_launch<R: Runtime>(app: &AppHandle<R>, argv: Vec<String>, _cwd: String) {
+    if autostart::launched_by_login_item(argv.iter().skip(1)) {
+        // The login item fired while Tile was already up (for example after a
+        // fast sign-out/sign-in). Nothing to surface; the copy that is running
+        // is the one the login item wanted.
+        log::info!("the OS login item launched Tile again; it is already running");
+        return;
+    }
+    log::info!("a second Tile was launched ({argv:?}); surfacing the copy that is already running");
     let Some(state) = app.try_state::<Arc<AppState>>() else {
         // Setup has not run yet, so there is no settings window to open and
         // nothing the newcomer needed that this copy is not about to do anyway.
@@ -137,6 +191,10 @@ fn answer_second_launch<R: Runtime>(app: &AppHandle<R>, _argv: Vec<String>, _cwd
 /// and kicks off permission handling. Runs on the main thread inside Tauri's
 /// `setup`, which is where the macOS hotkey backend must be created.
 fn setup_app<R: Runtime>(app: &AppHandle<R>) -> Result<(), Box<dyn std::error::Error>> {
+    // Only the instance that owns the app gets here (a second launch has
+    // already handed off), so this is the place to claim the session.
+    logging::begin_session();
+
     // One channel feeds the worker thread. Hotkeys arrive on their own
     // channel, because the platform backends speak plain `WindowAction`s, and
     // are forwarded into it; tray menu clicks are sent straight in as exact
@@ -184,6 +242,13 @@ fn setup_app<R: Runtime>(app: &AppHandle<R>) -> Result<(), Box<dyn std::error::E
     let show_orientation = loaded.is_first_run() && !loaded.config.orientation_shown;
     let config = loaded.config;
     let launch_on_login = config.launch_on_login;
+    log::info!(
+        "config loaded from {} (launch on login: {launch_on_login})",
+        config_dir
+            .as_deref()
+            .map(|dir| dir.display().to_string())
+            .unwrap_or_else(|| "<memory only>".into())
+    );
 
     let state = Arc::new(AppState::new(
         window_backend,
@@ -255,6 +320,7 @@ fn setup_app<R: Runtime>(app: &AppHandle<R>) -> Result<(), Box<dyn std::error::E
     begin_permission_flow(app, state);
     update::begin_update_checks(app.clone(), updates);
 
+    log::info!("Tile is running");
     Ok(())
 }
 

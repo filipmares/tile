@@ -557,6 +557,7 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str, kind: BuildKind) 
             }
         }
         ID_QUIT => {
+            log::info!("Quit chosen from the tray menu");
             app.state::<Arc<AppState>>().shutdown_hotkeys();
             app.exit(0);
         }
