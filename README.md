@@ -71,8 +71,8 @@ The tray (Windows) or menu-bar (macOS) menu offers the common layouts with a
 click, each showing its current shortcut, so it doubles as a cheat sheet:
 
 ```text
-Left   ▸  ½  ⅔  ⅓  ·  Top Left ▸ ½ ⅔ ⅓  ·  Bottom Left ▸ ½ ⅔ ⅓
-Right  ▸  ½  ⅔  ⅓  ·  Top Right ▸ ½ ⅔ ⅓ ·  Bottom Right ▸ ½ ⅔ ⅓
+Left   ▸  ½  ⅔  ⅓  ·  Top ▸ ½ ⅔ ⅓  ·  Bottom ▸ ½ ⅔ ⅓
+Right  ▸  ½  ⅔  ⅓  ·  Top ▸ ½ ⅔ ⅓  ·  Bottom ▸ ½ ⅔ ⅓
 Center Column  ▸  ½  ⅔  ⅓
 Top Half · Bottom Half
 Maximize · Almost Maximize · Center · Restore

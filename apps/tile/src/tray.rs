@@ -71,7 +71,7 @@ const LEFT: &[Entry] = &[
     Entry::Labelled("⅓", WindowAction::FirstThird),
     Entry::Separator,
     Entry::Sized(
-        "Top Left",
+        "Top",
         [
             WindowAction::TopLeft,
             WindowAction::TopLeftThird,
@@ -79,7 +79,7 @@ const LEFT: &[Entry] = &[
         ],
     ),
     Entry::Sized(
-        "Bottom Left",
+        "Bottom",
         [
             WindowAction::BottomLeft,
             WindowAction::BottomLeftThird,
@@ -94,7 +94,7 @@ const RIGHT: &[Entry] = &[
     Entry::Labelled("⅓", WindowAction::LastThird),
     Entry::Separator,
     Entry::Sized(
-        "Top Right",
+        "Top",
         [
             WindowAction::TopRight,
             WindowAction::TopRightThird,
@@ -102,7 +102,7 @@ const RIGHT: &[Entry] = &[
         ],
     ),
     Entry::Sized(
-        "Bottom Right",
+        "Bottom",
         [
             WindowAction::BottomRight,
             WindowAction::BottomRightThird,
