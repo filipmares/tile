@@ -94,7 +94,13 @@ pub fn run() {
                 Some(rx) => rx,
                 None => return Err("setup invoked more than once".into()),
             };
-            setup_app(&handle, tx.clone(), rx)?;
+            if let Err(err) = setup_app(&handle, tx.clone(), rx) {
+                // `setup_app` claimed the session, and this process now exits
+                // without entering the event loop, so `RunEvent::Exit` will
+                // never clear the marker. This is a handled failure, not a crash.
+                logging::end_session(&format!("setup failed: {err}"));
+                return Err(err);
+            }
             Ok(())
         })
         .build(context);

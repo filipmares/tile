@@ -3,6 +3,16 @@
 
 !include LogicLib.nsh
 
+; Only a release package may touch the login item, mirroring
+; BuildKind::manages_autostart in apps/tile/src/build_kind.rs. The release
+; workflow sets TILE_BUILD_KIND=installed for the whole job, and makensis
+; inherits it from the Tauri CLI; $%VAR% reads it at compile time. A locally
+; built installer contains a development binary, which never manages (and so
+; could never remove) the login item, so it must not create one.
+!if "$%TILE_BUILD_KIND%" == "installed"
+  !define TILE_MANAGES_LOGIN_ITEM
+!endif
+
 ; Restores the OS login item after every install.
 ;
 ; Tauri's uninstaller deletes HKCU\...\Run\Tile unless it runs with /UPDATE,
@@ -21,38 +31,48 @@
 ; so anything that uses them lives in the macro, which is only expanded inside
 ; the Install section, after those defines.
 !macro NSIS_HOOK_POSTINSTALL
-  Push $0
-  Push $1
+  !ifdef TILE_MANAGES_LOGIN_ITEM
+    Push $0
+    Push $1
 
-  ReadEnvStr $0 APPDATA
-  Push "$0\Tile\Tile\config\config.json"
-  Call TileLaunchOnLoginDisabled
-  Pop $1
+    ReadEnvStr $0 APPDATA
+    Push "$0\Tile\Tile\config\config.json"
+    Call TileLaunchOnLoginDisabled
+    Pop $1
 
-  ${If} $1 == 1
-    DetailPrint "Launch on login is off in Tile's settings; leaving the login item alone."
-  ${Else}
-    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCTNAME}" '"$INSTDIR\${MAINBINARYNAME}.exe" --autostart'
-    DetailPrint "Registered ${PRODUCTNAME} to start at sign-in."
-  ${EndIf}
+    ${If} $1 == 1
+      DetailPrint "Launch on login is off in Tile's settings; leaving the login item alone."
+    ${Else}
+      WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCTNAME}" '"$INSTDIR\${MAINBINARYNAME}.exe" --autostart'
+      DetailPrint "Registered ${PRODUCTNAME} to start at sign-in."
+    ${EndIf}
 
-  Pop $1
-  Pop $0
+    Pop $1
+    Pop $0
+  !else
+    DetailPrint "Development package: leaving the login item alone."
+  !endif
 !macroend
 
+!ifdef TILE_MANAGES_LOGIN_ITEM
 ; Input on the stack: path to Tile's config.json.
 ; Output on the stack: 1 if it contains "launchOnLogin": false, else 0.
-; Whitespace is ignored, so any formatting serde_json produces matches.
+;
+; Whitespace is skipped and the last 21 non-whitespace characters are kept in
+; a rolling window that carries across lines and read-buffer boundaries, so
+; the key and value may be split over lines in any way JSON allows while the
+; window never grows past the target's length.
 Function TileLaunchOnLoginDisabled
   Exch $0 ; path
   Push $1 ; file handle
-  Push $2 ; line read
-  Push $3 ; line with whitespace removed
-  Push $4 ; index
-  Push $5 ; char / candidate
+  Push $2 ; chunk read
+  Push $3 ; rolling window of non-whitespace characters
+  Push $4 ; index into the chunk
+  Push $5 ; current character
   Push $6 ; result
-
+  Push $7 ; window length
   StrCpy $6 0
+  StrCpy $3 ""
   ClearErrors
   FileOpen $1 $0 r
   ${IfNot} ${Errors}
@@ -63,33 +83,28 @@ Function TileLaunchOnLoginDisabled
         ${Break}
       ${EndIf}
 
-      StrCpy $3 ""
       StrCpy $4 0
       ${Do}
         StrCpy $5 $2 1 $4
         ${If} $5 == ""
           ${Break}
         ${EndIf}
-        ${If} $5 != " "
-        ${AndIf} $5 != "$\t"
-        ${AndIf} $5 != "$\r"
-        ${AndIf} $5 != "$\n"
-          StrCpy $3 "$3$5"
-        ${EndIf}
         IntOp $4 $4 + 1
-      ${Loop}
-
-      StrCpy $4 0
-      ${Do}
-        StrCpy $5 $3 21 $4
-        ${If} $5 == ""
-          ${Break}
+        ${If} $5 == " "
+        ${OrIf} $5 == "$\t"
+        ${OrIf} $5 == "$\r"
+        ${OrIf} $5 == "$\n"
+          ${Continue}
         ${EndIf}
-        ${If} $5 S== '"launchOnLogin":false'
+        StrCpy $3 "$3$5"
+        StrLen $7 $3
+        ${If} $7 > 21
+          StrCpy $3 $3 "" 1
+        ${EndIf}
+        ${If} $3 S== '"launchOnLogin":false'
           StrCpy $6 1
           ${Break}
         ${EndIf}
-        IntOp $4 $4 + 1
       ${Loop}
 
       ${If} $6 == 1
@@ -100,6 +115,7 @@ Function TileLaunchOnLoginDisabled
   ${EndIf}
 
   StrCpy $0 $6
+  Pop $7
   Pop $6
   Pop $5
   Pop $4
@@ -108,3 +124,4 @@ Function TileLaunchOnLoginDisabled
   Pop $1
   Exch $0
 FunctionEnd
+!endif

@@ -6,6 +6,11 @@
 //! directory, so a launch that never happened, a silent exit, or a panic leaves
 //! a trail that can be read afterwards.
 //!
+//! Only the process that owns the session rotates the file. Logging starts
+//! before the single-instance handoff, so a second launch that is about to
+//! exit also writes a few lines; it only ever appends, so it cannot rename
+//! `tile.log` out from under the running copy's open handle.
+//!
 //! Alongside the log, a small session marker is written while Tile runs and
 //! removed on every orderly exit (tray Quit, Windows sign-out/shutdown, an
 //! updater handoff). Finding it at startup means the previous process ended
@@ -16,7 +21,7 @@ use std::backtrace::Backtrace;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use directories::ProjectDirs;
 
@@ -32,6 +37,7 @@ const KEPT_ROTATIONS: usize = 4;
 const SESSION_MARKER: &str = "session.running";
 
 static LOG_DIR: OnceLock<PathBuf> = OnceLock::new();
+static LOG_FILE: OnceLock<Mutex<RotatingFile>> = OnceLock::new();
 
 /// Where the logs of this kind of build live.
 ///
@@ -53,19 +59,18 @@ pub fn active_log_dir() -> Option<&'static Path> {
 ///
 /// The level defaults to `info` and can be overridden with `RUST_LOG`.
 pub fn init(kind: BuildKind) {
-    let file = log_dir(kind).and_then(|dir| match RotatingFile::open(&dir) {
-        Ok(file) => {
-            let _ = LOG_DIR.set(dir);
-            Some(file)
-        }
-        Err(err) => {
-            eprintln!(
+    if let Some(dir) = log_dir(kind) {
+        match RotatingFile::open(&dir) {
+            Ok(file) => {
+                let _ = LOG_FILE.set(Mutex::new(file));
+                let _ = LOG_DIR.set(dir);
+            }
+            Err(err) => eprintln!(
                 "tile: could not open a log file in {}: {err}",
                 dir.display()
-            );
-            None
+            ),
         }
-    });
+    }
 
     let mut builder =
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"));
@@ -84,7 +89,7 @@ pub fn init(kind: BuildKind) {
             )
         })
         .write_style(env_logger::WriteStyle::Never)
-        .target(env_logger::Target::Pipe(Box::new(Sink { file })));
+        .target(env_logger::Target::Pipe(Box::new(Sink)));
     // Logging must never take down the app; ignore a double-init.
     let _ = builder.try_init();
 
@@ -101,6 +106,11 @@ pub fn begin_session() {
     let Some(dir) = active_log_dir() else {
         return;
     };
+    if let Some(file) = LOG_FILE.get() {
+        if let Err(err) = lock(file).enable_rotation() {
+            eprintln!("tile: could not rotate the log file: {err}");
+        }
+    }
     let marker = dir.join(SESSION_MARKER);
     if let Ok(previous) = fs::read_to_string(&marker) {
         log::warn!(
@@ -147,14 +157,12 @@ fn install_panic_hook() {
 
 /// The logger's output: the rotating file when there is one, and stderr
 /// always (a no-op in a windowless release build, the terminal in development).
-struct Sink {
-    file: Option<RotatingFile>,
-}
+struct Sink;
 
 impl Write for Sink {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        if let Some(file) = &mut self.file {
-            if let Err(err) = file.write_record(buf) {
+        if let Some(file) = LOG_FILE.get() {
+            if let Err(err) = lock(file).write_record(buf) {
                 eprintln!("tile: log file write failed: {err}");
             }
         }
@@ -163,47 +171,70 @@ impl Write for Sink {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        if let Some(file) = &mut self.file {
-            let _ = file.file.flush();
+        if let Some(file) = LOG_FILE.get() {
+            let _ = lock(file).file.flush();
         }
         let _ = io::stderr().flush();
         Ok(())
     }
 }
 
+/// Recovers the guard even if a panic poisoned the mutex: the panic hook
+/// itself logs, and must still reach the file.
+fn lock(file: &Mutex<RotatingFile>) -> std::sync::MutexGuard<'_, RotatingFile> {
+    file.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// `tile.log`, rolled to `tile.1.log` (and so on) once it reaches
 /// [`MAX_FILE_BYTES`]. Unbuffered, so a record is on disk as soon as it is
-/// logged — which is the whole point when the process is about to vanish.
+/// logged, which is the whole point when the process is about to vanish.
+///
+/// Opens append-only and never rotates until [`Self::enable_rotation`]; see
+/// the module docs. The size is read from the file itself rather than counted,
+/// so records appended by another process are accounted for.
 struct RotatingFile {
     dir: PathBuf,
     file: File,
-    len: u64,
+    rotates: bool,
 }
 
 impl RotatingFile {
     fn open(dir: &Path) -> io::Result<Self> {
         fs::create_dir_all(dir)?;
-        let path = dir.join(LOG_FILE_NAME);
-        if fs::metadata(&path).map(|m| m.len()).unwrap_or(0) >= MAX_FILE_BYTES {
-            rotate(dir, KEPT_ROTATIONS)?;
-        }
-        let file = open_append(&path)?;
-        let len = file.metadata()?.len();
         Ok(Self {
             dir: dir.to_path_buf(),
-            file,
-            len,
+            file: open_append(&dir.join(LOG_FILE_NAME))?,
+            rotates: false,
         })
     }
 
-    fn write_record(&mut self, buf: &[u8]) -> io::Result<()> {
-        if self.len > 0 && self.len + buf.len() as u64 > MAX_FILE_BYTES {
-            rotate(&self.dir, KEPT_ROTATIONS)?;
-            self.file = open_append(&self.dir.join(LOG_FILE_NAME))?;
-            self.len = 0;
+    /// Lets this process rotate, rolling over at once if a previous run left
+    /// the file full.
+    fn enable_rotation(&mut self) -> io::Result<()> {
+        self.rotates = true;
+        if self.len() >= MAX_FILE_BYTES {
+            self.roll_over()?;
         }
-        self.file.write_all(buf)?;
-        self.len += buf.len() as u64;
+        Ok(())
+    }
+
+    fn write_record(&mut self, buf: &[u8]) -> io::Result<()> {
+        if self.rotates {
+            let len = self.len();
+            if len > 0 && len + buf.len() as u64 > MAX_FILE_BYTES {
+                self.roll_over()?;
+            }
+        }
+        self.file.write_all(buf)
+    }
+
+    fn len(&self) -> u64 {
+        self.file.metadata().map(|m| m.len()).unwrap_or(0)
+    }
+
+    fn roll_over(&mut self) -> io::Result<()> {
+        rotate(&self.dir, KEPT_ROTATIONS)?;
+        self.file = open_append(&self.dir.join(LOG_FILE_NAME))?;
         Ok(())
     }
 }
@@ -296,6 +327,7 @@ mod tests {
     fn a_full_file_rolls_over_before_the_record_that_would_overflow_it() {
         let dir = TempDir::new();
         let mut file = RotatingFile::open(&dir.0).unwrap();
+        file.enable_rotation().unwrap();
         let big = vec![b'a'; MAX_FILE_BYTES as usize - 1];
         file.write_record(&big).unwrap();
         file.write_record(b"next\n").unwrap();
@@ -308,24 +340,48 @@ mod tests {
     }
 
     #[test]
-    fn an_oversized_file_from_a_previous_run_is_rotated_on_open() {
+    fn an_oversized_file_is_rotated_only_once_the_session_is_owned() {
         let dir = TempDir::new();
         fs::write(
             dir.0.join(LOG_FILE_NAME),
             vec![b'a'; MAX_FILE_BYTES as usize],
         )
         .unwrap();
-        let file = RotatingFile::open(&dir.0).unwrap();
-        assert_eq!(file.len, 0);
+        let mut file = RotatingFile::open(&dir.0).unwrap();
+        file.write_record(b"early\n").unwrap();
+        assert!(
+            !dir.0.join("tile.1.log").exists(),
+            "a process that may be a second launch must not rotate"
+        );
+
+        file.enable_rotation().unwrap();
+        assert_eq!(file.len(), 0);
         assert!(dir.0.join("tile.1.log").exists());
+    }
+
+    #[test]
+    fn records_appended_by_another_process_count_towards_the_cap() {
+        let dir = TempDir::new();
+        let mut file = RotatingFile::open(&dir.0).unwrap();
+        file.enable_rotation().unwrap();
+        file.write_record(b"mine\n").unwrap();
+
+        let mut other = open_append(&dir.0.join(LOG_FILE_NAME)).unwrap();
+        other
+            .write_all(&vec![b'o'; MAX_FILE_BYTES as usize - 5])
+            .unwrap();
+
+        file.write_record(b"next\n").unwrap();
+        assert_eq!(dir.read(LOG_FILE_NAME).as_deref(), Some("next\n"));
     }
 
     #[test]
     fn a_single_record_larger_than_the_cap_is_still_written() {
         let dir = TempDir::new();
         let mut file = RotatingFile::open(&dir.0).unwrap();
+        file.enable_rotation().unwrap();
         let huge = vec![b'b'; MAX_FILE_BYTES as usize + 10];
         file.write_record(&huge).unwrap();
-        assert_eq!(file.len, MAX_FILE_BYTES + 10);
+        assert_eq!(file.len(), MAX_FILE_BYTES + 10);
     }
 }
