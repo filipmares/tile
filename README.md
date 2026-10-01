@@ -241,6 +241,32 @@ moves on. You can reopen it any time from the bottom of **Settings…**.
 
 See [Build from source](#build-from-source).
 
+### Logs and troubleshooting
+
+Tile keeps a rotating log (`tile.log`, then `tile.1.log` … `tile.4.log`, about
+1 MB each) so a launch that did not happen or a silent exit can be explained
+afterwards:
+
+- **Windows:** `%APPDATA%\Tile\Tile\data\logs`
+- **macOS:** `~/Library/Application Support/dev.Tile.Tile/logs`
+
+Development builds log under `Tile-Development` instead. Timestamps are UTC, and
+each line carries the process ID and thread. Every launch begins with the
+version, executable and how Tile was started: launches by the OS login item
+carry `--autostart` and are logged as `via the OS login item`. The log also
+records the login item's state (and any repair), the hotkey route summary,
+update checks and installs, every orderly exit with its reason, and any panic
+with a backtrace. A launch that follows a process which was killed or crashed
+is flagged with `did not exit cleanly`. Set `RUST_LOG` (for example
+`tile_app=debug,tile_platform=debug`) for more detail.
+
+**Tile did not start at sign-in?** Check the log first. No `starting … via the
+OS login item` line for that sign-in means Windows never launched it: confirm
+**Launch Tile at login** is on and that Tile is enabled under Task Manager ▸
+Startup apps. Waking from sleep or hibernation does not start apps, so Tile
+has to have been running beforehand. Upgrading with the setup `.exe` used to
+remove the login item; current installers restore it.
+
 ## Build from source
 
 ### Prerequisites
@@ -347,8 +373,8 @@ The terminal reports each applied shortcut's route (`Registered`,
 installed or removed, registered-shortcut dispatch, performed window actions,
 and apply/rollback failures. The hook callback itself deliberately does not log:
 Windows can silently remove a low-level hook if its callback blocks for too
-long. `env_logger` writes to the launching terminal; Tile does not create a log
-file.
+long. Logs go to the launching terminal and to the log file described in
+[Logs and troubleshooting](#logs-and-troubleshooting).
 
 ## Architecture
 
