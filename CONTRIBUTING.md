@@ -109,4 +109,5 @@ publishing steps are documented in [`docs/RELEASING.md`](docs/RELEASING.md).
 
 Open an issue using the templates in
 [`.github/ISSUE_TEMPLATE`](.github/ISSUE_TEMPLATE). Include your OS and version,
-what you expected, and what happened.
+what you expected, and what happened, and attach the relevant part of Tile's
+log (see [Logs and troubleshooting](README.md#logs-and-troubleshooting)).

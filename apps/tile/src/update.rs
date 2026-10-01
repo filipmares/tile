@@ -164,13 +164,23 @@ impl UpdateManager {
 
         self.publish_status(app, UpdateStatus::Checking);
         let result = async {
-            let updater = app.updater().map_err(|err| err.to_string())?;
+            // On Windows the updater ends this process with
+            // `std::process::exit(0)` once the installer is launched, which
+            // skips `RunEvent::Exit`; record the handoff before that happens.
+            let updater = app
+                .updater_builder()
+                .on_before_exit(|| {
+                    crate::logging::end_session("handing off to the update installer")
+                })
+                .build()
+                .map_err(|err| err.to_string())?;
             updater.check().await.map_err(|err| err.to_string())
         }
         .await;
 
         let status = match result {
             Ok(Some(update)) => {
+                log::info!("update available: {}", update.version);
                 let status = UpdateStatus::Available {
                     version: update.version.clone(),
                     notes: update.body.clone(),
@@ -192,6 +202,7 @@ impl UpdateManager {
                 UpdateStatus::Current
             }
             Err(message) => {
+                log::warn!("update check failed: {message}");
                 let status = UpdateStatus::Error { message };
                 let mut inner = lock(&self.inner);
                 inner.available = None;
@@ -234,6 +245,7 @@ impl UpdateManager {
             return Err("no update is available".into());
         };
         let version = update.version.clone();
+        log::info!("downloading and installing update {version}");
         self.publish_status(
             app,
             UpdateStatus::Downloading {
@@ -261,6 +273,7 @@ impl UpdateManager {
 
         if let Err(err) = result {
             let message = err.to_string();
+            log::error!("installing update {version} failed: {message}");
             self.publish_status(
                 app,
                 UpdateStatus::Error {
