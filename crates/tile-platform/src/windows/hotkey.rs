@@ -11,7 +11,7 @@ use std::sync::{Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use tile_core::{Hotkey, KeyCode, Modifiers, WindowAction};
+use tile_core::{ActionRequest, Hotkey, KeyCode, Modifiers, WindowAction};
 
 use windows::core::{HRESULT, PCWSTR};
 use windows::Win32::Foundation::{
@@ -60,7 +60,7 @@ struct HookBinding {
 }
 
 struct HookState {
-    sender: Sender<WindowAction>,
+    sender: Sender<ActionRequest>,
     bindings: Vec<HookBinding>,
 }
 
@@ -183,7 +183,7 @@ impl ApplyControl {
 }
 
 struct OwnerState {
-    events: Sender<WindowAction>,
+    events: Sender<ActionRequest>,
     registered: Vec<RegisteredBinding>,
     hook: Option<HHOOK>,
     next_id: i32,
@@ -198,7 +198,7 @@ pub struct WindowsHotkeyBackend {
 }
 
 impl WindowsHotkeyBackend {
-    pub fn new(events: Sender<WindowAction>) -> Result<Self> {
+    pub fn new(events: Sender<ActionRequest>) -> Result<Self> {
         let hook_state = HOOK_STATE.get_or_init(|| Mutex::new(None));
         *hook_state
             .lock()
@@ -324,7 +324,7 @@ impl Drop for WindowsHotkeyBackend {
 }
 
 fn owner_thread_main(
-    events: Sender<WindowAction>,
+    events: Sender<ActionRequest>,
     commands: Receiver<Command>,
     ready: Sender<Result<u32>>,
     startup_cancelled: std::sync::Arc<AtomicBool>,
@@ -767,7 +767,7 @@ impl OwnerState {
             binding.binding.hotkey,
             binding.binding.action
         );
-        let _ = self.events.send(binding.binding.action);
+        let _ = self.events.send(binding.binding.action.into());
     }
 
     fn log_apply_report(report: &HotkeyApplyReport) {
@@ -1012,7 +1012,7 @@ fn send_hook_action(action: WindowAction) {
         return;
     };
     if let Some(hook_state) = guard.as_ref() {
-        let _ = hook_state.sender.send(action);
+        let _ = hook_state.sender.send(action.into());
     }
 }
 

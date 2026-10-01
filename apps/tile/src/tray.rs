@@ -1,17 +1,25 @@
 //! Tray icon and its menu.
 //!
-//! The menu is deliberately minimal: "About Tile", "Settings…" and "Quit".
-//! Window actions are driven by hotkeys and configured in the settings window
-//! rather than being duplicated as a large tray catalogue.
+//! The menu offers a curated set of layouts — the two sides with their
+//! corners, the centred column, halves, maximize/restore and the display
+//! throws — each showing its current
+//! shortcut, so the menu teaches the bindings and reaches layouts that have
+//! none. Positions that come in sizes offer ½ / ⅔ / ⅓. A menu item
+//! is always exact: it lands where its label says rather than cycling, see
+//! [`crate::state::ActionRequest`]. The full catalogue stays in the settings
+//! window rather than becoming an unusable tray list.
 
+use std::str::FromStr;
+use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
-use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, Runtime};
+use tile_core::{Config, Hotkey, KeyCode, Modifiers, WindowAction};
 
 use crate::build_kind::BuildKind;
-use crate::state::AppState;
+use crate::state::{ActionRequest, AppState};
 use crate::update::{UpdateManager, UpdateStatus};
 use crate::window;
 
@@ -34,6 +42,238 @@ const ID_UPDATE: &str = "update";
 /// Menu item id for the disabled development-build header. It is never
 /// clickable, so it deliberately matches nothing in the event handler.
 const ID_DEV_HEADER: &str = "development-header";
+/// Prefix for menu item ids that perform a window action.
+const ACTION_ID_PREFIX: &str = "action:";
+
+/// The labels of a sized position's submenu, in the order of its actions.
+const SIZE_LABELS: [&str; 3] = ["½", "⅔", "⅓"];
+
+/// One row of the window-action part of the menu.
+enum Entry {
+    /// A position offered at ½, ⅔ and ⅓ — each an existing catalogue action,
+    /// so the menu never invents a layout the settings window cannot bind.
+    Sized(&'static str, [WindowAction; 3]),
+    Single(WindowAction),
+    /// An action under a shorter label than its catalogue name, for use
+    /// inside a submenu whose title already supplies the context.
+    Labelled(&'static str, WindowAction),
+    /// A submenu of further entries.
+    Group(&'static str, &'static [Entry]),
+    Separator,
+}
+
+/// A side: its ½ / ⅔ / ⅓ columns, then its two corners. Corners stay
+/// half-height and vary in width, so a ⅓ corner leaves room to stack a second
+/// window beneath it.
+const LEFT: &[Entry] = &[
+    Entry::Labelled("½", WindowAction::LeftHalf),
+    Entry::Labelled("⅔", WindowAction::FirstTwoThirds),
+    Entry::Labelled("⅓", WindowAction::FirstThird),
+    Entry::Separator,
+    Entry::Sized(
+        "Top",
+        [
+            WindowAction::TopLeft,
+            WindowAction::TopLeftThird,
+            WindowAction::TopLeftSixth,
+        ],
+    ),
+    Entry::Sized(
+        "Bottom",
+        [
+            WindowAction::BottomLeft,
+            WindowAction::BottomLeftThird,
+            WindowAction::BottomLeftSixth,
+        ],
+    ),
+];
+
+const RIGHT: &[Entry] = &[
+    Entry::Labelled("½", WindowAction::RightHalf),
+    Entry::Labelled("⅔", WindowAction::LastTwoThirds),
+    Entry::Labelled("⅓", WindowAction::LastThird),
+    Entry::Separator,
+    Entry::Sized(
+        "Top",
+        [
+            WindowAction::TopRight,
+            WindowAction::TopRightThird,
+            WindowAction::TopRightSixth,
+        ],
+    ),
+    Entry::Sized(
+        "Bottom",
+        [
+            WindowAction::BottomRight,
+            WindowAction::BottomRightThird,
+            WindowAction::BottomRightSixth,
+        ],
+    ),
+];
+
+const DISPLAYS: &[Entry] = &[
+    Entry::Labelled("Left", WindowAction::DisplayLeft),
+    Entry::Labelled("Right", WindowAction::DisplayRight),
+    Entry::Labelled("Above", WindowAction::DisplayUp),
+    Entry::Labelled("Below", WindowAction::DisplayDown),
+];
+
+const ACTION_ENTRIES: &[Entry] = &[
+    Entry::Group("Left", LEFT),
+    Entry::Group("Right", RIGHT),
+    Entry::Sized(
+        "Center Column",
+        [
+            WindowAction::CenterHalf,
+            WindowAction::CenterTwoThirds,
+            WindowAction::CenterThird,
+        ],
+    ),
+    Entry::Single(WindowAction::TopHalf),
+    Entry::Single(WindowAction::BottomHalf),
+    Entry::Separator,
+    Entry::Single(WindowAction::Maximize),
+    Entry::Single(WindowAction::AlmostMaximize),
+    Entry::Single(WindowAction::Center),
+    Entry::Single(WindowAction::Restore),
+    Entry::Separator,
+    Entry::Group("Displays", DISPLAYS),
+];
+
+/// The worker thread's queue, as seen by the tray.
+///
+/// The menu callback runs on Tauri's main event loop, and an animated action
+/// holds the pipeline for the whole animation, so running it inline would
+/// freeze the menu and the settings window. Queueing behind hotkeys also keeps
+/// the two in order rather than racing for the locks.
+pub struct MenuActions(Sender<ActionRequest>);
+
+impl MenuActions {
+    pub fn new(sender: Sender<ActionRequest>) -> Self {
+        Self(sender)
+    }
+
+    fn enqueue(&self, action: WindowAction) {
+        if let Err(err) = self.0.send(ActionRequest::exact(action)) {
+            log::error!("could not queue {action}: the action worker is gone ({err})");
+        }
+    }
+}
+
+/// The hotkey in the accelerator syntax the menu library parses.
+///
+/// Only macOS uses this (see [`native_accelerator`]). Accelerators on a tray
+/// menu are display-only: neither platform registers
+/// them as shortcuts, so this never competes with Tile's own hotkeys. A string
+/// the library cannot parse is dropped silently, leaving the item unlabelled
+/// rather than missing.
+fn accelerator(hotkey: Hotkey) -> String {
+    let m = hotkey.modifiers;
+    let mut text = String::new();
+    for (modifier, token) in [
+        (Modifiers::CONTROL, "Ctrl+"),
+        (Modifiers::ALT, "Alt+"),
+        (Modifiers::SHIFT, "Shift+"),
+        (Modifiers::META, "Super+"),
+    ] {
+        if m.contains(modifier) {
+            text.push_str(token);
+        }
+    }
+    text.push_str(match hotkey.key {
+        KeyCode::Backtick => "Backquote",
+        KeyCode::Equals => "Equal",
+        KeyCode::LeftBracket => "BracketLeft",
+        KeyCode::RightBracket => "BracketRight",
+        other => other.label(),
+    });
+    text
+}
+
+fn action_item<R: Runtime>(
+    app: &AppHandle<R>,
+    config: &Config,
+    action: WindowAction,
+    label: &str,
+) -> tauri::Result<MenuItem<R>> {
+    let hotkey = config.binding(action);
+    MenuItem::with_id(
+        app,
+        format!("{ACTION_ID_PREFIX}{}", action.id()),
+        item_text(label, hotkey),
+        true,
+        native_accelerator(hotkey),
+    )
+}
+
+/// The item's text. Windows draws whatever follows a tab right-aligned as the
+/// shortcut column, so the hotkey is written there in Tile's own notation
+/// (`Win+Left`, as in Settings) instead of the menu library's `Windows+Left`.
+fn item_text(label: &str, hotkey: Option<Hotkey>) -> String {
+    match hotkey {
+        Some(hotkey) if cfg!(windows) => format!("{label}\t{hotkey}"),
+        _ => label.to_owned(),
+    }
+}
+
+/// macOS renders a real key equivalent with its native glyphs (`⌃⌥←`), which
+/// is the convention there. Windows uses [`item_text`] instead.
+fn native_accelerator(hotkey: Option<Hotkey>) -> Option<String> {
+    hotkey.filter(|_| !cfg!(windows)).map(accelerator)
+}
+
+/// Builds the window-action rows. Each is boxed so singles and submenus can
+/// share one list.
+fn action_items<R: Runtime>(
+    app: &AppHandle<R>,
+    config: &Config,
+) -> tauri::Result<Vec<Box<dyn IsMenuItem<R>>>> {
+    entry_items(app, config, ACTION_ENTRIES)
+}
+
+fn submenu<R: Runtime>(
+    app: &AppHandle<R>,
+    label: &str,
+    children: &[Box<dyn IsMenuItem<R>>],
+) -> tauri::Result<Submenu<R>> {
+    let refs: Vec<&dyn IsMenuItem<R>> = children.iter().map(|item| item.as_ref()).collect();
+    Submenu::with_items(app, label, true, &refs)
+}
+
+fn entry_items<R: Runtime>(
+    app: &AppHandle<R>,
+    config: &Config,
+    entries: &[Entry],
+) -> tauri::Result<Vec<Box<dyn IsMenuItem<R>>>> {
+    let mut items: Vec<Box<dyn IsMenuItem<R>>> = Vec::new();
+    for entry in entries {
+        match entry {
+            Entry::Sized(label, actions) => {
+                let sizes = actions
+                    .iter()
+                    .zip(SIZE_LABELS)
+                    .map(|(action, size)| {
+                        action_item(app, config, *action, size)
+                            .map(|item| Box::new(item) as Box<dyn IsMenuItem<R>>)
+                    })
+                    .collect::<tauri::Result<Vec<_>>>()?;
+                items.push(Box::new(submenu(app, label, &sizes)?));
+            }
+            Entry::Single(action) => {
+                items.push(Box::new(action_item(app, config, *action, action.label())?));
+            }
+            Entry::Labelled(label, action) => {
+                items.push(Box::new(action_item(app, config, *action, label)?));
+            }
+            Entry::Group(label, children) => {
+                let children = entry_items(app, config, children)?;
+                items.push(Box::new(submenu(app, label, &children)?));
+            }
+            Entry::Separator => items.push(Box::new(PredefinedMenuItem::separator(app)?)),
+        }
+    }
+    Ok(items)
+}
 
 /// Builds the tray icon and installs its menu handler.
 pub fn build_tray<R: Runtime>(app: &AppHandle<R>, kind: BuildKind) -> tauri::Result<()> {
@@ -78,14 +318,19 @@ fn build_menu<R: Runtime>(
     let (update_label, update_enabled) = update_menu_state(update_status);
     let update = MenuItem::with_id(app, ID_UPDATE, update_label, update_enabled, None::<&str>)?;
     let about = MenuItem::with_id(app, ID_ABOUT, "About Tile", true, None::<&str>)?;
+    let actions_separator = PredefinedMenuItem::separator(app)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, ID_QUIT, "Quit Tile", true, None::<&str>)?;
+    let config = app.state::<Arc<AppState>>().config();
+    let actions = action_items(app, &config)?;
 
     let mut items: Vec<&dyn IsMenuItem<R>> = Vec::new();
     if let Some((header, dev_separator)) = &dev_header {
         items.push(header);
         items.push(dev_separator);
     }
+    items.extend(actions.iter().map(|item| item.as_ref()));
+    items.push(&actions_separator);
     items.push(&about);
     items.push(&settings);
     items.push(&update);
@@ -316,13 +561,86 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str, kind: BuildKind) 
             app.state::<Arc<AppState>>().shutdown_hotkeys();
             app.exit(0);
         }
-        other => log::warn!("unknown tray menu id: {other}"),
+        other => match other
+            .strip_prefix(ACTION_ID_PREFIX)
+            .map(WindowAction::from_str)
+        {
+            Some(Ok(action)) => app.state::<MenuActions>().enqueue(action),
+            _ => log::warn!("unknown tray menu id: {other}"),
+        },
     }
+}
+
+/// Rebuilds the menu so its shortcut labels follow the current bindings.
+pub fn sync_bindings<R: Runtime>(app: &AppHandle<R>) {
+    let status = app.state::<Arc<UpdateManager>>().status();
+    sync_update_state(app, &status);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accelerators_use_the_menu_library_tokens() {
+        let base = Hotkey::new(Modifiers::META, KeyCode::Left);
+        assert_eq!(accelerator(base), "Super+Left");
+        assert_eq!(
+            accelerator(Hotkey::new(
+                Modifiers::CONTROL | Modifiers::ALT | Modifiers::SHIFT,
+                KeyCode::Equals
+            )),
+            "Ctrl+Alt+Shift+Equal"
+        );
+    }
+
+    #[test]
+    fn windows_writes_the_shortcut_in_tiles_own_notation() {
+        let hotkey = Hotkey::new(Modifiers::META | Modifiers::ALT, KeyCode::Left);
+        if cfg!(windows) {
+            assert_eq!(item_text("Left", Some(hotkey)), "Left\tAlt+Win+Left");
+            assert_eq!(native_accelerator(Some(hotkey)), None);
+        } else {
+            assert_eq!(item_text("Left", Some(hotkey)), "Left");
+            assert_eq!(
+                native_accelerator(Some(hotkey)).as_deref(),
+                Some("Alt+Super+Left")
+            );
+        }
+        assert_eq!(item_text("Left", None), "Left");
+    }
+
+    #[test]
+    fn every_menu_action_appears_once() {
+        fn collect(entries: &[Entry], seen: &mut std::collections::HashSet<WindowAction>) {
+            for entry in entries {
+                let actions: &[WindowAction] = match entry {
+                    Entry::Sized(_, actions) => actions,
+                    Entry::Single(action) | Entry::Labelled(_, action) => {
+                        std::slice::from_ref(action)
+                    }
+                    Entry::Group(_, children) => {
+                        collect(children, seen);
+                        &[]
+                    }
+                    Entry::Separator => &[],
+                };
+                for action in actions {
+                    assert!(seen.insert(*action), "{action} appears twice in the menu");
+                }
+            }
+        }
+        let mut seen = std::collections::HashSet::new();
+        collect(ACTION_ENTRIES, &mut seen);
+        for corner in [
+            WindowAction::TopLeft,
+            WindowAction::TopRight,
+            WindowAction::BottomLeft,
+            WindowAction::BottomRight,
+        ] {
+            assert!(seen.contains(&corner), "{corner} missing from the menu");
+        }
+    }
 
     #[test]
     fn update_menu_labels_follow_status() {

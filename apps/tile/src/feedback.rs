@@ -1,8 +1,10 @@
 //! Running an action with user-facing feedback.
 //!
-//! Both the settings window and the hotkey worker thread funnel through
-//! [`run_action`], so the "perform it, and only nag about denied permission"
-//! policy lives in exactly one place.
+//! The action worker thread (hotkeys and tray menu clicks) funnels through
+//! [`run_action_preemptible`], so its "perform it, and only nag about denied
+//! permission" policy lives in exactly one place. The settings window's
+//! `perform_action` command calls the pipeline directly and returns errors to
+//! its caller instead.
 
 use std::sync::Arc;
 
@@ -11,7 +13,7 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tile_core::WindowAction;
 use tile_platform::PlatformError;
 
-use crate::state::{is_permission_denied, AppState};
+use crate::state::{is_permission_denied, ActionRequest, AppState};
 use crate::window;
 
 /// Performs `action`, showing a (rate-limited) dialog only when the OS denies
@@ -23,14 +25,15 @@ use crate::window;
 /// it. Callers with no source of further actions pass a closure returning
 /// `None`.
 ///
-/// This is the only entry point, so hotkeys and the settings window share one
+/// The worker's only entry point, so hotkeys and tray menu clicks share one
 /// animation pipeline.
 pub fn run_action_preemptible<R: Runtime>(
     app: &AppHandle<R>,
-    action: WindowAction,
+    request: ActionRequest,
     next: &mut dyn FnMut() -> Option<WindowAction>,
 ) {
     let state = app.state::<Arc<AppState>>();
+    let action = request.action;
 
     // Reported from inside the pipeline rather than from its return value.
     // The return value arrives only once every window has finished
@@ -40,7 +43,7 @@ pub fn run_action_preemptible<R: Runtime>(
     // collapses a burst of presses into a single verdict, because each press
     // after the first is swallowed to retarget the flight, so a walkthrough
     // counting presses would undercount exactly when the user is fluent.
-    let result = state.perform_action_preemptible(action, next, &mut |report| {
+    let result = state.perform_action_preemptible(request, next, &mut |report| {
         window::notify_action_performed(app, report);
     });
 

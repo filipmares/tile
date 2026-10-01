@@ -44,12 +44,15 @@ pub fn get_build_info(state: State<'_, Shared>) -> BuildInfoDto {
 }
 
 #[tauri::command]
-pub fn set_binding(
+pub fn set_binding<R: Runtime>(
+    app: AppHandle<R>,
     state: State<'_, Shared>,
     action: WindowAction,
     hotkey: Option<Hotkey>,
 ) -> Config {
-    state.update_config(|config| config.set_binding(action, hotkey))
+    let config = state.update_config(|config| config.set_binding(action, hotkey));
+    crate::tray::sync_bindings(&app);
+    config
 }
 
 #[tauri::command]
@@ -178,6 +181,7 @@ pub fn close_welcome<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
 pub fn reset_to_defaults<R: Runtime>(app: AppHandle<R>, state: State<'_, Shared>) -> Config {
     let config = state.update_config(|config| *config = Config::default());
     sync_autostart(&app, &state, config.launch_on_login);
+    crate::tray::sync_bindings(&app);
     config
 }
 

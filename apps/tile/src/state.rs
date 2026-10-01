@@ -6,7 +6,9 @@
 //!   `RegisterEventHotKey` needs the main thread's run loop), which is why the
 //!   backend is built inside Tauri's `setup` closure.
 //! * A single **worker thread** owns the [`std::sync::mpsc::Receiver`] end of
-//!   the hotkey channel and drains it, calling [`AppState::perform_action`].
+//!   the action channel, which carries both hotkey presses and tray menu
+//!   clicks as [`ActionRequest`]s, and drains it through
+//!   [`AppState::perform_action_preemptible`].
 //! * The window backend, engine and hotkey backend are each behind a [`Mutex`]
 //!   inside [`AppState`], which Tauri manages, so both the worker thread and
 //!   the command handlers (settings window) drive the same pipeline.
@@ -266,22 +268,23 @@ impl AppState {
     /// never hear about them at all.
     pub fn perform_action_preemptible(
         &self,
-        action: WindowAction,
+        request: impl Into<ActionRequest>,
         next: &mut dyn FnMut() -> Option<WindowAction>,
         observe: &mut dyn FnMut(ActionReport),
     ) -> tile_platform::Result<ActionOutcome> {
+        let request = request.into();
         let backend = lock(&self.backend);
         let mut engine = lock(&self.engine);
 
         let animation = engine.config.animation;
         if !animation.enabled {
-            return apply_once(backend.as_ref(), &mut engine, action, observe);
+            return apply_once(backend.as_ref(), &mut engine, request, observe);
         }
 
         animated_pipeline(
             backend.as_ref(),
             &mut engine,
-            action,
+            request,
             animation.params(),
             &mut SleepPacer::new(),
             next,
@@ -410,12 +413,29 @@ fn screen_index(screens: &[Screen], frame: Rect) -> Option<usize> {
         .position(|ordered| ordered.id == screen.id)
 }
 
+pub use tile_core::ActionRequest;
+
+fn plan(
+    engine: &Engine,
+    action: WindowAction,
+    exact: bool,
+    window: &WindowSnapshot,
+    screens: &[Screen],
+) -> Plan {
+    if exact {
+        engine.plan_exact(action, window, screens)
+    } else {
+        engine.plan(action, window, screens)
+    }
+}
+
 fn apply_once(
     backend: &dyn WindowBackend,
     engine: &mut Engine,
-    action: WindowAction,
+    request: impl Into<ActionRequest>,
     observe: &mut dyn FnMut(ActionReport),
 ) -> tile_platform::Result<ActionOutcome> {
+    let ActionRequest { action, exact } = request.into();
     let Some(window) = backend.focused_window()? else {
         log::debug!("ignoring {action}: no movable focused window");
         observe(ActionReport {
@@ -427,7 +447,7 @@ fn apply_once(
     };
     let screens = backend.screens()?;
 
-    match engine.plan(action, &window, &screens) {
+    match plan(engine, action, exact, &window, &screens) {
         Plan::Move { id, target } => {
             let actual = backend.set_window_frame(id, target)?;
             engine.commit(action, &window, actual);
@@ -565,7 +585,7 @@ impl Flight {
 fn animated_pipeline(
     backend: &dyn WindowBackend,
     engine: &mut Engine,
-    action: WindowAction,
+    request: impl Into<ActionRequest>,
     params: AnimationParams,
     pacer: &mut dyn Pacer,
     next: &mut dyn FnMut() -> Option<WindowAction>,
@@ -576,7 +596,7 @@ fn animated_pipeline(
     let result = run_animated_pipeline(
         backend,
         engine,
-        action,
+        request.into(),
         params,
         pacer,
         next,
@@ -615,7 +635,7 @@ fn animated_pipeline(
 fn run_animated_pipeline(
     backend: &dyn WindowBackend,
     engine: &mut Engine,
-    action: WindowAction,
+    request: ActionRequest,
     params: AnimationParams,
     pacer: &mut dyn Pacer,
     next: &mut dyn FnMut() -> Option<WindowAction>,
@@ -623,7 +643,10 @@ fn run_animated_pipeline(
     flight: &mut Option<Flight>,
     outcome: &mut ActionOutcome,
 ) -> tile_platform::Result<()> {
-    let mut pending = Some(action);
+    // Only the first action can be exact. Anything that preempts it mid-flight
+    // came from a hotkey, so it keeps the ordinary repeat-to-cycle behaviour.
+    let mut exact = request.exact;
+    let mut pending = Some(request.action);
 
     loop {
         if let Some(action) = pending.take() {
@@ -678,7 +701,13 @@ fn run_animated_pipeline(
                 }
             }
 
-            match engine.plan(action, &window, &screens) {
+            match plan(
+                engine,
+                action,
+                std::mem::take(&mut exact),
+                &window,
+                &screens,
+            ) {
                 Plan::Move { id, target } => {
                     *outcome = ActionOutcome::Moved;
                     // An action aimed at a *different* window must not leave
@@ -1630,6 +1659,39 @@ mod tests {
 
         assert_eq!(backend.frames.borrow().len(), 1);
         assert_eq!(backend.last_frame(), Rect::new(0.0, 0.0, 960.0, 1080.0));
+    }
+
+    /// A tray item labelled "½" must not cycle to ⅔ when chosen twice, on
+    /// either pipeline.
+    #[test]
+    fn exact_requests_do_not_cycle() {
+        let half = Rect::new(0.0, 0.0, 960.0, 1080.0);
+        let exact = ActionRequest::exact(WindowAction::LeftHalf);
+
+        let backend = FakeBackend::new();
+        let mut engine = Engine::new(Config::default());
+        apply_once(&backend, &mut engine, exact, &mut |_| {}).unwrap();
+        assert_eq!(
+            apply_once(&backend, &mut engine, exact, &mut |_| {}).unwrap(),
+            ActionOutcome::NoOp
+        );
+        assert_eq!(backend.last_frame(), half);
+
+        let backend = FakeBackend::new();
+        let mut engine = engine_with_animation();
+        for _ in 0..2 {
+            animated_pipeline(
+                &backend,
+                &mut engine,
+                exact,
+                params(),
+                &mut FixedPacer,
+                &mut || None,
+                &mut |_| {},
+            )
+            .unwrap();
+        }
+        assert_eq!(backend.last_frame(), half);
     }
 
     /// The welcome walkthrough ticks a step off on `Moved` and asks the user
