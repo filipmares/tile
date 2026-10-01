@@ -162,7 +162,8 @@ impl MenuActions {
 
 /// The hotkey in the accelerator syntax the menu library parses.
 ///
-/// Accelerators on a tray menu are display-only: neither platform registers
+/// Only macOS uses this (see [`native_accelerator`]). Accelerators on a tray
+/// menu are display-only: neither platform registers
 /// them as shortcuts, so this never competes with Tile's own hotkeys. A string
 /// the library cannot parse is dropped silently, leaving the item unlabelled
 /// rather than missing.
@@ -195,13 +196,30 @@ fn action_item<R: Runtime>(
     action: WindowAction,
     label: &str,
 ) -> tauri::Result<MenuItem<R>> {
+    let hotkey = config.binding(action);
     MenuItem::with_id(
         app,
         format!("{ACTION_ID_PREFIX}{}", action.id()),
-        label,
+        item_text(label, hotkey),
         true,
-        config.binding(action).map(accelerator),
+        native_accelerator(hotkey),
     )
+}
+
+/// The item's text. Windows draws whatever follows a tab right-aligned as the
+/// shortcut column, so the hotkey is written there in Tile's own notation
+/// (`Win+Left`, as in Settings) instead of the menu library's `Windows+Left`.
+fn item_text(label: &str, hotkey: Option<Hotkey>) -> String {
+    match hotkey {
+        Some(hotkey) if cfg!(windows) => format!("{label}\t{hotkey}"),
+        _ => label.to_owned(),
+    }
+}
+
+/// macOS renders a real key equivalent with its native glyphs (`⌃⌥←`), which
+/// is the convention there. Windows uses [`item_text`] instead.
+fn native_accelerator(hotkey: Option<Hotkey>) -> Option<String> {
+    hotkey.filter(|_| !cfg!(windows)).map(accelerator)
 }
 
 /// Builds the window-action rows. Each is boxed so singles and submenus can
@@ -573,6 +591,22 @@ mod tests {
             )),
             "Ctrl+Alt+Shift+Equal"
         );
+    }
+
+    #[test]
+    fn windows_writes_the_shortcut_in_tiles_own_notation() {
+        let hotkey = Hotkey::new(Modifiers::META | Modifiers::ALT, KeyCode::Left);
+        if cfg!(windows) {
+            assert_eq!(item_text("Left", Some(hotkey)), "Left\tAlt+Win+Left");
+            assert_eq!(native_accelerator(Some(hotkey)), None);
+        } else {
+            assert_eq!(item_text("Left", Some(hotkey)), "Left");
+            assert_eq!(
+                native_accelerator(Some(hotkey)).as_deref(),
+                Some("Alt+Super+Left")
+            );
+        }
+        assert_eq!(item_text("Left", None), "Left");
     }
 
     #[test]
