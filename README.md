@@ -71,12 +71,15 @@ The tray (Windows) or menu-bar (macOS) menu offers the common layouts with a
 click, each showing its current shortcut, so it doubles as a cheat sheet:
 
 ```text
-Left / Right / Center Column      ▸  ½  ⅔  ⅓
+Left   ▸  ½  ⅔  ⅓  ·  Top Left ▸ ½ ⅔ ⅓  ·  Bottom Left ▸ ½ ⅔ ⅓
+Right  ▸  ½  ⅔  ⅓  ·  Top Right ▸ ½ ⅔ ⅓ ·  Bottom Right ▸ ½ ⅔ ⅓
+Center Column  ▸  ½  ⅔  ⅓
 Top Half · Bottom Half
-Top Left / Top Right / Bottom Left / Bottom Right  ▸  ½  ⅔  ⅓   (half height)
 Maximize · Almost Maximize · Center · Restore
-Display Left / Right / Above / Below
+Displays  ▸  Left · Right · Above · Below
 ```
+
+Corners are half height, varying in width.
 
 A menu item always lands exactly where its label says — choosing "½" twice
 does not cycle on to ⅔ the way repeating a shortcut does. A ⅓-wide corner
