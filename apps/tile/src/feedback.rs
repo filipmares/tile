@@ -1,9 +1,10 @@
 //! Running an action with user-facing feedback.
 //!
-//! Both the settings window and the action worker thread (hotkeys and tray
-//! menu clicks) funnel through
-//! [`run_action_preemptible`], so the "perform it, and only nag about denied permission"
-//! policy lives in exactly one place.
+//! The action worker thread (hotkeys and tray menu clicks) funnels through
+//! [`run_action_preemptible`], so its "perform it, and only nag about denied
+//! permission" policy lives in exactly one place. The settings window's
+//! `perform_action` command calls the pipeline directly and returns errors to
+//! its caller instead.
 
 use std::sync::Arc;
 
@@ -24,7 +25,7 @@ use crate::window;
 /// it. Callers with no source of further actions pass a closure returning
 /// `None`.
 ///
-/// This is the only entry point, so hotkeys and the settings window share one
+/// The worker's only entry point, so hotkeys and tray menu clicks share one
 /// animation pipeline.
 pub fn run_action_preemptible<R: Runtime>(
     app: &AppHandle<R>,

@@ -7,7 +7,7 @@
 
 use std::sync::mpsc::Sender;
 
-use tile_core::{Rect, Screen, WindowAction, WindowId, WindowSnapshot};
+use tile_core::{ActionRequest, Rect, Screen, WindowId, WindowSnapshot};
 
 use crate::{
     HotkeyApplyReport, HotkeyBackend, HotkeyBinding, PermissionStatus, PlatformError, Result,
@@ -45,4 +45,4 @@ impl HotkeyBackend for UnsupportedHotkeyBackend {
 }
 
 /// Silences the unused-import warning on supported platforms.
-fn _assert_sender_is_used(_: Option<Sender<WindowAction>>) {}
+fn _assert_sender_is_used(_: Option<Sender<ActionRequest>>) {}

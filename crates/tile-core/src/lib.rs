@@ -12,7 +12,7 @@ pub mod geometry;
 pub mod history;
 pub mod hotkey;
 
-pub use action::{ParseActionError, WindowAction, WindowFamily};
+pub use action::{ActionRequest, ParseActionError, WindowAction, WindowFamily};
 pub use animation::{AnimationParams, Animator};
 pub use config::{
     AnimationConfig, Config, ConfigError, Conflict, CycleSize, Gaps, SharedEdges, SizeOptions,

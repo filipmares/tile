@@ -55,7 +55,7 @@ use objc2::runtime::AnyObject;
 use objc2::{class, msg_send, sel};
 use objc2_foundation::NSRect;
 
-use tile_core::{Rect, Screen, WindowAction, WindowId, WindowSnapshot};
+use tile_core::{ActionRequest, Rect, Screen, WindowAction, WindowId, WindowSnapshot};
 
 use crate::{
     AnimationSession, HotkeyApplyReport, HotkeyBackend, HotkeyBinding, HotkeyBindingStatus,
@@ -1773,7 +1773,7 @@ unsafe fn display_number(screen: *mut AnyObject, key: &CFString) -> Option<u32> 
 /// — be `Send` as the trait requires. Contention is negligible: the callback
 /// runs on the main thread and `apply` only briefly touches the map.
 struct HotkeyState {
-    sender: Mutex<Sender<WindowAction>>,
+    sender: Mutex<Sender<ActionRequest>>,
     actions: Mutex<HashMap<u32, WindowAction>>,
 }
 
@@ -1794,7 +1794,7 @@ pub struct MacHotkeyBackend {
 unsafe impl Send for MacHotkeyBackend {}
 
 impl MacHotkeyBackend {
-    pub fn new(events: Sender<WindowAction>) -> Result<Self> {
+    pub fn new(events: Sender<ActionRequest>) -> Result<Self> {
         Ok(Self {
             state: Arc::new(HotkeyState {
                 sender: Mutex::new(events),
@@ -1995,7 +1995,7 @@ extern "C" fn hotkey_handler(
         .and_then(|map| map.get(&hotkey_id.id).copied());
     if let Some(action) = action {
         if let Ok(sender) = state.sender.lock() {
-            let _ = sender.send(action);
+            let _ = sender.send(action.into());
         }
     }
     ffi::noErr

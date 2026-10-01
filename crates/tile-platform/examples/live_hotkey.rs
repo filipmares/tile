@@ -82,9 +82,10 @@ fn windows_hotkey() {
     println!("injected {sent} of {} key events", sequence.len());
 
     match rx.recv_timeout(Duration::from_secs(5)) {
-        Ok(action) => {
-            println!("registered route delivered: {}", action.id());
-            assert_eq!(action, WindowAction::Maximize);
+        Ok(request) => {
+            println!("registered route delivered: {}", request.action.id());
+            assert_eq!(request.action, WindowAction::Maximize);
+            assert!(!request.exact, "hotkeys must keep cycling");
         }
         Err(err) => panic!("hook did not deliver the action: {err}"),
     }
@@ -94,7 +95,10 @@ fn windows_hotkey() {
     println!("injected {sent2} more key events");
     let second = rx.recv_timeout(Duration::from_secs(5));
     assert!(second.is_ok(), "hook stopped delivering after one press");
-    println!("registered route delivered again: {}", second.unwrap().id());
+    println!(
+        "registered route delivered again: {}",
+        second.unwrap().action.id()
+    );
 
     // Extra modifiers must not turn a base binding into a loose subset match.
     let superset = [
@@ -153,7 +157,8 @@ fn windows_hotkey() {
     unsafe { SendInput(&win_left, std::mem::size_of::<INPUT>() as i32) };
     assert_eq!(
         rx.recv_timeout(Duration::from_secs(5))
-            .expect("intercepted Win+Left was not delivered"),
+            .expect("intercepted Win+Left was not delivered")
+            .action,
         WindowAction::LeftHalf
     );
     println!("intercepted route delivered left-half");

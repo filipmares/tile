@@ -413,34 +413,7 @@ fn screen_index(screens: &[Screen], frame: Rect) -> Option<usize> {
         .position(|ordered| ordered.id == screen.id)
 }
 
-/// An action to perform, and whether it must land exactly where it says.
-///
-/// Hotkeys are never exact: repeating one is how a window cycles through
-/// sizes. A tray menu item names a size in its label, so it is exact — see
-/// [`Engine::plan_exact`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ActionRequest {
-    pub action: WindowAction,
-    pub exact: bool,
-}
-
-impl ActionRequest {
-    pub const fn exact(action: WindowAction) -> Self {
-        Self {
-            action,
-            exact: true,
-        }
-    }
-}
-
-impl From<WindowAction> for ActionRequest {
-    fn from(action: WindowAction) -> Self {
-        Self {
-            action,
-            exact: false,
-        }
-    }
-}
+pub use tile_core::ActionRequest;
 
 fn plan(
     engine: &Engine,

@@ -1162,6 +1162,36 @@ impl fmt::Display for WindowAction {
     }
 }
 
+/// An action to perform, and whether it must land exactly where it says.
+///
+/// Hotkeys are never exact: repeating one is how a window cycles through
+/// sizes. A tray menu item names a size in its label, so it is exact — see
+/// [`crate::Engine::plan_exact`]. Both travel on one channel, so the hotkey
+/// backends send this type directly and the two sources stay in arrival order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ActionRequest {
+    pub action: WindowAction,
+    pub exact: bool,
+}
+
+impl ActionRequest {
+    pub const fn exact(action: WindowAction) -> Self {
+        Self {
+            action,
+            exact: true,
+        }
+    }
+}
+
+impl From<WindowAction> for ActionRequest {
+    fn from(action: WindowAction) -> Self {
+        Self {
+            action,
+            exact: false,
+        }
+    }
+}
+
 /// Error returned when parsing an unknown action identifier.
 #[derive(Debug, thiserror::Error)]
 #[error("unknown window action: {0}")]

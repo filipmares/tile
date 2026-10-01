@@ -25,7 +25,7 @@ use std::time::Duration;
 
 use tauri::{AppHandle, Manager, RunEvent, Runtime};
 use tauri_plugin_autostart::MacosLauncher;
-use tile_core::{Config, WindowAction};
+use tile_core::Config;
 use tile_platform::PermissionStatus;
 
 use build_kind::BuildKind;
@@ -195,25 +195,14 @@ fn setup_app<R: Runtime>(app: &AppHandle<R>) -> Result<(), Box<dyn std::error::E
     // already handed off), so this is the place to claim the session.
     logging::begin_session();
 
-    // One channel feeds the worker thread. Hotkeys arrive on their own
-    // channel, because the platform backends speak plain `WindowAction`s, and
-    // are forwarded into it; tray menu clicks are sent straight in as exact
-    // requests. Sharing one queue keeps the two in arrival order.
+    // One channel feeds the worker thread, in arrival order: the hotkey
+    // backend sends cycling requests on it and tray menu clicks send exact
+    // ones. A single ingress is what keeps a hotkey and a menu click from
+    // being reordered.
     let (requests, rx) = mpsc::channel::<ActionRequest>();
-    let (hotkey_tx, hotkey_rx) = mpsc::channel::<WindowAction>();
-    let forward = requests.clone();
-    thread::Builder::new()
-        .name("tile-hotkey-forwarder".into())
-        .spawn(move || {
-            for action in hotkey_rx {
-                if forward.send(action.into()).is_err() {
-                    break;
-                }
-            }
-        })?;
 
     let window_backend = tile_platform::window_backend()?;
-    let hotkey_backend = tile_platform::hotkey_backend(hotkey_tx)?;
+    let hotkey_backend = tile_platform::hotkey_backend(requests.clone())?;
 
     // Everything that must differ between a checkout and an installed copy
     // hangs off this one value: which config directory is used, whether the OS

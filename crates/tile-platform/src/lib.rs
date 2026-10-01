@@ -7,7 +7,7 @@
 
 use std::sync::mpsc::Sender;
 
-use tile_core::{Hotkey, Rect, Screen, WindowAction, WindowId, WindowSnapshot};
+use tile_core::{ActionRequest, Hotkey, Rect, Screen, WindowAction, WindowId, WindowSnapshot};
 
 #[cfg(target_os = "macos")]
 pub mod macos;
@@ -281,9 +281,11 @@ pub fn window_backend() -> Result<Box<dyn WindowBackend>> {
 
 /// Creates the hotkey backend for the current platform.
 ///
-/// Every recognised hotkey press sends the bound [`WindowAction`] on `events`.
+/// Every recognised hotkey press sends the bound [`WindowAction`] on `events`,
+/// as a cycling [`ActionRequest`]. The app shares this channel with its tray
+/// menu so both sources stay in one arrival order.
 /// The channel is the only way actions leave the backend's thread.
-pub fn hotkey_backend(events: Sender<WindowAction>) -> Result<Box<dyn HotkeyBackend>> {
+pub fn hotkey_backend(events: Sender<ActionRequest>) -> Result<Box<dyn HotkeyBackend>> {
     #[cfg(windows)]
     {
         Ok(Box::new(windows::WindowsHotkeyBackend::new(events)?))
