@@ -121,6 +121,31 @@ impl Engine {
     /// has actually moved the window, so a failed move does not corrupt the
     /// restore point.
     pub fn plan(&self, action: WindowAction, window: &WindowSnapshot, screens: &[Screen]) -> Plan {
+        self.plan_with(action, window, screens, true)
+    }
+
+    /// As [`Engine::plan`], but never cycles: the window goes exactly where
+    /// `action` says, and an action it already satisfies is a no-op.
+    ///
+    /// This is for callers that name a size explicitly, such as a menu item
+    /// labelled "½". Cycling exists so a *repeated shortcut* can reach other
+    /// sizes; a labelled choice that quietly produced ⅔ instead would be wrong.
+    pub fn plan_exact(
+        &self,
+        action: WindowAction,
+        window: &WindowSnapshot,
+        screens: &[Screen],
+    ) -> Plan {
+        self.plan_with(action, window, screens, false)
+    }
+
+    fn plan_with(
+        &self,
+        action: WindowAction,
+        window: &WindowSnapshot,
+        screens: &[Screen],
+        allow_cycle: bool,
+    ) -> Plan {
         if action.moves_display() {
             return self.plan_display_move(action, window, screens);
         }
@@ -169,7 +194,7 @@ impl Engine {
 
         // Anything that does not cycle behaves exactly as it always has: move
         // to the target, or report that there is nothing to do.
-        if !action.cycles() || !self.config.cycles_sizes() {
+        if !allow_cycle || !action.cycles() || !self.config.cycles_sizes() {
             return settled();
         }
 
@@ -529,6 +554,34 @@ mod tests {
         };
         // Defaults are ½, ⅔, ⅓; stepping back from ½ lands on ⅓.
         assert_eq!(back, Rect::new(640.0, 0.0, 640.0, 1040.0));
+    }
+
+    #[test]
+    fn exact_plans_never_cycle() {
+        let mut engine = Engine::default();
+        let half = WindowSnapshot {
+            id: 1,
+            frame: Rect::new(0.0, 0.0, 960.0, 1040.0),
+        };
+        assert_eq!(
+            engine.plan_exact(WindowAction::LeftHalf, &half, &[screen()]),
+            Plan::NoOp(NoOpReason::AlreadyInPosition)
+        );
+
+        // Even mid-cycle, an exact half returns to the half.
+        let two_thirds = Rect::new(0.0, 0.0, 1280.0, 1040.0);
+        engine.commit(WindowAction::LeftHalf, &half, two_thirds);
+        let win = WindowSnapshot {
+            id: 1,
+            frame: two_thirds,
+        };
+        assert_eq!(
+            engine.plan_exact(WindowAction::LeftHalf, &win, &[screen()]),
+            Plan::Move {
+                id: 1,
+                target: half.frame
+            }
+        );
     }
 
     #[test]

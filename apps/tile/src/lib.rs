@@ -28,7 +28,7 @@ use tile_core::{Config, WindowAction};
 use tile_platform::PermissionStatus;
 
 use build_kind::BuildKind;
-use state::AppState;
+use state::{ActionRequest, AppState};
 use update::UpdateManager;
 
 /// How often the startup permission poll re-checks while access is denied.
@@ -38,11 +38,6 @@ const PERMISSION_POLL_INTERVAL: Duration = Duration::from_secs(2);
 pub fn run() {
     // Logging must never take down the app; ignore a double-init.
     let _ = env_logger::try_init();
-
-    // The only channel actions leave the hotkey backend on. The worker thread
-    // owns the receiver; the sender is handed to the backend.
-    let (tx, rx) = mpsc::channel::<WindowAction>();
-    let mut rx = Some(rx);
 
     let context = tauri::generate_context!();
     let mut builder = tauri::Builder::default();
@@ -88,11 +83,7 @@ pub fn run() {
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
-            let rx = match rx.take() {
-                Some(rx) => rx,
-                None => return Err("setup invoked more than once".into()),
-            };
-            setup_app(&handle, tx.clone(), rx)?;
+            setup_app(&handle)?;
             Ok(())
         })
         .build(context);
@@ -145,13 +136,26 @@ fn answer_second_launch<R: Runtime>(app: &AppHandle<R>, _argv: Vec<String>, _cwd
 /// Constructs the backends, loads config, wires the tray and the worker thread,
 /// and kicks off permission handling. Runs on the main thread inside Tauri's
 /// `setup`, which is where the macOS hotkey backend must be created.
-fn setup_app<R: Runtime>(
-    app: &AppHandle<R>,
-    tx: mpsc::Sender<WindowAction>,
-    rx: mpsc::Receiver<WindowAction>,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn setup_app<R: Runtime>(app: &AppHandle<R>) -> Result<(), Box<dyn std::error::Error>> {
+    // One channel feeds the worker thread. Hotkeys arrive on their own
+    // channel, because the platform backends speak plain `WindowAction`s, and
+    // are forwarded into it; tray menu clicks are sent straight in as exact
+    // requests. Sharing one queue keeps the two in arrival order.
+    let (requests, rx) = mpsc::channel::<ActionRequest>();
+    let (hotkey_tx, hotkey_rx) = mpsc::channel::<WindowAction>();
+    let forward = requests.clone();
+    thread::Builder::new()
+        .name("tile-hotkey-forwarder".into())
+        .spawn(move || {
+            for action in hotkey_rx {
+                if forward.send(action.into()).is_err() {
+                    break;
+                }
+            }
+        })?;
+
     let window_backend = tile_platform::window_backend()?;
-    let hotkey_backend = tile_platform::hotkey_backend(tx.clone())?;
+    let hotkey_backend = tile_platform::hotkey_backend(hotkey_tx)?;
 
     // Everything that must differ between a checkout and an installed copy
     // hangs off this one value: which config directory is used, whether the OS
@@ -199,23 +203,49 @@ fn setup_app<R: Runtime>(
         log::error!("failed to set macOS accessory activation policy: {err}");
     }
 
+    app.manage(tray::MenuActions::new(requests));
     tray::build_tray(app, build_kind)?;
 
-    // Worker thread: drains hotkey presses and performs them. It only touches
-    // the window backend (safe off the main thread); hotkey registration stays
-    // with the backend's own loop.
+    // Worker thread: drains hotkey presses and menu clicks and performs them.
+    // It only touches the window backend (safe off the main thread); hotkey
+    // registration stays with the backend's own loop.
     //
     // The receiver is also handed to the pipeline as a non-blocking poll, so a
     // press that arrives while the previous one is still animating steers that
     // animation instead of waiting for it. Draining the channel from inside
     // the action is safe precisely because this thread is the only consumer.
+    //
+    // Only hotkeys preempt. An exact menu request met mid-flight is held back
+    // until the window lands, and nothing behind it is drained in the
+    // meantime, so order is kept and the request is never downgraded into a
+    // cycling one.
     let worker_handle = app.clone();
     thread::Builder::new()
         .name("tile-action-worker".into())
         .spawn(move || {
-            while let Ok(action) = rx.recv() {
-                feedback::run_action_preemptible(&worker_handle, action, &mut || {
-                    rx.try_recv().ok()
+            let mut deferred: Option<ActionRequest> = None;
+            loop {
+                let request = match deferred.take() {
+                    Some(request) => request,
+                    None => match rx.recv() {
+                        Ok(request) => request,
+                        Err(_) => break,
+                    },
+                };
+                feedback::run_action_preemptible(&worker_handle, request, &mut || {
+                    if deferred.is_some() {
+                        return None;
+                    }
+                    match rx.try_recv().ok()? {
+                        ActionRequest {
+                            action,
+                            exact: false,
+                        } => Some(action),
+                        exact => {
+                            deferred = Some(exact);
+                            None
+                        }
+                    }
                 });
             }
             log::debug!("action worker thread exiting");

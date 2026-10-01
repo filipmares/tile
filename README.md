@@ -14,8 +14,8 @@ Settings and is restored to on by **Restore defaults**.
 > two-thirds, fourths, corner thirds, sixths, ninths, corners, maximize,
 > maximize-height, almost-maximize, center, restore, display throws, and
 > incremental move, resize and halve/double — but only six ship bound to keys.
-> The other seventy are reachable by binding them yourself in Settings; the
-> tray/menu-bar icon opens Settings rather than offering the actions directly.
+> The other seventy are reachable by binding them yourself in Settings, and the
+> common layouts are also one click away in the tray/menu-bar menu.
 > Per-app rules and drag-snapping are not built yet. This
 > README documents only what actually works today.
 
@@ -64,6 +64,24 @@ thirds and two-thirds, the corners, center, the centred-column cycle, maximize-h
 plus fourths, sixths, ninths, corner thirds, the top/bottom halves, the
 incremental move/resize/halve-double families and the named-display moves —
 ships unbound, reachable through a binding of your own.
+
+### The tray and menu-bar menu
+
+The tray (Windows) or menu-bar (macOS) menu offers the common layouts with a
+click, each showing its current shortcut, so it doubles as a cheat sheet:
+
+```text
+Left / Right / Center Column      ▸  ½  ⅔  ⅓
+Top Half · Bottom Half
+Top Left / Top Right / Bottom Left / Bottom Right  ▸  ½  ⅔  ⅓   (half height)
+Maximize · Almost Maximize · Center · Restore
+Display Left / Right / Above / Below
+```
+
+A menu item always lands exactly where its label says — choosing "½" twice
+does not cycle on to ⅔ the way repeating a shortcut does. A ⅓-wide corner
+leaves room to stack a second window beneath it. Actions apply to the window
+that was frontmost before the menu opened.
 
 ### Press it again to change the size
 
