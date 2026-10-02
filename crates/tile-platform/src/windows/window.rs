@@ -18,7 +18,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetClassNameW, GetForegroundWindow, GetShellWindow, GetWindowLongW, GetWindowRect,
     GetWindowThreadProcessId, IsIconic, IsWindowVisible, IsZoomed, SetWindowPos, ShowWindow,
     GWL_EXSTYLE, GWL_STYLE, MONITORINFOF_PRIMARY, SET_WINDOW_POS_FLAGS, SWP_NOACTIVATE,
-    SWP_NOSENDCHANGING, SWP_NOZORDER, SW_RESTORE, WS_CAPTION, WS_EX_TOOLWINDOW,
+    SWP_NOSENDCHANGING, SWP_NOZORDER, SW_RESTORE, WS_CAPTION, WS_CHILD, WS_EX_TOOLWINDOW,
+    WS_THICKFRAME,
 };
 
 use crate::{AnimationSession, PermissionStatus, PlatformError, Result, WindowBackend};
@@ -430,6 +431,13 @@ unsafe extern "system" fn enum_first_manageable(hwnd: HWND, lparam: LPARAM) -> B
     BOOL(1)
 }
 
+fn has_manageable_style(style: u32) -> bool {
+    // Custom-title-bar apps such as Copilot omit WS_CAPTION but retain their
+    // resize frame. Neither flag makes a child window a standalone target.
+    style & WS_CHILD.0 == 0
+        && (style & WS_CAPTION.0 == WS_CAPTION.0 || style & WS_THICKFRAME.0 != 0)
+}
+
 fn is_manageable(hwnd: HWND) -> bool {
     // SAFETY: every call is a read-only query on `hwnd`, which the caller has
     // already checked is non-null.
@@ -442,8 +450,7 @@ fn is_manageable(hwnd: HWND) -> bool {
         }
 
         let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
-        if style & WS_CAPTION.0 != WS_CAPTION.0 {
-            // No title bar: not a normal, user-movable top-level window.
+        if !has_manageable_style(style) {
             return false;
         }
 
@@ -553,6 +560,38 @@ fn device_name(raw: &[u16; 32]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn captioned_windows_are_manageable_without_a_resize_frame() {
+        assert!(has_manageable_style(WS_CAPTION.0));
+    }
+
+    #[test]
+    fn custom_title_bar_windows_are_manageable_with_a_resize_frame() {
+        assert!(has_manageable_style(WS_THICKFRAME.0));
+        // Copilot's observed top-level style has no native caption.
+        assert!(has_manageable_style(0x160F0000));
+    }
+
+    #[test]
+    fn child_windows_are_not_manageable_even_with_caption_or_resize_frame() {
+        for style in [
+            WS_CAPTION.0,
+            WS_THICKFRAME.0,
+            WS_CAPTION.0 | WS_THICKFRAME.0,
+        ] {
+            assert!(!has_manageable_style(WS_CHILD.0 | style));
+        }
+    }
+
+    #[test]
+    fn borderless_helpers_are_not_manageable() {
+        assert!(!has_manageable_style(0));
+        assert!(!has_manageable_style(0x94000000));
+        assert!(!has_manageable_style(
+            windows::Win32::UI::WindowsAndMessaging::WS_BORDER.0
+        ));
+    }
 
     #[test]
     fn frame_delta_round_trips_through_apply() {
