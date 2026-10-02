@@ -288,6 +288,10 @@ Startup apps. Waking from sleep or hibernation does not start apps, so Tile
 has to have been running beforehand. Upgrading with the setup `.exe` used to
 remove the login item; current installers restore it.
 
+**Custom title bars on Windows:** Tile supports resizable windows without a
+native title bar, including the Copilot app. Child windows, tool windows, and
+hidden or cloaked windows are excluded from tiling.
+
 ## Build from source
 
 ### Prerequisites
