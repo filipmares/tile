@@ -1772,6 +1772,18 @@ function wireEvents(): void {
   });
 
   dom.reset.addEventListener("click", async () => {
+    // Every reset supersedes earlier feedback, including the half-success
+    // where only launch at login stays put; `reset-error` reports the outcome.
+    setRecordingStatus("");
+    for (const target of [
+      dom.bindingError,
+      dom.cyclingError,
+      dom.gapsError,
+      dom.motionError,
+      dom.launchError,
+    ]) {
+      setSettingsError(target, null);
+    }
     const restored = await saveSetting(
       dom.resetError,
       resetToDefaults,
@@ -1780,18 +1792,7 @@ function wireEvents(): void {
     await refreshHotkeyStatus();
     renderBindings();
     renderBehaviour();
-    if (restored) {
-      for (const target of [
-        dom.bindingError,
-        dom.cyclingError,
-        dom.gapsError,
-        dom.motionError,
-        dom.launchError,
-      ]) {
-        setSettingsError(target, null);
-      }
-      setRecordingStatus("Defaults restored.");
-    }
+    if (restored) setRecordingStatus("Defaults restored.");
   });
 
   dom.grant.addEventListener("click", () => void refreshPermission(true));
