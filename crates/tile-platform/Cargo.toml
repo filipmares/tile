@@ -45,7 +45,13 @@ features = [
 # NOT depend on the fast-moving `objc2-app-kit` typed API (its `NSScreen`
 # methods are `MainThreadMarker`-gated and cannot be compile-checked here), nor
 # on `core-graphics`.
+#
+# `NSWorkspace` wake / session-switch observation (for hotkey recovery) uses
+# the same low-level `msg_send!` approach; `block2` (already in the dependency
+# tree via Tauri) supplies the Objective-C block that
+# `addObserverForName:object:queue:usingBlock:` requires.
 [target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
 core-foundation = "0.10"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSGeometry"] }

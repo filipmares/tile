@@ -4380,6 +4380,7 @@ dependencies = [
 name = "tile-platform"
 version = "0.5.0"
 dependencies = [
+ "block2",
  "core-foundation 0.10.1",
  "log",
  "objc2",

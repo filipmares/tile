@@ -268,12 +268,176 @@ pub(crate) fn foreign_normal_windows(windows: &[CgWindowInfo], own_pid: i64) -> 
         .collect()
 }
 
+/// Carbon `eventHotKeyExistsErr` (`CarbonEvents.h`): the key combination is
+/// already registered — after Tile has released its own copy, by another app.
+pub(crate) const EVENT_HOT_KEY_EXISTS_ERR: i32 = -9878;
+
+/// Human-readable reason for a failed `RegisterEventHotKey` call.
+pub(crate) fn hotkey_registration_failure_reason(status: i32) -> String {
+    if status == EVENT_HOT_KEY_EXISTS_ERR {
+        "hotkey is already registered by another application".to_string()
+    } else {
+        format!("RegisterEventHotKey failed with OSStatus {status}")
+    }
+}
+
+/// `NSWorkspace` notifications after which Tile re-registers its Carbon
+/// hotkeys, mirroring the Windows backend's resume/unlock recovery.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HotkeyLifecycleEvent {
+    /// `NSWorkspaceDidWakeNotification`: the machine woke from sleep.
+    Wake,
+    /// `NSWorkspaceSessionDidBecomeActiveNotification`: fast user switching
+    /// brought this login session back to the console.
+    SessionActive,
+}
+
+impl HotkeyLifecycleEvent {
+    pub(crate) const ALL: [Self; 2] = [Self::Wake, Self::SessionActive];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Wake => "wake",
+            Self::SessionActive => "session became active",
+        }
+    }
+}
+
+/// Whether a lifecycle event should re-register hotkeys. Nothing is done
+/// before the first apply, after shutdown, or when no bindings are configured,
+/// so a notification can never resurrect hotkeys the app has released.
+pub(crate) fn should_reregister_hotkeys(active: bool, binding_count: usize) -> bool {
+    active && binding_count > 0
+}
+
+/// Route changes caused by re-registering the same bindings.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct HotkeyRecoverySummary {
+    /// Bindings registered after the recovery.
+    pub registered: usize,
+    /// Bindings that were unavailable before and are registered now.
+    pub recovered: usize,
+    /// Bindings that were registered before and are unavailable now.
+    pub lost: usize,
+    /// Bindings unavailable after the recovery, including `lost`.
+    pub unavailable: usize,
+}
+
+/// Compares binding statuses before and after a re-registration. Bindings
+/// are matched by value, so the result does not depend on ordering; a binding
+/// with no previous status counts as previously unavailable.
+pub(crate) fn summarize_hotkey_recovery(
+    before: &[crate::HotkeyBindingStatus],
+    after: &[crate::HotkeyBindingStatus],
+) -> HotkeyRecoverySummary {
+    let mut summary = HotkeyRecoverySummary::default();
+    for status in after {
+        let was_registered = before
+            .iter()
+            .find(|previous| previous.binding == status.binding)
+            .is_some_and(|previous| previous.route == crate::HotkeyRoute::Registered);
+        if status.route == crate::HotkeyRoute::Registered {
+            summary.registered += 1;
+            if !was_registered {
+                summary.recovered += 1;
+            }
+        } else {
+            summary.unavailable += 1;
+            if was_registered {
+                summary.lost += 1;
+            }
+        }
+    }
+    summary
+}
+
 #[cfg(test)]
 mod pure_tests {
     use super::{
-        carbon_key_code, carbon_modifiers, flip_rect, foreign_normal_windows, CgWindowInfo,
+        carbon_key_code, carbon_modifiers, flip_rect, foreign_normal_windows,
+        hotkey_registration_failure_reason, should_reregister_hotkeys, summarize_hotkey_recovery,
+        CgWindowInfo, HotkeyRecoverySummary, EVENT_HOT_KEY_EXISTS_ERR,
     };
-    use tile_core::{KeyCode, Modifiers, Rect};
+    use crate::{HotkeyBinding, HotkeyBindingStatus, HotkeyRoute};
+    use tile_core::{Hotkey, KeyCode, Modifiers, Rect, WindowAction};
+
+    // ----- hotkey recovery -------------------------------------------------
+
+    fn status(key: KeyCode, route: HotkeyRoute) -> HotkeyBindingStatus {
+        HotkeyBindingStatus {
+            binding: HotkeyBinding {
+                hotkey: Hotkey::new(Modifiers::CONTROL | Modifiers::ALT, key),
+                action: WindowAction::Maximize,
+                repeat: false,
+            },
+            route,
+            reason: None,
+        }
+    }
+
+    #[test]
+    fn recovery_only_runs_for_an_active_backend_with_bindings() {
+        assert!(should_reregister_hotkeys(true, 3));
+        assert!(!should_reregister_hotkeys(true, 0));
+        assert!(!should_reregister_hotkeys(false, 3));
+        assert!(!should_reregister_hotkeys(false, 0));
+    }
+
+    #[test]
+    fn an_unchanged_recovery_reports_no_transitions() {
+        let statuses = [
+            status(KeyCode::Left, HotkeyRoute::Registered),
+            status(KeyCode::Right, HotkeyRoute::Unavailable),
+        ];
+        assert_eq!(
+            summarize_hotkey_recovery(&statuses, &statuses),
+            HotkeyRecoverySummary {
+                registered: 1,
+                recovered: 0,
+                lost: 0,
+                unavailable: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn recovery_counts_recovered_and_lost_bindings_regardless_of_order() {
+        let before = [
+            status(KeyCode::Left, HotkeyRoute::Registered),
+            status(KeyCode::Right, HotkeyRoute::Unavailable),
+        ];
+        let after = [
+            status(KeyCode::Right, HotkeyRoute::Registered),
+            status(KeyCode::Left, HotkeyRoute::Unavailable),
+        ];
+        assert_eq!(
+            summarize_hotkey_recovery(&before, &after),
+            HotkeyRecoverySummary {
+                registered: 1,
+                recovered: 1,
+                lost: 1,
+                unavailable: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn a_binding_without_a_previous_status_counts_as_recovered() {
+        let after = [status(KeyCode::Up, HotkeyRoute::Registered)];
+        assert_eq!(summarize_hotkey_recovery(&[], &after).recovered, 1);
+    }
+
+    #[test]
+    fn registration_failures_name_conflicts_and_raw_statuses() {
+        assert_eq!(
+            hotkey_registration_failure_reason(EVENT_HOT_KEY_EXISTS_ERR),
+            "hotkey is already registered by another application"
+        );
+        assert_eq!(
+            hotkey_registration_failure_reason(-50),
+            "RegisterEventHotKey failed with OSStatus -50"
+        );
+    }
 
     // ----- coordinate flip -------------------------------------------------
 
