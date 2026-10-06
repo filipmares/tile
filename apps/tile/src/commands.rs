@@ -10,7 +10,9 @@
 use std::sync::Arc;
 
 use tauri::{AppHandle, Runtime, State};
-use tile_core::{Config, CycleSize, Gaps, Hotkey, SubsequentExecutionMode, WindowAction};
+use tile_core::{
+    AdvancedSetting, Config, CycleSize, Gaps, Hotkey, SubsequentExecutionMode, WindowAction,
+};
 
 use crate::autostart;
 use crate::dto::{
@@ -145,10 +147,20 @@ pub fn set_cycling(
 ///
 /// The on/off choice matters most to someone who finds the motion distracting
 /// or is working over a remote-desktop session. Duration has its own control
-/// alongside it; only the frame-rate pacing knob stays in `config.json`.
+/// alongside it; the frame rate lives in Settings ▸ Advanced.
 #[tauri::command]
 pub fn set_animation(state: State<'_, Shared>, enabled: bool) -> Result<Config, SettingsError> {
     state.update_config(|config| config.animation.enabled = enabled)
+}
+
+/// Sets one of the knobs in Settings ▸ Advanced. [`Config::set_advanced`]
+/// clamps the value, so the returned config carries what was actually saved.
+#[tauri::command]
+pub fn set_advanced(
+    state: State<'_, Shared>,
+    setting: AdvancedSetting,
+) -> Result<Config, SettingsError> {
+    state.update_config(|config| config.set_advanced(setting))
 }
 
 /// Sets how long a snap takes. `update_config` normalizes afterwards, so an

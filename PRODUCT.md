@@ -57,8 +57,9 @@ spreading sizes back across separate keys.
   Accessibility permission before Tile can move anything; Windows uses a
   low-level keyboard hook that replaces Aero Snap and cannot see input aimed at
   elevated processes.
-- Settings is the only place bindings are edited; `config.json` still owns a few
-  knobs (step sizes, minimum window fractions, animation fps) with no UI yet.
+- Settings is the only place bindings are edited. Fine-tuning knobs (step
+  sizes, minimum window fractions, Almost Maximize size, animation fps) live in
+  a collapsed **Settings ▸ Advanced** group, so they don't crowd the defaults.
   Each Settings control saves on its own and reports a failed save beside
   itself; **Restore defaults** asks first and offers Undo. A `config.json` that
   cannot be read is kept as `config.corrupt-<timestamp>.json` and Tile starts

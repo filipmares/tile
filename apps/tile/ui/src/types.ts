@@ -399,6 +399,26 @@ export interface Config {
   animation: AnimationConfig;
 }
 
+/** A Settings ▸ Advanced field, named as `AdvancedSetting` serializes it. */
+export type AdvancedField =
+  | "almostMaximizeWidth"
+  | "almostMaximizeHeight"
+  | "sizeStep"
+  | "widthStep"
+  | "moveStep"
+  | "minimumWindowWidth"
+  | "minimumWindowHeight"
+  | "animationFps";
+
+/**
+ * `AdvancedSetting` — serde `tag = "field", content = "value"`. Fractions
+ * travel as fractions (0.9), not percentages.
+ */
+export interface AdvancedSetting {
+  field: AdvancedField;
+  value: number;
+}
+
 export type PermissionStatus = "granted" | "denied" | "not-required";
 
 export type HotkeyRoute =

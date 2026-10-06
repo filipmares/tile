@@ -140,11 +140,13 @@ Also available, all unbound by default:
 Resizing anchors to whichever screen edge the window is already flush against,
 so a window in the right half grows leftwards instead of being pushed off the
 screen; a floating window resizes around its centre. Nothing can be nudged off
-the screen, and nothing shrinks below a quarter of the work area.
+the screen, and by default nothing shrinks below a quarter of the work area.
 
 The step sizes (`sizeStep`, `widthStep` and `moveStep`, each defaulting to 30)
-and the floor (`minimumWindowWidth`, `minimumWindowHeight`, defaulting to 0.25)
-live in `config.json`; there is no settings UI for them yet.
+and the floor (`minimumWindowWidth`, `minimumWindowHeight`, defaulting to 25%
+of the work area) are in **Settings ▸ Advanced**, as is the width and height of
+Almost Maximize (90% by default). Steps range from 1 to 1000 (physical pixels
+on Windows, points on macOS), and the fractions from 1% to 100%.
 
 `config.json` carries a `schemaVersion` (currently `1`; a file without one is
 treated as version 1). Settings are read one at a time, so a hand edit that
@@ -168,7 +170,8 @@ snapping Tile used to do; that is also the setting to reach for over a remote
 desktop session, or if you would rather have no motion at all.
 
 How long a snap takes is a slider in the same place, **Settings ▸ Behaviour ▸
-Motion**, from 40 ms to 1000 ms. The frame rate remains `config.json`-only:
+Motion**, from 40 ms to 1000 ms. The frame rate is in **Settings ▸ Advanced**,
+from 15 to 240 fps:
 
 ```jsonc
 "animation": {
@@ -180,8 +183,8 @@ Motion**, from 40 ms to 1000 ms. The frame rate remains `config.json`-only:
 
 `durationMs` is the end-to-end duration of the rigid ease-out, and is the value
 behind the Motion slider. The default is 250 ms on macOS and 220 ms on Windows
-and other platforms. The frame rate is a config-file-only pacing knob; the
-platform profile supplies the native-feeling ease-out tuning.
+and other platforms. The frame rate is a pacing knob; the platform profile
+supplies the native-feeling ease-out tuning.
 
 ### Windows shortcut notes
 

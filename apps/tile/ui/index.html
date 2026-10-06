@@ -456,6 +456,199 @@
         </details>
       </section>
 
+      <section class="section" aria-label="Advanced">
+        <details class="settings-group" id="advanced">
+          <summary class="settings-group__summary">Advanced</summary>
+          <div class="settings-group__content">
+          <p class="panel__hint">
+            Fine-tuning for the sizing and nudging shortcuts. Restore defaults
+            resets these too.
+          </p>
+
+          <div class="field">
+            <div class="field__text">
+              <label class="field__label" for="advanced-almost-maximize-width">
+                Almost Maximize width
+              </label>
+              <p class="field__help" id="advanced-almost-maximize-width-help">
+                Share of the usable screen width Almost Maximize fills. 1–100%.
+              </p>
+            </div>
+            <div class="field__control">
+              <input
+                type="number"
+                id="advanced-almost-maximize-width"
+                min="1"
+                max="100"
+                step="1"
+                aria-describedby="advanced-almost-maximize-width-help"
+              />
+              <span class="field__unit">%</span>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field__text">
+              <label class="field__label" for="advanced-almost-maximize-height">
+                Almost Maximize height
+              </label>
+              <p class="field__help" id="advanced-almost-maximize-height-help">
+                Share of the usable screen height Almost Maximize fills. 1–100%.
+              </p>
+            </div>
+            <div class="field__control">
+              <input
+                type="number"
+                id="advanced-almost-maximize-height"
+                min="1"
+                max="100"
+                step="1"
+                aria-describedby="advanced-almost-maximize-height-help"
+              />
+              <span class="field__unit">%</span>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field__text">
+              <label class="field__label" for="advanced-size-step">
+                Resize step
+              </label>
+              <p class="field__help" id="advanced-size-step-help">
+                How much Larger, Smaller, Larger Height and Smaller Height
+                change a window per press. 1–1000 <span data-step-unit>px</span>.
+              </p>
+            </div>
+            <div class="field__control">
+              <input
+                type="number"
+                id="advanced-size-step"
+                min="1"
+                max="1000"
+                step="1"
+                aria-describedby="advanced-size-step-help"
+              />
+              <span class="field__unit" data-step-unit>px</span>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field__text">
+              <label class="field__label" for="advanced-width-step">
+                Width step
+              </label>
+              <p class="field__help" id="advanced-width-step-help">
+                How much Larger Width and Smaller Width change a window per
+                press. 1–1000 <span data-step-unit>px</span>.
+              </p>
+            </div>
+            <div class="field__control">
+              <input
+                type="number"
+                id="advanced-width-step"
+                min="1"
+                max="1000"
+                step="1"
+                aria-describedby="advanced-width-step-help"
+              />
+              <span class="field__unit" data-step-unit>px</span>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field__text">
+              <label class="field__label" for="advanced-move-step">
+                Move step
+              </label>
+              <p class="field__help" id="advanced-move-step-help">
+                How far Move Left, Right, Up and Down slide a window per press.
+                1–1000 <span data-step-unit>px</span>.
+              </p>
+            </div>
+            <div class="field__control">
+              <input
+                type="number"
+                id="advanced-move-step"
+                min="1"
+                max="1000"
+                step="1"
+                aria-describedby="advanced-move-step-help"
+              />
+              <span class="field__unit" data-step-unit>px</span>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field__text">
+              <label class="field__label" for="advanced-minimum-width">
+                Minimum window width
+              </label>
+              <p class="field__help" id="advanced-minimum-width-help">
+                Smaller stops at this share of the usable screen width. 1–100%.
+              </p>
+            </div>
+            <div class="field__control">
+              <input
+                type="number"
+                id="advanced-minimum-width"
+                min="1"
+                max="100"
+                step="1"
+                aria-describedby="advanced-minimum-width-help"
+              />
+              <span class="field__unit">%</span>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field__text">
+              <label class="field__label" for="advanced-minimum-height">
+                Minimum window height
+              </label>
+              <p class="field__help" id="advanced-minimum-height-help">
+                Smaller stops at this share of the usable screen height. 1–100%.
+              </p>
+            </div>
+            <div class="field__control">
+              <input
+                type="number"
+                id="advanced-minimum-height"
+                min="1"
+                max="100"
+                step="1"
+                aria-describedby="advanced-minimum-height-help"
+              />
+              <span class="field__unit">%</span>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field__text">
+              <label class="field__label" for="advanced-animation-fps">
+                Animation frame rate
+              </label>
+              <p class="field__help" id="advanced-animation-fps-help">
+                Frames per second for animated snaps. Higher is smoother but
+                busier. 15–240 fps; macOS may cap it lower.
+              </p>
+            </div>
+            <div class="field__control">
+              <input
+                type="number"
+                id="advanced-animation-fps"
+                min="15"
+                max="240"
+                step="1"
+                aria-describedby="advanced-animation-fps-help"
+              />
+              <span class="field__unit">fps</span>
+            </div>
+          </div>
+          <p class="field__error" id="advanced-error" role="alert" hidden></p>
+          </div>
+        </details>
+      </section>
+
       <p class="field__error" id="reset-error" role="alert" hidden></p>
       <footer class="app__footer">
         <button id="show-welcome" type="button" class="button">

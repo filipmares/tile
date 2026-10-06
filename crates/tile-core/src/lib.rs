@@ -15,8 +15,9 @@ pub mod hotkey;
 pub use action::{ActionRequest, ParseActionError, WindowAction, WindowFamily};
 pub use animation::{AnimationParams, Animator};
 pub use config::{
-    AnimationConfig, Config, ConfigError, Conflict, CycleSize, Gaps, LenientConfig, SharedEdges,
-    SizeOptions, SubsequentExecutionMode, CONFIG_FILE_NAME, CONFIG_SCHEMA_VERSION, MAX_GAP,
+    AdvancedSetting, AnimationConfig, Config, ConfigError, Conflict, CycleSize, Gaps,
+    LenientConfig, SharedEdges, SizeOptions, SubsequentExecutionMode, CONFIG_FILE_NAME,
+    CONFIG_SCHEMA_VERSION, MAX_GAP,
 };
 pub use geometry::{Direction, Rect, Screen};
 pub use history::{WindowHistory, WindowId};

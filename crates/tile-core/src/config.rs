@@ -273,6 +273,50 @@ fn normalize_minimum_fraction(value: f64) -> f64 {
     }
 }
 
+/// Smallest size fraction the Advanced settings accept: 1% of the work area.
+/// Hand-edited configs may go lower — [`normalize_fraction`] only rejects
+/// zero and below — but a whole-percent control cannot express that.
+pub const MIN_SIZE_FRACTION: f64 = 0.01;
+
+/// One of the knobs the Settings ▸ Advanced group edits, with its new value.
+///
+/// Each change names a single field so a write from one window never puts
+/// back another field that a different window changed meanwhile. Serialized
+/// as `{ "field": "moveStep", "value": 32 }`; fractions travel as fractions,
+/// not percentages.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "field", content = "value", rename_all = "camelCase")]
+pub enum AdvancedSetting {
+    AlmostMaximizeWidth(f64),
+    AlmostMaximizeHeight(f64),
+    SizeStep(f64),
+    WidthStep(f64),
+    MoveStep(f64),
+    MinimumWindowWidth(f64),
+    MinimumWindowHeight(f64),
+    AnimationFps(u32),
+}
+
+/// Clamps a fraction from the Advanced settings into
+/// `[MIN_SIZE_FRACTION, 1]`, keeping `current` for a non-finite value.
+fn clamp_fraction(value: f64, current: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(MIN_SIZE_FRACTION, 1.0)
+    } else {
+        current
+    }
+}
+
+/// Clamps a step from the Advanced settings into `[1, MAX_STEP]`, keeping
+/// `current` for a non-finite value.
+fn clamp_step(value: f64, current: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(1.0, MAX_STEP)
+    } else {
+        current
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Animation
 // ---------------------------------------------------------------------------
@@ -308,11 +352,9 @@ pub const MAX_ANIMATION_FPS: u32 = 240;
 
 /// How a window travels to its new frame.
 ///
-/// Only [`AnimationConfig::enabled`] is exposed in the settings UI: it is the
-/// choice that matters, and it is what someone who finds motion distracting
-/// (or who is running over a remote desktop session) needs to reach. The
-/// duration and frame rate are deliberately config-file-only tuning knobs, the
-/// same treatment the step sizes get.
+/// [`AnimationConfig::enabled`] and the duration sit under Settings ▸
+/// Behaviour ▸ Motion; the frame rate is a pacing knob in Settings ▸ Advanced,
+/// alongside the step sizes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AnimationConfig {
@@ -809,6 +851,39 @@ impl Config {
         self.minimum_window_height = normalize_minimum_fraction(self.minimum_window_height);
         self.normalize_cycle_sizes();
         self.animation.normalize();
+    }
+
+    /// Applies one Advanced setting, clamping an out-of-range value to the
+    /// nearest bound instead of the default a hand-edited file falls back to:
+    /// someone who types 150% means "as wide as possible", not 90%.
+    pub fn set_advanced(&mut self, setting: AdvancedSetting) {
+        match setting {
+            AdvancedSetting::AlmostMaximizeWidth(value) => {
+                self.almost_maximize_width = clamp_fraction(value, self.almost_maximize_width);
+            }
+            AdvancedSetting::AlmostMaximizeHeight(value) => {
+                self.almost_maximize_height = clamp_fraction(value, self.almost_maximize_height);
+            }
+            AdvancedSetting::SizeStep(value) => {
+                self.size_step = clamp_step(value, self.size_step);
+            }
+            AdvancedSetting::WidthStep(value) => {
+                self.width_step = clamp_step(value, self.width_step);
+            }
+            AdvancedSetting::MoveStep(value) => {
+                self.move_step = clamp_step(value, self.move_step);
+            }
+            AdvancedSetting::MinimumWindowWidth(value) => {
+                self.minimum_window_width = clamp_fraction(value, self.minimum_window_width);
+            }
+            AdvancedSetting::MinimumWindowHeight(value) => {
+                self.minimum_window_height = clamp_fraction(value, self.minimum_window_height);
+            }
+            AdvancedSetting::AnimationFps(value) => {
+                self.animation.fps = value.clamp(MIN_ANIMATION_FPS, MAX_ANIMATION_FPS);
+            }
+        }
+        self.normalize();
     }
 
     /// Moves a display throw still sitting on the retired `Shift`+arrow
@@ -2063,6 +2138,74 @@ mod tests {
         assert_eq!(config.move_step, MAX_STEP);
         assert_eq!(config.minimum_window_width, 0.25);
         assert_eq!(config.minimum_window_height, 0.25);
+    }
+
+    #[test]
+    fn advanced_settings_deserialize_from_the_ui_shape() {
+        let setting: AdvancedSetting =
+            serde_json::from_str(r#"{ "field": "moveStep", "value": 32 }"#).unwrap();
+        assert_eq!(setting, AdvancedSetting::MoveStep(32.0));
+        let setting: AdvancedSetting =
+            serde_json::from_str(r#"{ "field": "almostMaximizeWidth", "value": 0.8 }"#).unwrap();
+        assert_eq!(setting, AdvancedSetting::AlmostMaximizeWidth(0.8));
+        let setting: AdvancedSetting =
+            serde_json::from_str(r#"{ "field": "animationFps", "value": 60 }"#).unwrap();
+        assert_eq!(setting, AdvancedSetting::AnimationFps(60));
+        assert!(
+            serde_json::from_str::<AdvancedSetting>(r#"{ "field": "gap", "value": 1 }"#).is_err()
+        );
+    }
+
+    #[test]
+    fn advanced_settings_change_only_their_own_field() {
+        type Expect = fn(&mut Config);
+        let defaults = Config::default();
+        let cases: [(AdvancedSetting, Expect); 8] = [
+            (AdvancedSetting::AlmostMaximizeWidth(0.8), |c| {
+                c.almost_maximize_width = 0.8
+            }),
+            (AdvancedSetting::AlmostMaximizeHeight(0.7), |c| {
+                c.almost_maximize_height = 0.7
+            }),
+            (AdvancedSetting::SizeStep(40.0), |c| c.size_step = 40.0),
+            (AdvancedSetting::WidthStep(50.0), |c| c.width_step = 50.0),
+            (AdvancedSetting::MoveStep(32.0), |c| c.move_step = 32.0),
+            (AdvancedSetting::MinimumWindowWidth(0.3), |c| {
+                c.minimum_window_width = 0.3
+            }),
+            (AdvancedSetting::MinimumWindowHeight(0.2), |c| {
+                c.minimum_window_height = 0.2
+            }),
+            (AdvancedSetting::AnimationFps(60), |c| c.animation.fps = 60),
+        ];
+        for (setting, expect) in cases {
+            let mut actual = defaults.clone();
+            actual.set_advanced(setting);
+            let mut expected = defaults.clone();
+            expect(&mut expected);
+            assert_eq!(actual, expected, "{setting:?} touched another field");
+        }
+    }
+
+    #[test]
+    fn advanced_settings_clamp_to_the_nearest_bound() {
+        let mut config = Config::default();
+        config.set_advanced(AdvancedSetting::AlmostMaximizeWidth(1.5));
+        assert_eq!(config.almost_maximize_width, 1.0);
+        config.set_advanced(AdvancedSetting::MinimumWindowHeight(0.0));
+        assert_eq!(config.minimum_window_height, MIN_SIZE_FRACTION);
+        config.set_advanced(AdvancedSetting::MinimumWindowWidth(-3.0));
+        assert_eq!(config.minimum_window_width, MIN_SIZE_FRACTION);
+        config.set_advanced(AdvancedSetting::SizeStep(0.0));
+        assert_eq!(config.size_step, 1.0);
+        config.set_advanced(AdvancedSetting::MoveStep(5000.0));
+        assert_eq!(config.move_step, MAX_STEP);
+        config.set_advanced(AdvancedSetting::WidthStep(f64::NAN));
+        assert_eq!(config.width_step, 30.0);
+        config.set_advanced(AdvancedSetting::AnimationFps(0));
+        assert_eq!(config.animation.fps, MIN_ANIMATION_FPS);
+        config.set_advanced(AdvancedSetting::AnimationFps(1000));
+        assert_eq!(config.animation.fps, MAX_ANIMATION_FPS);
     }
 
     #[test]

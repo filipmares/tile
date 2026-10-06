@@ -2,6 +2,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import {
+  AdvancedSetting,
   BuildInfo,
   Config,
   ConfigRecovery,
@@ -56,6 +57,10 @@ export const setAnimation = (enabled: boolean): Promise<Config> =>
 
 export const setAnimationDuration = (durationMs: number): Promise<Config> =>
   invoke("set_animation_duration", { durationMs });
+
+/** Sets one Settings ▸ Advanced knob; the backend clamps it. */
+export const setAdvanced = (setting: AdvancedSetting): Promise<Config> =>
+  invoke("set_advanced", { setting });
 
 export const setLaunchOnLogin = (enabled: boolean): Promise<Config> =>
   invoke("set_launch_on_login", { enabled });
