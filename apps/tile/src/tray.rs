@@ -285,20 +285,21 @@ fn entry_items<R: Runtime>(
 
 /// Builds the tray icon and installs its menu handler.
 pub fn build_tray<R: Runtime>(app: &AppHandle<R>, kind: BuildKind) -> tauri::Result<()> {
-    let status = app.state::<Arc<UpdateManager>>().status();
-    let blocked = app.state::<Arc<AppState>>().permission_blocked();
-    let menu = build_menu(app, kind, &status)?;
+    let snapshot = TraySnapshot::read(app);
+    let status = &snapshot.update;
+    let blocked = snapshot.blocked;
+    let menu = build_menu(app, kind, &snapshot)?;
 
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .tooltip(with_hotkey_note(
-            current_tooltip(kind, &status, blocked),
-            hotkeys_degraded(app),
+            current_tooltip(kind, status, blocked),
+            snapshot.degraded,
         ))
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(move |app, event| handle_menu_event(app, event.id.as_ref(), kind));
 
-    if let Some(icon) = tray_icon(app, kind, &status, blocked) {
+    if let Some(icon) = tray_icon(app, kind, status, blocked) {
         builder = builder.icon(icon);
     }
 
@@ -311,10 +312,28 @@ pub fn build_tray<R: Runtime>(app: &AppHandle<R>, kind: BuildKind) -> tauri::Res
     Ok(())
 }
 
+/// Everything the tray shows, read once so the menu, tooltip and icon of one
+/// rebuild always agree with each other.
+struct TraySnapshot {
+    update: UpdateStatus,
+    blocked: bool,
+    degraded: bool,
+}
+
+impl TraySnapshot {
+    fn read<R: Runtime>(app: &AppHandle<R>) -> Self {
+        Self {
+            update: app.state::<Arc<UpdateManager>>().status(),
+            blocked: app.state::<Arc<AppState>>().permission_blocked(),
+            degraded: hotkeys_degraded(app),
+        }
+    }
+}
+
 fn build_menu<R: Runtime>(
     app: &AppHandle<R>,
     kind: BuildKind,
-    update_status: &UpdateStatus,
+    snapshot: &TraySnapshot,
 ) -> tauri::Result<Menu<R>> {
     // A development build says so at the top of its menu, so two running
     // copies are never confused for one another.
@@ -326,7 +345,7 @@ fn build_menu<R: Runtime>(
         None => None,
     };
     // Disabled, so it explains rather than offers: Tile is already retrying.
-    let hotkey_warning = if hotkeys_degraded(app) {
+    let hotkey_warning = if snapshot.degraded {
         Some((
             MenuItem::with_id(
                 app,
@@ -342,18 +361,17 @@ fn build_menu<R: Runtime>(
     };
 
     let settings = MenuItem::with_id(app, ID_SETTINGS, "Settings…", true, None::<&str>)?;
-    let (update_label, update_enabled) = update_menu_state(update_status);
+    let (update_label, update_enabled) = update_menu_state(&snapshot.update);
     let update = MenuItem::with_id(app, ID_UPDATE, update_label, update_enabled, None::<&str>)?;
     let about = MenuItem::with_id(app, ID_ABOUT, "About Tile", true, None::<&str>)?;
     let actions_separator = PredefinedMenuItem::separator(app)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, ID_QUIT, "Quit Tile", true, None::<&str>)?;
-    let state = app.state::<Arc<AppState>>();
-    let config = state.config();
+    let config = app.state::<Arc<AppState>>().config();
     let actions = action_items(app, &config)?;
     // While Accessibility is missing nothing below can work, so the way out
     // comes first.
-    let permission = if state.permission_blocked() {
+    let permission = if snapshot.blocked {
         Some((
             MenuItem::with_id(
                 app,
@@ -593,14 +611,27 @@ fn update_menu_state(status: &UpdateStatus) -> (String, bool) {
     }
 }
 
-pub fn sync_update_state<R: Runtime>(app: &AppHandle<R>, status: &UpdateStatus) {
+/// Rebuilds the tray from the current update, permission and hotkey state.
+///
+/// Callers on any thread hand the rebuild to the main thread, so rebuilds run
+/// one at a time, in order, and each reads the state as it is when it runs: a
+/// rebuild queued earlier can never land after a newer one with older state.
+pub fn sync_update_state<R: Runtime>(app: &AppHandle<R>) {
+    let handle = app.clone();
+    if let Err(err) = app.run_on_main_thread(move || rebuild(&handle)) {
+        log::warn!("could not schedule a tray update: {err}");
+    }
+}
+
+fn rebuild<R: Runtime>(app: &AppHandle<R>) {
     let Some(tray) = app.tray_by_id(TRAY_ID) else {
         return;
     };
-    let state = app.state::<Arc<AppState>>();
-    let kind = state.build_kind();
-    let blocked = state.permission_blocked();
-    match build_menu(app, kind, status) {
+    let kind = app.state::<Arc<AppState>>().build_kind();
+    let snapshot = TraySnapshot::read(app);
+    let status = &snapshot.update;
+    let blocked = snapshot.blocked;
+    match build_menu(app, kind, &snapshot) {
         Ok(menu) => {
             if let Err(err) = tray.set_menu(Some(menu)) {
                 log::warn!("could not update tray menu: {err}");
@@ -610,7 +641,7 @@ pub fn sync_update_state<R: Runtime>(app: &AppHandle<R>, status: &UpdateStatus) 
     }
     if let Err(err) = tray.set_tooltip(Some(with_hotkey_note(
         current_tooltip(kind, status, blocked),
-        hotkeys_degraded(app),
+        snapshot.degraded,
     ))) {
         log::warn!("could not update tray tooltip: {err}");
     }
@@ -677,8 +708,7 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str, kind: BuildKind) 
 
 /// Rebuilds the menu so its shortcut labels follow the current bindings.
 pub fn sync_bindings<R: Runtime>(app: &AppHandle<R>) {
-    let status = app.state::<Arc<UpdateManager>>().status();
-    sync_update_state(app, &status);
+    sync_update_state(app);
 }
 
 #[cfg(test)]

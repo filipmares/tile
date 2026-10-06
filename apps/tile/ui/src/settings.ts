@@ -558,8 +558,18 @@ async function grantPermission(): Promise<void> {
   if (!dom.permissionPanel.hidden) setPermissionStatus(message);
 }
 
-/** Refreshes the permission panel, polling while permission is denied. */
+/**
+ * Refreshes the permission panel, polling while permission is denied.
+ *
+ * Startup, the poll and `permission-changed` can overlap, so each call takes a
+ * ticket and only the newest one may change the panel. Otherwise an older
+ * "granted" reply landing after a revocation would hide the panel and stop
+ * the poll for good.
+ */
+let permissionTicket = 0;
+
 async function refreshPermission(): Promise<void> {
+  const ticket = ++permissionTicket;
   let status;
   try {
     status = await getPermissionStatus(false);
@@ -569,10 +579,12 @@ async function refreshPermission(): Promise<void> {
     console.error("permission check failed", err);
     return;
   }
+  if (ticket !== permissionTicket) return;
 
   const denied = status === "denied";
   if (denied && dom.permissionPanel.hidden) {
     await renderAccessibilityHelp();
+    if (ticket !== permissionTicket) return;
   }
   dom.permissionPanel.hidden = !denied;
 
