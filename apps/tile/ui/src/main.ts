@@ -60,6 +60,7 @@ import {
 const ACCESSIBILITY_URL =
   "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
 const GITHUB_URL = "https://github.com/filipmares/tile";
+const RELEASE_NOTE_URL = /https?:\/\/[^\s<>"']+/g;
 const isAboutScreen = new URLSearchParams(window.location.search).has("about");
 const isWelcomeScreen = new URLSearchParams(window.location.search).has(
   "welcome",
@@ -1576,8 +1577,7 @@ function renderUpdateStatus(status: UpdateStatus): void {
     dom.updateProgress.removeAttribute("value");
     dom.installUpdate.hidden = true;
     dom.checkUpdate.disabled = false;
-    dom.updateNotes.hidden = updateNotes === null;
-    dom.updateNotes.textContent = updateNotes ?? "";
+    renderUpdateNotes(updateNotes);
 
     switch (status.status) {
       case "unavailable":
@@ -1596,12 +1596,11 @@ function renderUpdateStatus(status: UpdateStatus): void {
       case "current":
         setUpdateAnnouncement("Tile is up to date.");
         updateNotes = null;
-        dom.updateNotes.hidden = true;
+        renderUpdateNotes(updateNotes);
         break;
       case "available":
         updateNotes = status.notes;
-        dom.updateNotes.textContent = updateNotes ?? "";
-        dom.updateNotes.hidden = updateNotes === null;
+        renderUpdateNotes(updateNotes);
         setUpdateAnnouncement(`Tile ${status.version} is available.`);
         dom.installUpdate.textContent = "Update now";
         dom.installUpdate.hidden = false;
@@ -1640,6 +1639,34 @@ function renderUpdateStatus(status: UpdateStatus): void {
     if (status.status !== "error") {
       dom.checkUpdate.textContent = "Check for updates";
     }
+}
+
+function renderUpdateNotes(notes: string | null): void {
+  dom.updateNotes.replaceChildren();
+  dom.updateNotes.hidden = notes === null;
+  if (notes === null) return;
+
+  let cursor = 0;
+  for (const match of notes.matchAll(RELEASE_NOTE_URL)) {
+    const url = match[0];
+    const index = match.index;
+    dom.updateNotes.append(document.createTextNode(notes.slice(cursor, index)));
+
+    const link = document.createElement("a");
+    link.className = "updates__notes-link";
+    link.href = url;
+    link.textContent = url;
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      void openUrl(url).catch((err) =>
+        console.error("could not open the update changelog", err),
+      );
+    });
+    dom.updateNotes.append(link);
+    cursor = index + url.length;
+  }
+
+  dom.updateNotes.append(document.createTextNode(notes.slice(cursor)));
 }
 
 function setUpdateAnnouncement(text: string): void {
