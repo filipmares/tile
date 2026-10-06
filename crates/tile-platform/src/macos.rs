@@ -1778,6 +1778,14 @@ struct HotkeyState {
 }
 
 pub struct MacHotkeyBackend {
+    // TODO(hotkey-resilience): re-register hotkeys on
+    // `NSWorkspaceDidWakeNotification` / `NSWorkspaceSessionDidBecomeActiveNotification`.
+    // Carbon `RegisterEventHotKey` registrations live in the WindowServer and
+    // survive sleep and fast user switching in practice, so this is defensive
+    // only. It needs an Objective-C block observer (a `block2` dependency) whose
+    // callback hops back to the main thread that owns this backend, which is
+    // more machinery than this backend currently carries; the Windows backend
+    // is where hotkeys were actually being lost.
     state: Arc<HotkeyState>,
     /// Installed `EventHandlerRef`, stored as an address so the struct stays
     /// `Send`. `0` means "not installed".
