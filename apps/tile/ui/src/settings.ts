@@ -653,7 +653,13 @@ export async function bootSettings(): Promise<void> {
           : null;
       renderBehaviour();
       renderBindings();
-      if (editing !== null) (active as HTMLInputElement).value = editing;
+      if (editing !== null) {
+        const field = active as HTMLInputElement;
+        field.value = editing;
+        // Paired controls (slider and number) follow the field through its
+        // input listener; re-run it so a later commit reads the edit.
+        field.dispatchEvent(new Event("input", { bubbles: true }));
+      }
     },
   });
   wireEvents();
