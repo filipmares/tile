@@ -147,14 +147,19 @@ export function applySettingsSearch(): void {
       group.dataset[OPEN_BEFORE] = String(group.open);
     }
     // Opened only for what matched inside it, not for a heading further
-    // out: "shortcuts" should not unfold all eighty actions.
+    // out: "shortcuts" should not unfold all eighty actions. Terms the outer
+    // headings already supply are set aside, and the rest must be found
+    // here, so "behaviour top" still opens Window spacing.
+    const outer = withHeadings("", groupsAround(group));
+    const inner = terms.filter((term) => !matchesTerms(outer, [term]));
     const holdsMatch =
-      matchesTerms(headingText(group), terms) ||
-      [...shown].some(
-        (item) =>
-          group.contains(item) &&
-          matchesTerms(withHeadings(itemText(item), groupsAround(item, group)), terms),
-      );
+      inner.length > 0 &&
+      (matchesTerms(headingText(group), inner) ||
+        [...shown].some(
+          (item) =>
+            group.contains(item) &&
+            matchesTerms(withHeadings(itemText(item), groupsAround(item, group)), inner),
+        ));
     group.open = group.dataset[OPEN_BEFORE] === "true" || holdsMatch;
   }
 
