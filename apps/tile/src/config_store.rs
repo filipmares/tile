@@ -231,7 +231,8 @@ fn backup_sort_key(name: &str) -> Option<(u64, u32)> {
     }
 }
 
-/// Deletes all but the newest [`MAX_BACKUPS`] backups in `dir`, never `keep`.
+/// Keeps `keep` plus the newest `MAX_BACKUPS - 1` other backups in `dir`, so
+/// the cap holds even if the clock moved backwards since older backups.
 fn prune_backups(dir: &Path, keep: &Path) {
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
@@ -246,12 +247,10 @@ fn prune_backups(dir: &Path, keep: &Path) {
             let key = backup_sort_key(entry.file_name().to_str()?)?;
             Some((key, entry.path()))
         })
+        .filter(|(_, path)| path != keep)
         .collect();
     backups.sort_by_key(|(key, _)| std::cmp::Reverse(*key));
-    for (_, path) in backups.into_iter().skip(MAX_BACKUPS) {
-        if path == keep {
-            continue;
-        }
+    for (_, path) in backups.into_iter().skip(MAX_BACKUPS.saturating_sub(1)) {
         match fs::remove_file(&path) {
             Ok(()) => log::info!("removed old config backup {}", path.display()),
             Err(err) => log::warn!(
@@ -638,6 +637,24 @@ mod tests {
             assert!(path.exists(), "{} should be kept", path.display());
         }
         assert!(unrelated.exists());
+    }
+
+    #[test]
+    fn the_cap_holds_when_older_backups_look_newer() {
+        let dir = TempDir::new();
+        let future = u64::MAX / 2;
+        for n in 0..MAX_BACKUPS as u64 {
+            fs::write(dir.0.join(backup_file_name(future + n)), b"old").unwrap();
+        }
+        let keep = dir.0.join(backup_file_name(1));
+        fs::write(&keep, b"new").unwrap();
+
+        prune_backups(&dir.0, &keep);
+
+        let remaining = backups_in(&dir.0);
+        assert_eq!(remaining.len(), MAX_BACKUPS);
+        assert!(remaining.contains(&keep));
+        assert!(!dir.0.join(backup_file_name(future)).exists());
     }
 
     #[test]
