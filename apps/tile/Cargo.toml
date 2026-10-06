@@ -33,3 +33,8 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 env_logger = "0.11"
 directories = "6"
+
+# The fatal-startup dialog runs before Tauri exists, so it cannot use the
+# dialog plugin; this is the same crate and feature set that plugin uses.
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+rfd = { version = "0.16", default-features = false, features = ["common-controls-v6"] }

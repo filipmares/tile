@@ -273,6 +273,7 @@
             <legend class="field__label">Sizes to cycle through</legend>
             <div class="field__grid" id="cycle-sizes-grid"></div>
           </fieldset>
+          <p class="field__error" id="cycling-error" role="alert" hidden></p>
           </div>
         </details>
 
@@ -350,6 +351,7 @@
             <input type="checkbox" id="gap-main-only" name="gap-main-only" />
             <span class="field__label">Apply screen-edge gaps on the main display only</span>
           </label>
+          <p class="field__error" id="gaps-error" role="alert" hidden></p>
           </div>
         </details>
 
@@ -382,6 +384,7 @@
               <span class="field__unit">ms</span>
             </div>
           </div>
+          <p class="field__error" id="motion-error" role="alert" hidden></p>
         </div>
 
         <div class="settings-group settings-group--last">
@@ -390,6 +393,7 @@
             <input type="checkbox" id="launch-on-login" name="launch-on-login" />
             <span class="field__label">Launch Tile at login</span>
           </label>
+          <p class="field__error" id="launch-error" role="alert" hidden></p>
           <p class="panel__hint" id="launch-development-note" hidden>
             Saved, but not applied: a development build never changes the
             system login item.
@@ -413,6 +417,7 @@
           hidden
         ></p>
         <p class="section__hint" id="recording-status" aria-live="assertive"></p>
+        <p class="field__error" id="binding-error" role="alert" hidden></p>
 
         <div class="shortcut-subsection">
           <h3 class="shortcut-subsection__title">Active shortcuts</h3>
@@ -443,6 +448,7 @@
         </details>
       </section>
 
+      <p class="field__error" id="reset-error" role="alert" hidden></p>
       <footer class="app__footer">
         <button id="show-welcome" type="button" class="button">
           Show welcome guide

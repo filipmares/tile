@@ -13,6 +13,7 @@ mod dto;
 mod feedback;
 mod logging;
 mod ratelimit;
+mod settings_error;
 mod state;
 mod tray;
 mod update;
@@ -127,11 +128,43 @@ pub fn run() {
         Err(err) => {
             // Setup failed, so Tile is about to exit without ever showing a
             // tray icon. At sign-in that is indistinguishable from "did not
-            // start" unless it is written down.
+            // start" unless it is written down — and shown.
             log::error!("failed to start Tile: {err}");
             log::logger().flush();
+            show_startup_failure(logging::active_log_dir());
         }
     }
+}
+
+/// What the user reads when Tile cannot start. Plain words, and the one place
+/// that can explain why.
+fn startup_failure_message(log_dir: Option<&std::path::Path>) -> String {
+    let mut message = String::from("Tile could not start.");
+    match log_dir {
+        Some(dir) => message.push_str(&format!(
+            "\n\nThe reason is written in the log folder:\n{}",
+            dir.display()
+        )),
+        None => message.push_str("\n\nTile could not create its log folder either."),
+    }
+    message
+}
+
+/// A native, blocking dialog. Tauri never started, so its dialog plugin is not
+/// available; this runs on the main thread, which is what macOS requires.
+#[cfg(any(windows, target_os = "macos"))]
+fn show_startup_failure(log_dir: Option<&std::path::Path>) {
+    rfd::MessageDialog::new()
+        .set_title("Tile")
+        .set_description(startup_failure_message(log_dir))
+        .set_level(rfd::MessageLevel::Error)
+        .set_buttons(rfd::MessageButtons::Ok)
+        .show();
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn show_startup_failure(log_dir: Option<&std::path::Path>) {
+    eprintln!("{}", startup_failure_message(log_dir));
 }
 
 /// The first lines of every log session: enough to tell from the log alone
@@ -410,4 +443,17 @@ fn poll_until_granted<R: Runtime>(app: AppHandle<R>, state: Arc<AppState>) {
         })
         .map(|_| ())
         .unwrap_or_else(|err| log::error!("failed to spawn permission poll thread: {err}"));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_startup_failure_names_the_log_folder() {
+        let message = startup_failure_message(Some(std::path::Path::new("C:/Tile/logs")));
+        assert!(message.starts_with("Tile could not start."));
+        assert!(message.contains("C:/Tile/logs"));
+        assert!(startup_failure_message(None).contains("could not create its log folder"));
+    }
 }

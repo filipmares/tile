@@ -3,7 +3,9 @@
 //! Commands are intentionally thin: every real decision lives in
 //! `tile_core::Engine` or on [`AppState`]. Mutating commands return the updated
 //! [`Config`] so the UI always re-renders from the persisted truth rather than
-//! guessing (e.g. [`set_binding`] may unbind a conflicting action).
+//! guessing (e.g. [`set_binding`] may unbind a conflicting action). When a
+//! change cannot be saved or applied they return a [`SettingsError`] instead,
+//! having left the running app on its previous settings.
 
 use std::sync::Arc;
 
@@ -15,17 +17,28 @@ use crate::dto::{
     BuildInfoDto, ConfigRecoveryDto, HotkeyBindingStatusDto, HotkeyStatusDto, PermissionStatusDto,
     UpdateStatusDto, WelcomeStatusDto,
 };
+use crate::settings_error::SettingsError;
 use crate::state::AppState;
 use crate::update::UpdateManager;
 
 type Shared = Arc<AppState>;
 
-/// Keeps the OS login-item in sync with the desired state, logging on failure
-/// rather than surfacing an error that would block saving the preference. A
-/// development build persists the preference without touching the login item —
+/// Sets the OS login item. A development build succeeds without touching it —
 /// see [`crate::autostart`].
-fn sync_autostart<R: Runtime>(app: &AppHandle<R>, state: &AppState, enabled: bool) {
-    autostart::apply(app, state.build_kind(), enabled);
+fn sync_autostart<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    enabled: bool,
+) -> Result<(), SettingsError> {
+    autostart::apply(app, state.build_kind(), enabled).map_err(SettingsError::login_item)
+}
+
+/// Puts the login item back after the preference that asked for the change
+/// could not be saved. Best effort: the save failure is what gets reported.
+fn revert_autostart<R: Runtime>(app: &AppHandle<R>, state: &AppState, enabled: bool) {
+    if let Err(err) = sync_autostart(app, state, enabled) {
+        log::error!("could not put the OS login item back after a failed save: {err}");
+    }
 }
 
 #[tauri::command]
@@ -87,14 +100,14 @@ pub fn set_binding<R: Runtime>(
     state: State<'_, Shared>,
     action: WindowAction,
     hotkey: Option<Hotkey>,
-) -> Config {
-    let config = state.update_config(|config| config.set_binding(action, hotkey));
+) -> Result<Config, SettingsError> {
+    let config = state.update_config(|config| config.set_binding(action, hotkey))?;
     crate::tray::sync_bindings(&app);
-    config
+    Ok(config)
 }
 
 #[tauri::command]
-pub fn set_gaps(state: State<'_, Shared>, gaps: Gaps) -> Config {
+pub fn set_gaps(state: State<'_, Shared>, gaps: Gaps) -> Result<Config, SettingsError> {
     state.update_config(|config| config.gaps = gaps)
 }
 
@@ -106,7 +119,7 @@ pub fn set_cycling(
     state: State<'_, Shared>,
     mode: SubsequentExecutionMode,
     sizes: Vec<CycleSize>,
-) -> Config {
+) -> Result<Config, SettingsError> {
     state.update_config(|config| {
         config.subsequent_execution_mode = mode;
         config.cycle_sizes = sizes;
@@ -119,26 +132,33 @@ pub fn set_cycling(
 /// or is working over a remote-desktop session. Duration has its own control
 /// alongside it; only the frame-rate pacing knob stays in `config.json`.
 #[tauri::command]
-pub fn set_animation(state: State<'_, Shared>, enabled: bool) -> Config {
+pub fn set_animation(state: State<'_, Shared>, enabled: bool) -> Result<Config, SettingsError> {
     state.update_config(|config| config.animation.enabled = enabled)
 }
 
 /// Sets how long a snap takes. `update_config` normalizes afterwards, so an
 /// out-of-range value clamps exactly as a hand-edited one does.
 #[tauri::command]
-pub fn set_animation_duration(state: State<'_, Shared>, duration_ms: u32) -> Config {
+pub fn set_animation_duration(
+    state: State<'_, Shared>,
+    duration_ms: u32,
+) -> Result<Config, SettingsError> {
     state.update_config(|config| config.animation.duration_ms = duration_ms)
 }
 
+/// Changes the OS login item first and only then records the preference, so
+/// the checkbox never claims a login item the OS refused to create.
 #[tauri::command]
 pub fn set_launch_on_login<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, Shared>,
     enabled: bool,
-) -> Config {
-    let config = state.update_config(|config| config.launch_on_login = enabled);
-    sync_autostart(&app, &state, config.launch_on_login);
-    config
+) -> Result<Config, SettingsError> {
+    let previous = state.config().launch_on_login;
+    sync_autostart(&app, &state, enabled)?;
+    state
+        .update_config(|config| config.launch_on_login = enabled)
+        .inspect_err(|_| revert_autostart(&app, &state, previous))
 }
 
 /// Claims the one-time first-run orientation. Returns `true` at most once per
@@ -215,12 +235,31 @@ pub fn close_welcome<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     crate::window::close_welcome(&app).map_err(|err| err.to_string())
 }
 
+/// Restores every default. If the login item cannot be changed, everything
+/// else is still restored and launch-at-login keeps its current value, so the
+/// preference keeps matching the OS; the error says so.
 #[tauri::command]
-pub fn reset_to_defaults<R: Runtime>(app: AppHandle<R>, state: State<'_, Shared>) -> Config {
-    let config = state.update_config(|config| *config = Config::default());
-    sync_autostart(&app, &state, config.launch_on_login);
+pub fn reset_to_defaults<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, Shared>,
+) -> Result<Config, SettingsError> {
+    let previous_login = state.config().launch_on_login;
+    let login = sync_autostart(&app, &state, Config::default().launch_on_login);
+    let kept_login = login.is_err().then_some(previous_login);
+    state
+        .update_config(|config| {
+            *config = Config::default();
+            if let Some(launch_on_login) = kept_login {
+                config.launch_on_login = launch_on_login;
+            }
+        })
+        .inspect_err(|_| {
+            if login.is_ok() {
+                revert_autostart(&app, &state, previous_login);
+            }
+        })?;
     crate::tray::sync_bindings(&app);
-    config
+    login.map(|()| state.config())
 }
 
 #[tauri::command]
