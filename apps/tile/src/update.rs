@@ -157,6 +157,16 @@ fn classify_io(err: &std::io::Error, phase: UpdatePhase) -> UpdateErrorKind {
             UpdatePhase::Check => UpdateErrorKind::Offline,
             UpdatePhase::Install => UpdateErrorKind::Interrupted,
         }
+    } else if matches!(
+        err.kind(),
+        ErrorKind::InvalidData | ErrorKind::UnexpectedEof
+    ) {
+        // A corrupt or truncated archive, as the macOS tar/gzip extraction
+        // reports it.
+        match phase {
+            UpdatePhase::Check => UpdateErrorKind::Server,
+            UpdatePhase::Install => UpdateErrorKind::Interrupted,
+        }
     } else {
         match phase {
             UpdatePhase::Check => UpdateErrorKind::Unknown,
@@ -215,6 +225,15 @@ fn classify(err: &tauri_plugin_updater::Error, phase: UpdatePhase) -> UpdateErro
             classify_http(failure, phase)
         }
         E::Io(err) => classify_io(err, phase),
+        // ZIP extraction on Windows: pass nested I/O through, and treat a
+        // malformed archive as a download that did not arrive intact.
+        #[cfg(windows)]
+        E::Extract(err) => match std::error::Error::source(err)
+            .and_then(|source| source.downcast_ref::<std::io::Error>())
+        {
+            Some(err) => classify_io(err, phase),
+            None => UpdateErrorKind::Interrupted,
+        },
         // A non-success download status is reported as `Network`.
         E::Network(_)
         | E::ReleaseNotFound
@@ -650,6 +669,37 @@ mod tests {
         assert_eq!(
             classify(&io(1223), UpdatePhase::Install),
             UpdateErrorKind::Installer
+        );
+    }
+
+    #[test]
+    fn corrupt_archives_are_interrupted_downloads() {
+        for kind in [
+            std::io::ErrorKind::InvalidData,
+            std::io::ErrorKind::UnexpectedEof,
+        ] {
+            let err: tauri_plugin_updater::Error = std::io::Error::from(kind).into();
+            assert_eq!(
+                classify(&err, UpdatePhase::Install),
+                UpdateErrorKind::Interrupted
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn zip_extraction_errors_are_classified() {
+        use tauri_plugin_updater::Error as E;
+        // `ZipError` converts from these, so it need not be named here.
+        let malformed = E::Extract(String::from_utf8(vec![0xff]).unwrap_err().into());
+        assert_eq!(
+            classify(&malformed, UpdatePhase::Install),
+            UpdateErrorKind::Interrupted
+        );
+        let denied = E::Extract(std::io::Error::from(std::io::ErrorKind::PermissionDenied).into());
+        assert_eq!(
+            classify(&denied, UpdatePhase::Install),
+            UpdateErrorKind::Disk
         );
     }
 
