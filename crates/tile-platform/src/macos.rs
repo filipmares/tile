@@ -2128,6 +2128,11 @@ impl MacHotkeyBackend {
 
 impl HotkeyBackend for MacHotkeyBackend {
     fn apply(&mut self, bindings: &[HotkeyBinding]) -> Result<HotkeyApplyReport> {
+        // SAFETY: `+[NSThread isMainThread]` takes no arguments and returns BOOL.
+        let on_main: bool = unsafe { msg_send![class!(NSThread), isMainThread] };
+        if !on_main {
+            log::warn!("hotkeys applied off the main thread; Carbon expects the main thread");
+        }
         self.ensure_handler_installed()?;
         self.ensure_observer_installed();
         let statuses = lock_registrar(&self.registrar).register(bindings);
