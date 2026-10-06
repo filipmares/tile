@@ -239,6 +239,9 @@ function renderBindingLists(cfg: Config): void {
     const disclosure = document.createElement("details");
     disclosure.className = "binding-group__disclosure";
     disclosure.dataset.family = family.id;
+    // A group of its own, so the search opens a collapsed family that holds
+    // a match.
+    disclosure.dataset.searchGroup = "";
     disclosure.open = hasRendered
       ? openFamilies.has(family.id)
       : family.id === "halves" || actions.some(({ id }) => cfg.bindings[id]);
@@ -296,6 +299,9 @@ function renderBinding(
 
   const li = document.createElement("li");
   li.className = "binding";
+  // The same action can be listed twice (active and all); the search counts
+  // it once.
+  li.dataset.searchKey = `binding:${id}`;
 
   const name = document.createElement("span");
   name.className = "binding__label";

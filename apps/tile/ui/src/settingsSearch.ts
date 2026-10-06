@@ -116,15 +116,15 @@ export function applySettingsSearch(): void {
   ]);
 
   const shown = new Set<HTMLElement>();
-  let counted = 0;
+  const counted = new Set<string | HTMLElement>();
   for (const item of items) {
     const visible =
       !active || matchesTerms(withHeadings(itemText(item), groupsAround(item)), terms);
     setHidden(item, !visible);
     if (!visible) continue;
     shown.add(item);
-    // The active list repeats rows from the full list; count each once.
-    if (!item.closest("[data-search-uncounted]")) counted += 1;
+    // An item shown in more than one place shares a key; count it once.
+    counted.add(item.dataset.searchKey ?? item);
   }
 
   for (const group of groups) {
@@ -159,9 +159,11 @@ export function applySettingsSearch(): void {
   }
 
   const query = dom.settingsSearch.value.trim();
-  dom.settingsSearchEmpty.hidden = !active || counted > 0;
+  dom.settingsSearchEmpty.hidden = !active || counted.size > 0;
   dom.settingsSearchEmpty.textContent = active ? STRINGS.empty(query) : "";
-  scheduleAnnouncement(active ? (counted > 0 ? STRINGS.count(counted) : STRINGS.empty(query)) : "");
+  scheduleAnnouncement(
+    active ? (counted.size > 0 ? STRINGS.count(counted.size) : STRINGS.empty(query)) : "",
+  );
 }
 
 /** Says the result count once typing pauses, not on every keystroke. */
