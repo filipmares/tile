@@ -5,8 +5,10 @@ import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
 import {
   checkForUpdates,
+  dismissConfigRecovery,
   getBuildInfo,
   getConfig,
+  getConfigRecovery,
   getHotkeyStatus,
   getPermissionStatus,
   getUpdateStatus,
@@ -17,6 +19,7 @@ import {
   openWelcome,
   openUpdateWindow,
   resetToDefaults,
+  revealConfigBackup,
   setAnimation,
   setAnimationDuration,
   setBinding,
@@ -38,6 +41,7 @@ import {
   ActionPerformed,
   BuildInfo,
   Config,
+  ConfigRecovery,
   CYCLE_SIZES,
   CycleSize,
   FAMILIES,
@@ -124,6 +128,12 @@ const dom = {
   openAccessibility: el<HTMLButtonElement>("#open-accessibility"),
   developmentPanel: el<HTMLElement>("#development-panel"),
   developmentConfigDir: el<HTMLParagraphElement>("#development-config-dir"),
+  recoveryPanel: el<HTMLElement>("#recovery-panel"),
+  recoveryMessage: el<HTMLParagraphElement>("#recovery-message"),
+  recoveryPath: el<HTMLParagraphElement>("#recovery-path"),
+  recoveryOpenFolder: el<HTMLButtonElement>("#recovery-open-folder"),
+  recoveryDismiss: el<HTMLButtonElement>("#recovery-dismiss"),
+  recoveryStatus: el<HTMLParagraphElement>("#recovery-status"),
   launchDevelopmentNote: el<HTMLParagraphElement>("#launch-development-note"),
   updates: el<HTMLElement>("#updates"),
   updateVersion: el<HTMLParagraphElement>("#update-version"),
@@ -1292,6 +1302,50 @@ function renderBuildInfo(info: BuildInfo): void {
   }
 }
 
+/**
+ * Tells the user, once, that this launch could not read their saved settings.
+ * The panel is wired here rather than in `wireEvents` because it only exists
+ * when there is something to say.
+ */
+async function bootConfigRecovery(): Promise<void> {
+  let recovery: ConfigRecovery | null;
+  try {
+    recovery = await getConfigRecovery();
+  } catch (err) {
+    console.error("could not read the settings recovery notice", err);
+    return;
+  }
+  if (!recovery) return;
+
+  if (recovery.backupPath) {
+    dom.recoveryMessage.textContent =
+      "Tile could not read your settings, so it started from defaults. A copy of the old file was kept.";
+    dom.recoveryPath.textContent = recovery.backupPath;
+    dom.recoveryPath.hidden = false;
+  } else {
+    dom.recoveryMessage.textContent =
+      "Tile could not read your settings, so it started from defaults. The old file could not be copied, so changes made now will not be saved until Tile restarts — that keeps the old file from being overwritten.";
+  }
+  dom.recoveryPanel.hidden = false;
+
+  dom.recoveryOpenFolder.addEventListener("click", async () => {
+    dom.recoveryStatus.textContent = "";
+    try {
+      await revealConfigBackup();
+    } catch (err) {
+      dom.recoveryStatus.textContent = `Could not open the folder: ${String(err)}`;
+    }
+  });
+  dom.recoveryDismiss.addEventListener("click", async () => {
+    dom.recoveryPanel.hidden = true;
+    try {
+      await dismissConfigRecovery();
+    } catch (err) {
+      console.error("could not dismiss the settings recovery notice", err);
+    }
+  });
+}
+
 function renderUpdateStatus(status: UpdateStatus): void {
     updateState = status;
     if (status.status !== "available" && dom.updateConfirmation.open) {
@@ -1950,6 +2004,7 @@ async function boot(): Promise<void> {
   } catch (err) {
     console.error("could not read build info", err);
   }
+  await bootConfigRecovery();
   try {
     config = await getConfig();
     await refreshHotkeyStatus();

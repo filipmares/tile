@@ -81,6 +81,12 @@ pub struct AppState {
     /// Set once at startup and cleared as soon as the settings UI claims it,
     /// so a reopened settings window never shows it twice in one session.
     orientation_pending: AtomicBool,
+    /// An unreadable config this launch replaced with defaults, until the user
+    /// dismisses the notice about it.
+    config_recovery: Mutex<Option<config_store::ConfigRecovery>>,
+    /// Set when an unreadable config could not be moved aside. Saving would
+    /// overwrite the user's only copy, so nothing is written this session.
+    saves_blocked: bool,
 }
 
 impl AppState {
@@ -101,7 +107,32 @@ impl AppState {
             hotkey_status: Mutex::new(HotkeyStatus::default()),
             permission_dialog_limiter: Mutex::new(RateLimiter::new(PERMISSION_DIALOG_COOLDOWN)),
             orientation_pending: AtomicBool::new(orientation_pending),
+            config_recovery: Mutex::new(None),
+            saves_blocked: false,
         }
+    }
+
+    /// Records that this launch started from defaults because the config could
+    /// not be read. If the old file could not be kept, saving is switched off
+    /// for the session so it is never overwritten.
+    pub fn with_config_recovery(mut self, recovery: Option<config_store::ConfigRecovery>) -> Self {
+        self.saves_blocked = recovery
+            .as_ref()
+            .is_some_and(|recovery| recovery.backup_path.is_none());
+        self.config_recovery = Mutex::new(recovery);
+        self
+    }
+
+    /// The pending notice about an unreadable config, if it has not been
+    /// dismissed yet.
+    pub fn config_recovery(&self) -> Option<config_store::ConfigRecovery> {
+        lock(&self.config_recovery).clone()
+    }
+
+    /// Dismisses the notice for the rest of this session. The backup itself is
+    /// left exactly where it is.
+    pub fn dismiss_config_recovery(&self) {
+        lock(&self.config_recovery).take();
     }
 
     /// Whether the first-run orientation still needs showing, without
@@ -333,6 +364,10 @@ impl AppState {
             log::warn!("no config directory resolved; not persisting settings");
             return;
         };
+        if self.saves_blocked {
+            log::warn!("not saving settings: the unreadable config could not be backed up first");
+            return;
+        }
         let config = self.config();
         if let Err(err) = config_store::save_to_dir(dir, &config) {
             log::error!("failed to save config: {err}");
@@ -1928,6 +1963,44 @@ mod tests {
             pending,
         );
         (state, applies)
+    }
+
+    /// An unreadable config that could not be moved aside is the user's only
+    /// copy, so no setting change may be written over it.
+    #[test]
+    fn settings_are_not_saved_over_a_config_that_could_not_be_backed_up() {
+        let dir =
+            std::env::temp_dir().join(format!("tile-recovery-{}-{}", std::process::id(), line!()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = crate::config_store::config_file_path(&dir);
+        std::fs::write(&path, b"precious but broken").unwrap();
+
+        let state = state_with_orientation(&dir, false).with_config_recovery(Some(
+            crate::config_store::ConfigRecovery { backup_path: None },
+        ));
+        state.update_config(|config| config.launch_on_login = !config.launch_on_login);
+
+        assert_eq!(std::fs::read(&path).unwrap(), b"precious but broken");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_recovery_notice_is_shown_until_dismissed() {
+        let dir =
+            std::env::temp_dir().join(format!("tile-recovery-{}-{}", std::process::id(), line!()));
+        let backup = dir.join("config.corrupt-1.json");
+        let state = state_with_orientation(&dir, false).with_config_recovery(Some(
+            crate::config_store::ConfigRecovery {
+                backup_path: Some(backup.clone()),
+            },
+        ));
+        assert_eq!(
+            state.config_recovery().and_then(|r| r.backup_path),
+            Some(backup)
+        );
+        state.dismiss_config_recovery();
+        assert!(state.config_recovery().is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The orientation must record itself the moment it is claimed. Nothing
