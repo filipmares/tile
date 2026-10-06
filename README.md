@@ -140,7 +140,7 @@ Also available, all unbound by default:
 Resizing anchors to whichever screen edge the window is already flush against,
 so a window in the right half grows leftwards instead of being pushed off the
 screen; a floating window resizes around its centre. Nothing can be nudged off
-the screen, and nothing shrinks below a quarter of the work area.
+the screen, and by default nothing shrinks below a quarter of the work area.
 
 The step sizes (`sizeStep`, `widthStep` and `moveStep`, each defaulting to 30)
 and the floor (`minimumWindowWidth`, `minimumWindowHeight`, defaulting to 25%

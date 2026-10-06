@@ -2158,35 +2158,33 @@ mod tests {
 
     #[test]
     fn advanced_settings_change_only_their_own_field() {
-        let mut config = Config::default();
+        type Expect = fn(&mut Config);
         let defaults = Config::default();
-        for (setting, check) in [
-            (
-                AdvancedSetting::AlmostMaximizeWidth(0.8),
-                (|c: &Config| c.almost_maximize_width == 0.8) as fn(&Config) -> bool,
-            ),
-            (AdvancedSetting::AlmostMaximizeHeight(0.7), |c| {
-                c.almost_maximize_height == 0.7
+        let cases: [(AdvancedSetting, Expect); 8] = [
+            (AdvancedSetting::AlmostMaximizeWidth(0.8), |c| {
+                c.almost_maximize_width = 0.8
             }),
-            (AdvancedSetting::SizeStep(40.0), |c| c.size_step == 40.0),
-            (AdvancedSetting::WidthStep(50.0), |c| c.width_step == 50.0),
-            (AdvancedSetting::MoveStep(32.0), |c| c.move_step == 32.0),
+            (AdvancedSetting::AlmostMaximizeHeight(0.7), |c| {
+                c.almost_maximize_height = 0.7
+            }),
+            (AdvancedSetting::SizeStep(40.0), |c| c.size_step = 40.0),
+            (AdvancedSetting::WidthStep(50.0), |c| c.width_step = 50.0),
+            (AdvancedSetting::MoveStep(32.0), |c| c.move_step = 32.0),
             (AdvancedSetting::MinimumWindowWidth(0.3), |c| {
-                c.minimum_window_width == 0.3
+                c.minimum_window_width = 0.3
             }),
             (AdvancedSetting::MinimumWindowHeight(0.2), |c| {
-                c.minimum_window_height == 0.2
+                c.minimum_window_height = 0.2
             }),
-            (AdvancedSetting::AnimationFps(60), |c| c.animation.fps == 60),
-        ] {
-            let mut single = defaults.clone();
-            single.set_advanced(setting);
-            assert!(check(&single), "{setting:?} was not applied");
-            config.set_advanced(setting);
+            (AdvancedSetting::AnimationFps(60), |c| c.animation.fps = 60),
+        ];
+        for (setting, expect) in cases {
+            let mut actual = defaults.clone();
+            actual.set_advanced(setting);
+            let mut expected = defaults.clone();
+            expect(&mut expected);
+            assert_eq!(actual, expected, "{setting:?} touched another field");
         }
-        assert!(config.bindings == defaults.bindings && config.gaps == defaults.gaps);
-        assert_eq!(config.animation.enabled, defaults.animation.enabled);
-        assert_eq!(config.animation.duration_ms, defaults.animation.duration_ms);
     }
 
     #[test]
