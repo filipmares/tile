@@ -146,9 +146,12 @@ export async function saveSetting(
 /**
  * Re-renders when another window commits a change. This window's own writes
  * are skipped: their replies already rendered them, and re-rendering could
- * trample an edit still in progress. The payload's config is not trusted
- * as-is, because announcements from two windows may arrive out of order; the
- * queued re-read always returns the newest truth and only renders once this
+ * trample an edit still in progress. The backend announces each write while
+ * still holding its settings transaction, so announcements arrive in commit
+ * order and `changedElsewhere` always reacts to a change newer than anything
+ * this window committed before it. The payload's config is still not applied
+ * directly: it can be older than a reply this window is about to receive, so
+ * the queued re-read fetches the newest truth and renders only once this
  * window's own writes have drained. Reading never writes, so this cannot loop.
  */
 export async function followChangesElsewhere(): Promise<void> {
