@@ -1,7 +1,7 @@
 // Hotkey recording and display, mapping browser keyboard events onto the closed
 // `KeyCode` set from `tile-core/src/hotkey.rs`.
 
-import { Hotkey, KeyCode, MOD } from "./types";
+import { Hotkey, KeyCode, MOD, WindowAction } from "./types";
 
 export function isMac(): boolean {
   return /mac/i.test(navigator.userAgent) || /mac/i.test(navigator.platform);
@@ -184,6 +184,80 @@ export function hasAltGrRisk(hotkey: Hotkey): boolean {
     (hotkey.modifiers & (MOD.CONTROL | MOD.ALT)) ===
     (MOD.CONTROL | MOD.ALT)
   );
+}
+
+/** Every action other than `action` that `hotkey` is bound to, in `order`. */
+export function actionsUsing(
+  bindings: Partial<Record<WindowAction, Hotkey | null>>,
+  hotkey: Hotkey,
+  action: WindowAction,
+  order: readonly WindowAction[],
+): WindowAction[] {
+  return order.filter((other) => {
+    const bound = bindings[other];
+    return (
+      other !== action &&
+      bound != null &&
+      bound.modifiers === hotkey.modifiers &&
+      bound.key === hotkey.key
+    );
+  });
+}
+
+/**
+ * A chord macOS or its built-in apps already use. Tile may still register
+ * it, so this warns rather than refusing.
+ */
+export function macShortcutWarning(hotkey: Hotkey): string | null {
+  const { modifiers: m, key } = hotkey;
+  const arrows: KeyCode[] = ["left", "right", "up", "down"];
+  if (m === MOD.META && key === "tab") {
+    return "macOS uses ⌘Tab to switch apps.";
+  }
+  if (m === MOD.META && key === "space") {
+    return "macOS uses ⌘Space for Spotlight.";
+  }
+  if (m === MOD.CONTROL && key === "space") {
+    return "macOS uses ⌃Space to switch input sources.";
+  }
+  if (m === MOD.META && key === "backtick") {
+    return "macOS uses ⌘` to switch between an app's windows.";
+  }
+  if (m === (MOD.META | MOD.SHIFT) && ["digit3", "digit4", "digit5"].includes(key)) {
+    return "macOS uses this shortcut for screenshots.";
+  }
+  if (m === (MOD.CONTROL | MOD.META) && key === "q") {
+    return "macOS uses ⌃⌘Q to lock the screen.";
+  }
+  if (m === (MOD.ALT | MOD.META) && key === "escape") {
+    return "macOS uses ⌥⌘Esc to force quit apps.";
+  }
+  if (m === MOD.CONTROL && arrows.includes(key)) {
+    return "macOS uses this shortcut for Mission Control and switching spaces.";
+  }
+  return null;
+}
+
+/** A chord the OS will not let Tile have. The recorder refuses these. */
+export function hotkeyProblem(hotkey: Hotkey, mac: boolean): string | null {
+  return mac ? null : windowsHotkeyProblem(hotkey);
+}
+
+/** OS behaviour a chord would interfere with. Each one needs a yes to save. */
+export function hotkeyWarnings(hotkey: Hotkey, mac: boolean): string[] {
+  if (mac) {
+    const warning = macShortcutWarning(hotkey);
+    return warning ? [warning] : [];
+  }
+  const warnings: string[] = [];
+  if (hasAltGrRisk(hotkey)) {
+    warnings.push(
+      "Windows treats Ctrl+Alt as AltGr on many keyboard layouts. This shortcut may prevent typing characters such as @, €, {, or }.",
+    );
+  }
+  const known = knownWindowsShortcutWarning(hotkey);
+  if (known) warnings.push(known);
+  return warnings;
 }
 
 export function knownWindowsShortcutWarning(hotkey: Hotkey): string | null {

@@ -40,7 +40,7 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use tile_core::{
-    AnimationParams, Animator, Config, Engine, Plan, Rect, Screen, WindowAction, WindowId,
+    AnimationParams, Animator, Config, Engine, Hotkey, Plan, Rect, Screen, WindowAction, WindowId,
     WindowSnapshot,
 };
 use tile_platform::{
@@ -446,6 +446,34 @@ impl AppState {
         self.commit_config(|config, undo| {
             *undo = None;
             mutate(config);
+            Ok(())
+        })
+    }
+
+    /// Binds `hotkey` to `action` as one config change. When another action
+    /// already holds the hotkey it is unbound in the same write if `replace`
+    /// is set; otherwise nothing changes and the error names the holder, so a
+    /// chord can never be taken from an action the user was not asked about.
+    pub fn set_binding(
+        &self,
+        action: WindowAction,
+        hotkey: Option<Hotkey>,
+        replace: bool,
+    ) -> Result<Config, SettingsError> {
+        self.commit_config(|config, undo| {
+            if let Some(hk) = hotkey {
+                let holders = config.actions_using(hk, action);
+                if !replace && !holders.is_empty() {
+                    let names: Vec<_> = holders.iter().map(ToString::to_string).collect();
+                    return Err(SettingsError::shortcut_taken(format!(
+                        "{hk} is already used by {}",
+                        names.join(", ")
+                    )));
+                }
+            }
+            *undo = None;
+            config.set_binding(action, hotkey);
+            Ok(())
         })
     }
 
@@ -465,6 +493,7 @@ impl AppState {
             config.launch_on_login = launch_on_login;
             config.orientation_shown = previous.orientation_shown;
             undo.get_or_insert(previous);
+            Ok(())
         })
     }
 
@@ -498,23 +527,29 @@ impl AppState {
                 *config = previous;
                 restored = true;
             }
+            Ok(())
         })?;
         Ok(restored.then_some(config))
     }
 
     /// The one path every settings write takes: mutate the config and the
     /// reset snapshot together under the engine lock, then normalize, persist,
-    /// and re-apply hotkeys. A failed save rolls both back.
+    /// and re-apply hotkeys. A failed save rolls both back, as does a `mutate`
+    /// that refuses the change.
     fn commit_config(
         &self,
-        mutate: impl FnOnce(&mut Config, &mut Option<Config>),
+        mutate: impl FnOnce(&mut Config, &mut Option<Config>) -> Result<(), SettingsError>,
     ) -> Result<Config, SettingsError> {
         {
             let mut engine = lock(&self.engine);
             let mut undo = lock(&self.reset_undo);
             let previous = engine.config.clone();
             let previous_undo = undo.clone();
-            mutate(&mut engine.config, &mut undo);
+            if let Err(err) = mutate(&mut engine.config, &mut undo) {
+                engine.config = previous;
+                *undo = previous_undo;
+                return Err(err);
+            }
             engine.config.normalize();
             if let Err(err) = self.persist(&engine.config) {
                 engine.config = previous;
@@ -2298,6 +2333,45 @@ mod tests {
                 .enabled
         );
         assert_eq!(applies.load(Ordering::Relaxed), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A chord held by another action is only moved when the user chose
+    /// Replace; otherwise nothing is written, applied, or taken.
+    #[test]
+    fn binding_a_taken_shortcut_needs_replace() {
+        let dir =
+            std::env::temp_dir().join(format!("tile-taken-{}-{}", std::process::id(), line!()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let (state, applies) = state_counting_applies(&dir, false);
+        let before = state.config();
+        let hk = before.binding(WindowAction::LeftHalf).unwrap();
+
+        let err = state
+            .set_binding(WindowAction::Center, Some(hk), false)
+            .unwrap_err();
+        assert_eq!(
+            err.kind,
+            crate::settings_error::SettingsErrorKind::ShortcutTaken
+        );
+        assert_eq!(state.config(), before);
+        assert_eq!(applies.load(Ordering::Relaxed), 0);
+
+        let config = state
+            .set_binding(WindowAction::Center, Some(hk), true)
+            .unwrap();
+        assert_eq!(config.binding(WindowAction::Center), Some(hk));
+        assert_eq!(config.binding(WindowAction::LeftHalf), None);
+        assert_eq!(applies.load(Ordering::Relaxed), 1);
+
+        // Clearing, or rebinding a chord to its own action, is never a conflict.
+        state
+            .set_binding(WindowAction::Center, Some(hk), false)
+            .unwrap();
+        state
+            .set_binding(WindowAction::Center, None, false)
+            .unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -21,6 +21,9 @@ pub enum SettingsErrorKind {
     /// item had already changed and could not be put back, so it may no
     /// longer match the launch-at-login preference.
     OutOfSync,
+    /// The shortcut is already bound to another action, and the request did
+    /// not ask to replace it. Nothing was changed.
+    ShortcutTaken,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -42,6 +45,10 @@ impl SettingsError {
 
     pub fn out_of_sync(detail: impl std::fmt::Display) -> Self {
         Self::new(SettingsErrorKind::OutOfSync, detail)
+    }
+
+    pub fn shortcut_taken(detail: impl std::fmt::Display) -> Self {
+        Self::new(SettingsErrorKind::ShortcutTaken, detail)
     }
 
     fn new(kind: SettingsErrorKind, detail: impl std::fmt::Display) -> Self {
@@ -74,5 +81,7 @@ mod tests {
         assert_eq!(login["kind"], "loginItem");
         let out_of_sync = serde_json::to_value(SettingsError::out_of_sync("both")).unwrap();
         assert_eq!(out_of_sync["kind"], "outOfSync");
+        let taken = serde_json::to_value(SettingsError::shortcut_taken("Left Half")).unwrap();
+        assert_eq!(taken["kind"], "shortcutTaken");
     }
 }
