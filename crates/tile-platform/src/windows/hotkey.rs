@@ -396,6 +396,9 @@ impl HookWatchdog {
 
     fn on_tick(&mut self, sample: WatchdogSample) -> Option<RecoveryReason> {
         let gap = tick_elapsed(sample.now, self.last_tick);
+        // A sample older than the last restart is not a stall; it would only
+        // wrap into a bogus ~49-day gap.
+        let gap = if gap > u32::MAX / 2 { 0 } else { gap };
         self.last_tick = sample.now;
 
         if sample.last_hook_event != self.last_seen_hook_event {
@@ -1444,10 +1447,13 @@ impl OwnerState {
     }
 
     fn watchdog_tick(&mut self) {
-        let now = now_tick();
         if !self.pending.is_empty() {
             self.retry_pending_from_watchdog();
         }
+        // Sampled after the retry: installing a fallback hook restarts the
+        // watchdog with a newer tick, and an older `now` would wrap into a
+        // bogus multi-day "stall".
+        let now = now_tick();
         if self.hook.is_none() {
             // Bindings still need a hook that could not be installed earlier.
             if self.hook_wanted() && self.watchdog.allow_latency_rearm(now) {
@@ -2734,6 +2740,13 @@ mod tests {
             dog.on_tick(sample(now, now - 1, alive_at)).is_some(),
             "a fresh silence re-arms without waiting out the old back-off"
         );
+    }
+
+    #[test]
+    fn a_sample_older_than_the_last_restart_is_not_a_stall() {
+        let mut dog = HookWatchdog::new(0, 0);
+        dog.restart(10_000, 0);
+        assert_eq!(dog.on_tick(sample(9_990, 0, 0)), None);
     }
 
     #[test]
