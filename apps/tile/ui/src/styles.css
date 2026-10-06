@@ -1227,7 +1227,8 @@ select {
   margin-top: 8px;
 }
 
-.update-confirmation {
+.update-confirmation,
+.confirm-dialog {
   width: min(calc(100% - 32px), 440px);
   padding: 18px;
   color: var(--text);
@@ -1236,8 +1237,22 @@ select {
   border-radius: var(--radius);
 }
 
-.update-confirmation::backdrop {
+.update-confirmation::backdrop,
+.confirm-dialog::backdrop {
   background: color-mix(in srgb, #000 40%, transparent);
+}
+
+.confirm-dialog p {
+  margin: 0;
+}
+
+.confirm-dialog__title {
+  margin-bottom: 6px;
+  font-weight: 650;
+}
+
+.confirm-dialog .panel__actions {
+  margin-top: 16px;
 }
 
 .button {
@@ -1273,6 +1288,20 @@ select {
   justify-content: space-between;
   gap: 12px;
   padding-top: 2px;
+}
+
+.app__footer-end {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+
+.app__footer-status {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 13px;
 }
 
 input[type="checkbox"] {

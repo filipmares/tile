@@ -92,6 +92,9 @@ pub struct AppState {
     /// Set when an unreadable config could not be moved aside. Saving would
     /// overwrite the user's only copy, so nothing is written this session.
     saves_blocked: bool,
+    /// The config a restore-defaults replaced, until any other settings
+    /// change makes undoing it unsafe.
+    reset_undo: Mutex<Option<Config>>,
 }
 
 impl AppState {
@@ -115,6 +118,7 @@ impl AppState {
             orientation_pending: AtomicBool::new(orientation_pending),
             config_recovery: Mutex::new(None),
             saves_blocked: false,
+            reset_undo: Mutex::new(None),
         }
     }
 
@@ -394,14 +398,86 @@ impl AppState {
     /// A change that cannot be saved is rolled back before anything else sees
     /// it, so the running app never disagrees with what is on disk and the UI
     /// can simply re-read the config to show the truth.
+    ///
+    /// Any change ends the chance to undo a restore-defaults: undoing after it
+    /// would silently throw that change away.
     pub fn update_config(&self, mutate: impl FnOnce(&mut Config)) -> Result<Config, SettingsError> {
+        self.commit_config(|config, undo| {
+            *undo = None;
+            mutate(config);
+        })
+    }
+
+    /// Puts every setting back to its default, keeping what it replaced so
+    /// [`Self::undo_reset_to_defaults`] can bring it back. Resetting again
+    /// before anything else changed keeps the first snapshot: the settings
+    /// worth getting back are the ones from before the first reset, not the
+    /// defaults.
+    ///
+    /// `launch_on_login` is passed in because the login item is the caller's
+    /// to change: it stays as it was when the OS refused. Whether the
+    /// orientation was shown is a fact about this installation rather than a
+    /// setting, so a reset never rewinds it.
+    pub fn reset_to_defaults(&self, launch_on_login: bool) -> Result<Config, SettingsError> {
+        self.commit_config(|config, undo| {
+            let previous = std::mem::take(config);
+            config.launch_on_login = launch_on_login;
+            config.orientation_shown = previous.orientation_shown;
+            undo.get_or_insert(previous);
+        })
+    }
+
+    /// What launch at login would become if the last reset were undone, or
+    /// `None` when there is nothing to undo. Lets the caller move the login
+    /// item before the undo is committed, as every other change does.
+    pub fn reset_undo_launch_on_login(&self) -> Option<bool> {
+        lock(&self.reset_undo)
+            .as_ref()
+            .map(|config| config.launch_on_login)
+    }
+
+    /// Restores the config a restore-defaults replaced, if no other change
+    /// has been made since — from this window or any other. Returns `None`
+    /// when there is nothing left to undo. `keep_login` overrides the restored
+    /// launch-at-login value when the OS refused to change the login item.
+    pub fn undo_reset_to_defaults(
+        &self,
+        keep_login: Option<bool>,
+    ) -> Result<Option<Config>, SettingsError> {
+        if lock(&self.reset_undo).is_none() {
+            return Ok(None);
+        }
+        let mut restored = false;
+        let config = self.commit_config(|config, undo| {
+            if let Some(mut previous) = undo.take() {
+                previous.orientation_shown |= config.orientation_shown;
+                if let Some(launch_on_login) = keep_login {
+                    previous.launch_on_login = launch_on_login;
+                }
+                *config = previous;
+                restored = true;
+            }
+        })?;
+        Ok(restored.then_some(config))
+    }
+
+    /// The one path every settings write takes: mutate the config and the
+    /// reset snapshot together under the engine lock, then normalize, persist,
+    /// and re-apply hotkeys. A failed save rolls both back.
+    fn commit_config(
+        &self,
+        mutate: impl FnOnce(&mut Config, &mut Option<Config>),
+    ) -> Result<Config, SettingsError> {
         {
             let mut engine = lock(&self.engine);
+            let mut undo = lock(&self.reset_undo);
             let previous = engine.config.clone();
-            mutate(&mut engine.config);
+            let previous_undo = undo.clone();
+            mutate(&mut engine.config, &mut undo);
             engine.config.normalize();
             if let Err(err) = self.persist(&engine.config) {
                 engine.config = previous;
+                *undo = previous_undo;
                 return Err(SettingsError::not_saved(err));
             }
         }
@@ -2175,6 +2251,157 @@ mod tests {
                 .enabled
         );
         assert_eq!(applies.load(Ordering::Relaxed), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn reset_test_dir(tag: u32) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("tile-reset-{}-{tag}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// The user's settings as they stood before a reset in these tests.
+    fn customised() -> Config {
+        let mut config = Config::default();
+        config.set_binding(WindowAction::LeftHalf, None);
+        config.gaps.window = 12.0;
+        config.launch_on_login = false;
+        config.animation.enabled = false;
+        config
+    }
+
+    fn default_login() -> bool {
+        Config::default().launch_on_login
+    }
+
+    /// Undo after a reset brings the previous settings back — on disk and
+    /// with their hotkeys re-applied — and neither step rewinds the
+    /// orientation, which is a fact about the installation, not a setting.
+    #[test]
+    fn undoing_a_reset_restores_the_previous_settings() {
+        let dir = reset_test_dir(line!());
+        let (state, applies) = state_counting_applies(&dir, true);
+        state
+            .update_config(|config| *config = customised())
+            .unwrap();
+        assert!(state.take_orientation());
+
+        let reset = state.reset_to_defaults(default_login()).unwrap();
+        assert_eq!(reset.gaps.window, Config::default().gaps.window);
+        assert!(
+            reset.orientation_shown,
+            "a reset must not owe the orientation again"
+        );
+        assert_eq!(state.reset_undo_launch_on_login(), Some(false));
+
+        let applied_before = applies.load(Ordering::Relaxed);
+        let restored = state
+            .undo_reset_to_defaults(None)
+            .unwrap()
+            .expect("nothing changed since the reset");
+
+        assert_eq!(restored.binding(WindowAction::LeftHalf), None);
+        assert_eq!(restored.gaps.window, 12.0);
+        assert!(!restored.launch_on_login);
+        assert!(!restored.animation.enabled);
+        assert!(
+            restored.orientation_shown,
+            "undo must not owe the orientation again"
+        );
+        assert_eq!(state.config(), restored);
+        assert_eq!(
+            applies.load(Ordering::Relaxed),
+            applied_before + 1,
+            "the restored shortcuts must be re-applied"
+        );
+        assert_eq!(crate::config_store::load_from_dir(&dir).config, restored);
+        assert!(
+            state.undo_reset_to_defaults(None).unwrap().is_none(),
+            "an undo is used up once taken"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Any change after a reset — from the settings window or the welcome
+    /// window — ends the undo, so it can never overwrite a newer choice.
+    #[test]
+    fn a_change_after_a_reset_ends_the_undo() {
+        let dir = reset_test_dir(line!());
+        let state = state_with_orientation(&dir, false);
+        state
+            .update_config(|config| *config = customised())
+            .unwrap();
+
+        state.reset_to_defaults(default_login()).unwrap();
+        let newer = state
+            .update_config(|config| config.launch_on_login = false)
+            .unwrap();
+
+        assert_eq!(state.reset_undo_launch_on_login(), None);
+        assert!(state.undo_reset_to_defaults(None).unwrap().is_none());
+        assert_eq!(state.config(), newer, "the newer change stands");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Resetting twice in a row keeps the settings from before the first
+    /// reset, rather than offering to "undo" back to the defaults.
+    #[test]
+    fn a_repeated_reset_keeps_the_first_snapshot() {
+        let dir = reset_test_dir(line!());
+        let state = state_with_orientation(&dir, false);
+        state
+            .update_config(|config| *config = customised())
+            .unwrap();
+
+        state.reset_to_defaults(default_login()).unwrap();
+        state.reset_to_defaults(default_login()).unwrap();
+        let restored = state
+            .undo_reset_to_defaults(None)
+            .unwrap()
+            .expect("undo is available");
+
+        assert_eq!(restored.gaps.window, 12.0);
+        assert!(!restored.launch_on_login);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// When the OS refused to move the login item, the caller keeps the
+    /// current value rather than the one being restored.
+    #[test]
+    fn an_undo_can_keep_the_current_login_item() {
+        let dir = reset_test_dir(line!());
+        let state = state_with_orientation(&dir, false);
+        state
+            .update_config(|config| *config = customised())
+            .unwrap();
+        state.reset_to_defaults(true).unwrap();
+
+        let restored = state.undo_reset_to_defaults(Some(true)).unwrap().unwrap();
+
+        assert!(restored.launch_on_login);
+        assert_eq!(restored.gaps.window, 12.0);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A change that fails to save is rolled back entirely, so it does not
+    /// cost the user their undo either.
+    #[test]
+    fn a_failed_save_keeps_the_undo() {
+        let dir = reset_test_dir(line!());
+        let blocked = dir.join("not-a-directory");
+        std::fs::write(&blocked, b"").unwrap();
+        let state = state_with_orientation(&blocked, false);
+        // Seed a snapshot directly: with saves failing, no reset can commit.
+        *lock(&state.reset_undo) = Some(customised());
+
+        assert!(state
+            .update_config(|config| config.gaps.window = 3.0)
+            .is_err());
+        assert_eq!(state.reset_undo_launch_on_login(), Some(false));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

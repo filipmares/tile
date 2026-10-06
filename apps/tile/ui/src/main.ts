@@ -18,6 +18,7 @@ import {
   closeWelcomeWindow,
   openWelcome,
   openUpdateWindow,
+  undoResetToDefaults,
   resetToDefaults,
   revealConfigBackup,
   setAnimation,
@@ -111,6 +112,11 @@ const dom = {
   animationDurationNumber: el<HTMLInputElement>("#animation-duration-number"),
   launch: el<HTMLInputElement>("#launch-on-login"),
   reset: el<HTMLButtonElement>("#reset"),
+  resetStatus: el<HTMLParagraphElement>("#reset-status"),
+  undoReset: el<HTMLButtonElement>("#undo-reset"),
+  resetConfirmation: el<HTMLDialogElement>("#reset-confirmation"),
+  confirmReset: el<HTMLButtonElement>("#confirm-reset"),
+  cancelReset: el<HTMLButtonElement>("#cancel-reset"),
   showWelcome: el<HTMLButtonElement>("#show-welcome"),
   permissionPanel: el<HTMLElement>("#permission-panel"),
   welcome: el<HTMLElement>("#welcome"),
@@ -159,6 +165,78 @@ const dom = {
 };
 
 let config: Config | null = null;
+
+/**
+ * Every settings write runs through here, one at a time and in the order the
+ * user made them. Each command replies with the whole saved config, so if two
+ * ran at once a slow earlier reply could land after a newer one and put a
+ * stale config back on screen. Chaining them means replies arrive in order and
+ * the last write is the one `config` ends up holding.
+ *
+ * Resolves to the saved config, or to `null` when a newer write was queued in
+ * the meantime: the caller should then leave the controls alone, because they
+ * already show the user's newer choices. Rejects if this write failed;
+ * `saveSetting` then reports it and calls `reconcileWhenIdle`.
+ *
+ * Every write also hides Undo for a restore-defaults: the backend drops the
+ * snapshot on any change, since undoing past it would throw the change away.
+ */
+let writeQueue: Promise<unknown> = Promise.resolve();
+let latestWrite = 0;
+let pendingWrites = 0;
+
+/** Runs `op` after everything already queued, keeping the queue alive if it fails. */
+function enqueue<T>(op: () => Promise<T>): Promise<T> {
+  const run = writeQueue.then(op);
+  writeQueue = run.catch(() => undefined);
+  return run;
+}
+
+function saveConfig(write: () => Promise<Config>): Promise<Config | null> {
+  const ticket = ++latestWrite;
+  pendingWrites += 1;
+  clearUndo();
+  return enqueue(async () => {
+    try {
+      const saved = await write();
+      config = saved;
+      return ticket === latestWrite ? saved : null;
+    } finally {
+      pendingWrites -= 1;
+    }
+  });
+}
+
+/**
+ * Re-reads the settings Tile is actually using and renders them, once no
+ * write is left in the queue. A failed write calls this rather than putting
+ * its control back on the spot: a newer queued write may not re-render that
+ * control on success, and reverting now would trample a choice still on its
+ * way. The read is queued too, so it can never land before a write made
+ * earlier and hand back an older config.
+ */
+async function reconcileWhenIdle(): Promise<void> {
+  do {
+    await enqueue(async () => {
+      try {
+        config = await getConfig();
+      } catch (err) {
+        console.error("could not reload settings", err);
+      }
+    });
+  } while (pendingWrites > 0);
+  renderBehaviour();
+  renderBindings();
+}
+
+/**
+ * Whether Undo is on offer after a restore-defaults. The backend keeps the
+ * snapshot and drops it on any other change from any window, so this only
+ * decides whether to show the button.
+ */
+let undoAvailable = false;
+let undoTimer: number | null = null;
+const UNDO_WINDOW_MS = 10_000;
 let hotkeyStatus: HotkeyStatus = {
   bindings: [],
   hookInstalled: false,
@@ -1200,30 +1278,27 @@ function setSettingsError(target: HTMLElement, text: string | null): void {
 }
 
 /**
- * Runs a settings command and re-renders from what it returns. On failure the
- * backend has already left the app on its previous settings, so the controls
- * are re-read from it and the reason is shown beside them — never a control
+ * Runs a settings command through the write queue and reports a failure
+ * beside its control. Resolves to the saved config when it is the latest
+ * write, `null` when a newer one was queued meanwhile (the controls already
+ * show that newer choice, so leave them), or `false` when it failed. On
+ * failure the backend has already left the app on its previous settings, so
+ * the controls are re-read from it once the queue drains — never a control
  * showing a value Tile is not actually using.
  */
 async function saveSetting(
   errorTarget: HTMLElement,
   save: () => Promise<Config>,
   message: (err: unknown) => string = settingsErrorMessage,
-): Promise<boolean> {
+): Promise<Config | null | false> {
   try {
-    config = await save();
+    const saved = await saveConfig(save);
     setSettingsError(errorTarget, null);
-    return true;
+    return saved;
   } catch (err) {
     console.error("settings change failed", err);
     setSettingsError(errorTarget, message(err));
-    try {
-      config = await getConfig();
-    } catch (reloadErr) {
-      console.error("could not reload settings", reloadErr);
-    }
-    renderBehaviour();
-    renderBindings();
+    await reconcileWhenIdle();
     return false;
   }
 }
@@ -1302,12 +1377,117 @@ async function applyBinding(
   action: WindowAction,
   hotkey: Hotkey | null,
 ): Promise<void> {
-  if (!(await saveSetting(dom.bindingError, () => setBinding(action, hotkey)))) {
+  const saved = await saveSetting(dom.bindingError, () =>
+    setBinding(action, hotkey),
+  );
+  // A failed save has already re-rendered from the settings Tile kept.
+  if (saved === false) return;
+  await renderWholeConfig(saved !== null);
+}
+
+function setResetStatus(text: string): void {
+  dom.resetStatus.textContent = text;
+}
+
+/** Ends the chance to undo a reset, keeping focus off the vanishing button. */
+function clearUndo(): void {
+  if (undoTimer !== null) {
+    window.clearTimeout(undoTimer);
+    undoTimer = null;
+  }
+  if (!undoAvailable) return;
+  undoAvailable = false;
+  if (document.activeElement === dom.undoReset) dom.reset.focus();
+  dom.undoReset.hidden = true;
+  setResetStatus("Defaults restored.");
+}
+
+/**
+ * Re-renders everything a whole-config change can touch. The behaviour
+ * controls are skipped while a newer write is queued, since they already show
+ * that newer choice; the shortcut list has no such pending edits.
+ *
+ * The write has already been saved by the time this runs, so a failed status
+ * read must not surface as a failed save: the list still renders from the
+ * saved config, with the last hotkey status it knew.
+ */
+async function renderWholeConfig(latest: boolean): Promise<void> {
+  try {
+    await refreshHotkeyStatus();
+  } catch (err) {
+    console.error("could not refresh hotkey status", err);
+  }
+  renderBindings();
+  if (latest) renderBehaviour();
+}
+
+async function restoreDefaults(): Promise<void> {
+  dom.resetConfirmation.close();
+  // Every reset supersedes earlier feedback, including the half-success
+  // where only launch at login stays put; `reset-error` reports the outcome.
+  setRecordingStatus("");
+  for (const target of [
+    dom.bindingError,
+    dom.cyclingError,
+    dom.gapsError,
+    dom.motionError,
+    dom.launchError,
+  ]) {
+    setSettingsError(target, null);
+  }
+  setResetStatus("");
+  // The backend keeps what the reset replaced, and keeps the first snapshot
+  // if this is a repeat, so Undo always leads back to the user's settings.
+  const saved = await saveSetting(
+    dom.resetError,
+    resetToDefaults,
+    resetErrorMessage,
+  );
+  if (saved === false) return;
+  // A newer change is already queued: it ends the undo and renders its own
+  // reply.
+  if (saved === null) {
+    setResetStatus("Defaults restored.");
+    await renderWholeConfig(false);
     return;
   }
-  await refreshHotkeyStatus();
-  renderBindings();
-  renderBehaviour();
+  // Offered in the same turn the reply arrives, before any await, so a change
+  // made right after the reset still finds the offer and ends it.
+  undoAvailable = true;
+  dom.undoReset.hidden = false;
+  undoTimer = window.setTimeout(clearUndo, UNDO_WINDOW_MS);
+  setResetStatus("Defaults restored. Undo is available for a few seconds.");
+  await renderWholeConfig(true);
+}
+
+/** Rejection used when another window changed a setting after the reset. */
+const UNDO_EXPIRED = Symbol("undo expired");
+
+function undoErrorMessage(err: unknown): string {
+  return err === UNDO_EXPIRED
+    ? "Settings changed after the reset, so it can no longer be undone."
+    : settingsErrorMessage(err);
+}
+
+async function undoRestoreDefaults(): Promise<void> {
+  if (!undoAvailable) return;
+  // Undo is one-shot: drop it before the write so a second press cannot
+  // queue the same restore twice.
+  clearUndo();
+  setResetStatus("");
+  setSettingsError(dom.resetError, null);
+  const saved = await saveSetting(
+    dom.resetError,
+    async () => {
+      const restored = await undoResetToDefaults();
+      if (restored === null) throw UNDO_EXPIRED;
+      return restored;
+    },
+    undoErrorMessage,
+  );
+  if (saved === false) return;
+  setResetStatus("Previous settings restored.");
+  await renderWholeConfig(saved !== null);
 }
 
 function renderBehaviour(): void {
@@ -1771,29 +1951,18 @@ function wireEvents(): void {
     renderBindings();
   });
 
-  dom.reset.addEventListener("click", async () => {
-    // Every reset supersedes earlier feedback, including the half-success
-    // where only launch at login stays put; `reset-error` reports the outcome.
-    setRecordingStatus("");
-    for (const target of [
-      dom.bindingError,
-      dom.cyclingError,
-      dom.gapsError,
-      dom.motionError,
-      dom.launchError,
-    ]) {
-      setSettingsError(target, null);
-    }
-    const restored = await saveSetting(
-      dom.resetError,
-      resetToDefaults,
-      resetErrorMessage,
-    );
-    await refreshHotkeyStatus();
-    renderBindings();
-    renderBehaviour();
-    if (restored) setRecordingStatus("Defaults restored.");
+  dom.reset.addEventListener("click", () => {
+    dom.resetConfirmation.showModal();
+    dom.confirmReset.focus();
   });
+  dom.cancelReset.addEventListener("click", () => {
+    dom.resetConfirmation.close();
+  });
+  // Esc, Cancel, and Restore all close the dialog, and focus goes back to the
+  // button that opened it.
+  dom.resetConfirmation.addEventListener("close", () => dom.reset.focus());
+  dom.confirmReset.addEventListener("click", () => void restoreDefaults());
+  dom.undoReset.addEventListener("click", () => void undoRestoreDefaults());
 
   dom.grant.addEventListener("click", () => void refreshPermission(true));
   dom.showWelcome.addEventListener("click", () => {
