@@ -289,6 +289,7 @@ enum RecoveryReason {
     OwnerStall { ms: u32 },
     LateHookCallback { ms: u32 },
     HookSilent { ms: u32 },
+    HookMissing,
 }
 
 impl RecoveryReason {
@@ -336,6 +337,7 @@ impl fmt::Display for RecoveryReason {
             Self::HookSilent { ms } => {
                 write!(f, "keyboard hook silent for {ms} ms while input was active")
             }
+            Self::HookMissing => f.write_str("keyboard hook missing while shortcuts need it"),
         }
     }
 }
@@ -510,6 +512,10 @@ struct OwnerState {
     watchdog: HookWatchdog,
     watchdog_timer: usize,
     last_lifecycle_recovery: Option<u32>,
+    /// Bindings whose native re-registration failed transiently during
+    /// recovery. Kept apart from `registered` so `apply` never treats them as
+    /// live registrations it could reuse; retried on every lifecycle recovery.
+    pending: Vec<HotkeyBinding>,
 }
 
 const NOTIFICATION_CLASS: PCWSTR = w!("TileHotkeyNotifications");
@@ -800,6 +806,7 @@ fn owner_thread_main(
             watchdog: HookWatchdog::new(now_tick(), HOOK_LAST_EVENT.load(Ordering::Relaxed)),
             watchdog_timer: 0,
             last_lifecycle_recovery: None,
+            pending: Vec::new(),
         };
         HOOK_DISPATCH.with(|dispatch| {
             *dispatch.borrow_mut() = Some(HookDispatch {
@@ -1069,6 +1076,8 @@ impl OwnerState {
                 "request was cancelled before commit",
             );
         }
+        // The new binding set supersedes anything recovery was still retrying.
+        self.pending.clear();
 
         set_hook_bindings(hook_bindings.clone()).map_err(|err| {
             PlatformError::HotkeyStateUnknown(format!(
@@ -1207,20 +1216,32 @@ impl OwnerState {
         Ok(hook)
     }
 
-    /// Installs a fresh hook before removing the old one, so a live hook never
-    /// leaves a gap. Unhooking fails harmlessly when Windows already removed it.
-    fn rearm_hook(&mut self) -> Result<bool> {
-        let Some(old) = self.hook else {
-            return Ok(false);
-        };
-        let new = Self::set_hook(self.module)?;
-        self.hook = Some(new);
-        if let Err(err) = unsafe { UnhookWindowsHookEx(old) } {
-            log::debug!("previous keyboard hook was already gone: {}", err.message());
+    /// Brings the hook in line with the dispatch table: a live hook is
+    /// replaced (new before old, so there is never a gap; unhooking fails
+    /// harmlessly when Windows already removed it), and a missing hook is
+    /// installed if any binding still depends on it.
+    fn arm_hook(&mut self) -> Result<HookArm> {
+        let arm = hook_arm(self.hook.is_some(), !current_hook_bindings().is_empty());
+        match arm {
+            HookArm::NotNeeded => return Ok(arm),
+            HookArm::Installed => self.install_hook()?,
+            HookArm::Rearmed => {
+                let old = self.hook.take().expect("hook_arm saw a hook");
+                match Self::set_hook(self.module) {
+                    Ok(new) => self.hook = Some(new),
+                    Err(err) => {
+                        self.hook = Some(old);
+                        return Err(err);
+                    }
+                }
+                if let Err(err) = unsafe { UnhookWindowsHookEx(old) } {
+                    log::debug!("previous keyboard hook was already gone: {}", err.message());
+                }
+            }
         }
         self.watchdog
             .restart(now_tick(), HOOK_LAST_EVENT.load(Ordering::Relaxed));
-        Ok(true)
+        Ok(arm)
     }
 
     fn recover(&mut self, reason: RecoveryReason) {
@@ -1236,32 +1257,42 @@ impl OwnerState {
         }
 
         clear_transient_keys();
-        let hook = match self.rearm_hook() {
-            Ok(true) => "keyboard hook re-armed",
-            Ok(false) => "no keyboard hook needed",
+        // Re-validate first: a registration that fell back to the hook must be
+        // covered by the arming below.
+        let summary = reason
+            .is_lifecycle()
+            .then(|| self.revalidate_registrations());
+        let hook = match self.arm_hook() {
+            Ok(HookArm::Rearmed) => "keyboard hook re-armed",
+            Ok(HookArm::Installed) => "keyboard hook installed",
+            Ok(HookArm::NotNeeded) => "no keyboard hook needed",
             Err(err) => {
-                log::warn!("Windows hotkeys: could not re-arm keyboard hook after {reason}: {err}");
-                "keyboard hook re-arm failed"
+                log::warn!("Windows hotkeys: could not arm keyboard hook after {reason}: {err}");
+                "keyboard hook arm failed"
             }
         };
-        if reason.is_lifecycle() {
-            let summary = self.revalidate_registrations();
-            log::info!(
+        match summary {
+            Some(summary) => log::info!(
                 "Windows hotkeys recovered after {reason}: transient keys cleared, {hook}, \
-                 registrations re-validated (kept={}, moved_to_hook={}, lost={})",
+                 registrations re-validated (kept={}, restored={}, moved_to_hook={}, pending={})",
                 summary.kept,
+                summary.restored,
                 summary.moved_to_hook,
-                summary.lost
-            );
-        } else {
-            log::info!("Windows hotkeys recovered after {reason}: transient keys cleared, {hook}");
+                summary.pending
+            ),
+            None => log::info!(
+                "Windows hotkeys recovered after {reason}: transient keys cleared, {hook}"
+            ),
         }
+        // Any late callback observed so far is covered by this recovery.
+        HOOK_LATE.store(0, Ordering::Relaxed);
         self.sync_watchdog();
     }
 
-    /// Re-registers every active native hotkey. A registration Windows dropped
-    /// is restored; one another application grabbed meanwhile falls back to the
-    /// hook, exactly as it would have on apply.
+    /// Re-registers every active native hotkey and retries the ones a previous
+    /// recovery could not restore. A registration another application grabbed
+    /// meanwhile falls back to the hook, exactly as it would have on apply; any
+    /// other failure is kept pending for the next recovery.
     fn revalidate_registrations(&mut self) -> RevalidateSummary {
         let mut summary = RevalidateSummary::default();
         let active: Vec<_> = self
@@ -1271,47 +1302,80 @@ impl OwnerState {
             .filter(|binding| binding.enabled)
             .collect();
         let mut fallback = Vec::new();
+        let mut still_pending = Vec::new();
         for binding in active {
             let _ = unsafe { UnregisterHotKey(None, binding.id) };
             match register_binding(binding.id, binding.binding) {
                 Ok(()) => summary.kept += 1,
                 Err(err) => {
                     self.registered.retain(|owned| owned.id != binding.id);
-                    if is_already_registered(&err) {
-                        log::warn!(
-                            "Windows hotkey {} was taken by another application; intercepting it instead",
-                            binding.binding.hotkey
-                        );
+                    if Self::classify_failure(binding.binding, &err) {
                         fallback.push(to_hook_binding(binding.binding));
-                        summary.moved_to_hook += 1;
                     } else {
-                        log::warn!(
-                            "Windows hotkey {} could not be re-registered: {}",
-                            binding.binding.hotkey,
-                            err.message()
-                        );
-                        summary.lost += 1;
+                        still_pending.push(binding.binding);
                     }
                 }
             }
         }
+        for binding in std::mem::take(&mut self.pending) {
+            let id = self.allocate_id();
+            match register_binding(id, binding) {
+                Ok(()) => {
+                    self.registered.push(RegisteredBinding {
+                        id,
+                        binding,
+                        enabled: true,
+                    });
+                    summary.restored += 1;
+                }
+                Err(err) => {
+                    if Self::classify_failure(binding, &err) {
+                        fallback.push(to_hook_binding(binding));
+                    } else {
+                        still_pending.push(binding);
+                    }
+                }
+            }
+        }
+        summary.moved_to_hook = fallback.len();
+        summary.pending = still_pending.len();
+        self.pending = still_pending;
         if !fallback.is_empty() {
             let mut table = current_hook_bindings();
             table.extend(fallback);
             if let Err(err) = set_hook_bindings(table) {
                 log::warn!("Windows hotkeys: could not publish hook fallback: {err}");
-            } else if self.hook.is_none() {
-                if let Err(err) = self.install_hook() {
-                    log::warn!("Windows hotkeys: could not install hook for fallback: {err}");
-                }
             }
         }
         summary
     }
 
-    /// Runs the watchdog timer only while a hook exists to watch.
+    /// Logs a failed re-registration and returns whether it should fall back
+    /// to the hook (`true`) rather than be retried later.
+    fn classify_failure(binding: HotkeyBinding, err: &windows::core::Error) -> bool {
+        if is_already_registered(err) {
+            log::warn!(
+                "Windows hotkey {} was taken by another application; intercepting it instead",
+                binding.hotkey
+            );
+            true
+        } else {
+            log::warn!(
+                "Windows hotkey {} could not be re-registered ({}); will retry on next recovery",
+                binding.hotkey,
+                err.message()
+            );
+            false
+        }
+    }
+
+    fn hook_wanted(&self) -> bool {
+        self.hook.is_some() || !current_hook_bindings().is_empty()
+    }
+
+    /// Runs the watchdog timer only while a hook exists, or should exist.
     fn sync_watchdog(&mut self) {
-        match (self.hook.is_some(), self.watchdog_timer) {
+        match (self.hook_wanted(), self.watchdog_timer) {
             (true, 0) => {
                 self.watchdog_timer = unsafe { SetTimer(None, 0, WATCHDOG_INTERVAL_MS, None) };
                 if self.watchdog_timer == 0 {
@@ -1329,14 +1393,18 @@ impl OwnerState {
     }
 
     fn watchdog_tick(&mut self) {
+        let now = now_tick();
         if self.hook.is_none() {
+            // Bindings still need a hook that could not be installed earlier.
+            if self.hook_wanted() && self.watchdog.allow_latency_rearm(now) {
+                self.recover(RecoveryReason::HookMissing);
+            }
             return;
         }
         let mut info = LASTINPUTINFO {
             cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
             dwTime: 0,
         };
-        let now = now_tick();
         let last_input = if unsafe { GetLastInputInfo(&mut info) }.as_bool() {
             info.dwTime
         } else {
@@ -1347,9 +1415,17 @@ impl OwnerState {
             last_input,
             last_hook_event: HOOK_LAST_EVENT.load(Ordering::Relaxed),
         };
-        if let Some(reason) = self.watchdog.on_tick(sample) {
-            self.recover(reason);
+        let Some(reason) = self.watchdog.on_tick(sample) else {
+            return;
+        };
+        // Stalls share the latency limiter with busy/late-callback detection so
+        // one stall cannot trigger back-to-back recoveries.
+        if matches!(reason, RecoveryReason::OwnerStall { .. })
+            && !self.watchdog.allow_latency_rearm(now)
+        {
+            return;
         }
+        self.recover(reason);
     }
 
     /// Re-arms the hook when the callback ran late or the owner thread itself
@@ -1459,6 +1535,7 @@ impl OwnerState {
     fn release_all(&mut self) {
         set_hook_bindings(Vec::new()).ok();
         clear_transient_keys();
+        self.pending.clear();
         for binding in self.registered.drain(..) {
             let _ = unsafe { UnregisterHotKey(None, binding.id) };
         }
@@ -1475,8 +1552,26 @@ impl OwnerState {
 #[derive(Debug, Default)]
 struct RevalidateSummary {
     kept: usize,
+    restored: usize,
     moved_to_hook: usize,
-    lost: usize,
+    pending: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HookArm {
+    Rearmed,
+    Installed,
+    NotNeeded,
+}
+
+/// A present hook is always replaced (it may be silently dead); a missing one
+/// is installed whenever the dispatch table still has bindings for it.
+fn hook_arm(hook_present: bool, table_has_bindings: bool) -> HookArm {
+    match (hook_present, table_has_bindings) {
+        (true, _) => HookArm::Rearmed,
+        (false, true) => HookArm::Installed,
+        (false, false) => HookArm::NotNeeded,
+    }
 }
 
 fn register_binding(id: i32, binding: HotkeyBinding) -> windows::core::Result<()> {
@@ -2452,6 +2547,7 @@ mod tests {
             RecoveryReason::OwnerStall { ms: 1 },
             RecoveryReason::LateHookCallback { ms: 1 },
             RecoveryReason::HookSilent { ms: 1 },
+            RecoveryReason::HookMissing,
         ] {
             assert!(!reason.is_lifecycle());
             assert_eq!(reason.to_wparam(), None);
@@ -2583,6 +2679,18 @@ mod tests {
             dog.on_tick(sample(now, now - 1, alive_at)).is_some(),
             "a fresh silence re-arms without waiting out the old back-off"
         );
+    }
+
+    #[test]
+    fn hook_arm_installs_whenever_bindings_still_need_a_hook() {
+        assert_eq!(hook_arm(true, true), HookArm::Rearmed);
+        assert_eq!(hook_arm(true, false), HookArm::Rearmed);
+        assert_eq!(
+            hook_arm(false, true),
+            HookArm::Installed,
+            "a failed earlier install must be retried, not reported as unneeded"
+        );
+        assert_eq!(hook_arm(false, false), HookArm::NotNeeded);
     }
 
     #[test]
