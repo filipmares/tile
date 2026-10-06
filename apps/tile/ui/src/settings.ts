@@ -516,10 +516,10 @@ async function commitAnimationDuration(): Promise<void> {
 }
 
 /**
- * Fits the panel to where the user is: the first press of the primary button
- * asks macOS for its prompt, which it only ever shows once, so after that the
- * button opens the Privacy & Security pane instead and the separate "Open"
- * button would be a duplicate. Finder can only reveal a real app bundle.
+ * Fits the panel to where the user is: every press of the primary button opens
+ * the Privacy & Security pane, and the first one also asks macOS for its
+ * prompt, which it only ever shows once. After that the separate "Open" button
+ * would be a duplicate. Finder can only reveal a real app bundle.
  */
 async function renderAccessibilityHelp(): Promise<void> {
   let help;
@@ -546,10 +546,8 @@ function setPermissionStatus(text: string): void {
 async function grantPermission(): Promise<void> {
   setPermissionStatus("");
   try {
-    const step = await requestAccessibility();
-    if (step === "open-settings") {
-      setPermissionStatus(STRINGS.accessibilityOpened);
-    }
+    await requestAccessibility();
+    setPermissionStatus(STRINGS.accessibilityOpened);
   } catch (err) {
     setPermissionStatus(STRINGS.accessibilityFailed(err));
   }

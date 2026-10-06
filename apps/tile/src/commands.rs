@@ -29,6 +29,7 @@ use crate::permission::GrantStep;
 use crate::settings_error::SettingsError;
 use crate::state::{AppState, SettingsTransaction};
 use crate::update::{UpdateError, UpdateManager};
+use tile_platform::PermissionStatus;
 
 type Shared = Arc<AppState>;
 
@@ -403,22 +404,24 @@ pub fn get_accessibility_help(state: State<'_, Shared>) -> AccessibilityHelpDto 
     }
 }
 
-/// The settings window's primary grant button. The first press this session
-/// asks macOS for its one-time prompt (which also lists Tile in the pane);
-/// later presses open the Privacy & Security pane, because a consumed prompt
-/// would otherwise make the button a silent no-op. Returns what was done.
+/// The settings window's primary grant button. Every press ends with the
+/// Privacy & Security pane open, so it can never be a silent no-op. The first
+/// press this session also asks macOS for its one-time prompt, which lists Tile
+/// in the pane; macOS may already have used that prompt in an earlier launch,
+/// in which case it shows nothing. Returns which step this was.
 #[tauri::command]
 pub fn request_accessibility<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, Shared>,
 ) -> Result<GrantStepDto, String> {
     let step = state.grant_step();
-    match step {
-        GrantStep::Prompt => {
-            crate::permission::refresh(&app, true).map_err(|err| err.to_string())?;
+    if step == GrantStep::Prompt {
+        let status = crate::permission::refresh(&app, true).map_err(|err| err.to_string())?;
+        if status != PermissionStatus::Denied {
+            return Ok(step.into());
         }
-        GrantStep::OpenSettings => crate::permission::open_accessibility_settings()?,
     }
+    crate::permission::open_accessibility_settings()?;
     Ok(step.into())
 }
 

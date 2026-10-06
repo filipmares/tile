@@ -247,6 +247,7 @@
         class="panel panel--warning"
         hidden
         aria-labelledby="permission-heading"
+        aria-live="polite"
       >
         <h2 id="permission-heading">Accessibility permission needed</h2>
         <p>
@@ -280,8 +281,8 @@
           </button>
         </div>
         <p class="panel__hint" id="permission-prompted" hidden>
-          macOS shows its own permission prompt only once. If no prompt
-          appeared, use Open Accessibility settings.
+          macOS shows its own permission prompt only once, so the button now
+          goes straight to the Accessibility list.
         </p>
         <p class="panel__hint" id="permission-unbundled" hidden>
           This development build is not running from an app bundle, so macOS

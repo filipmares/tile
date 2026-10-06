@@ -60,13 +60,14 @@ pub enum Transition {
     Revoked,
 }
 
-/// What the primary "grant" button does next.
+/// What the primary "grant" button does next. Both steps end with the
+/// Privacy & Security pane open while access is still missing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GrantStep {
-    /// Ask macOS for its one-time prompt, which also lists Tile in the pane.
+    /// Also ask macOS for its one-time prompt, which lists Tile in the pane.
+    /// macOS may already have used it up in an earlier launch.
     Prompt,
-    /// The prompt was already requested this session (and macOS may never
-    /// show it twice), so open the Privacy & Security pane instead.
+    /// The prompt was already requested this session, so only open the pane.
     OpenSettings,
 }
 
