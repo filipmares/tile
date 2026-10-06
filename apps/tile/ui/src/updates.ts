@@ -4,6 +4,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
 import { checkForUpdates, getUpdateStatus, installUpdate } from "./api";
 import { dom, showOnly } from "./dom";
+import { updateErrorKind, updateErrorMessage } from "./errors";
 import { UpdateStatus } from "./types";
 
 /** User-facing copy for the update window. */
@@ -21,7 +22,6 @@ const STRINGS = {
   readyToRelaunch: (version: string) =>
     `Tile ${version} is installed and ready to relaunch.`,
   relaunch: "Relaunch Tile",
-  error: (message: string) => `Update error: ${message}`,
   retry: "Retry",
   checkForUpdates: "Check for updates",
   confirmWindows:
@@ -103,7 +103,7 @@ function renderUpdateStatus(status: UpdateStatus): void {
         dom.checkUpdate.disabled = true;
         break;
       case "error":
-        setUpdateAnnouncement(STRINGS.error(status.message));
+        setUpdateAnnouncement(updateErrorMessage(status.kind));
         dom.checkUpdate.textContent = STRINGS.retry;
         break;
     }
@@ -126,7 +126,10 @@ function setUpdateAnnouncement(text: string): void {
       renderUpdateStatus(status);
       return status;
     } catch (err) {
-      const status: UpdateStatus = { status: "error", message: String(err) };
+      const status: UpdateStatus = {
+        status: "error",
+        kind: updateErrorKind(err),
+      };
       renderUpdateStatus(status);
       return status;
     }
@@ -157,7 +160,10 @@ function setUpdateAnnouncement(text: string): void {
       scheduleUpdateRefresh(status);
       return status;
     } catch (err) {
-      const status: UpdateStatus = { status: "error", message: String(err) };
+      const status: UpdateStatus = {
+        status: "error",
+        kind: updateErrorKind(err),
+      };
       renderUpdateStatus(status);
       scheduleUpdateRefresh(status);
       return status;
@@ -198,7 +204,10 @@ function setUpdateAnnouncement(text: string): void {
       renderUpdateStatus(status);
       scheduleUpdateRefresh(status);
     } catch (err) {
-      const status: UpdateStatus = { status: "error", message: String(err) };
+      const status: UpdateStatus = {
+        status: "error",
+        kind: updateErrorKind(err),
+      };
       renderUpdateStatus(status);
       scheduleUpdateRefresh(status);
     }

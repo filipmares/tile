@@ -21,7 +21,7 @@ use crate::dto::{
 };
 use crate::settings_error::SettingsError;
 use crate::state::AppState;
-use crate::update::UpdateManager;
+use crate::update::{UpdateError, UpdateManager};
 
 type Shared = Arc<AppState>;
 
@@ -403,7 +403,7 @@ pub fn open_update_window<R: Runtime>(
 pub async fn check_for_updates<R: Runtime>(
     app: AppHandle<R>,
     manager: State<'_, Arc<UpdateManager>>,
-) -> Result<UpdateStatusDto, String> {
+) -> Result<UpdateStatusDto, UpdateError> {
     let manager = manager.inner().clone();
     manager.check(&app).await.map(UpdateStatusDto::from)
 }
@@ -413,7 +413,7 @@ pub async fn install_update<R: Runtime>(
     app: AppHandle<R>,
     manager: State<'_, Arc<UpdateManager>>,
     relaunch_after_install: bool,
-) -> Result<UpdateStatusDto, String> {
+) -> Result<UpdateStatusDto, UpdateError> {
     let manager = manager.inner().clone();
     manager
         .install(&app, relaunch_after_install)

@@ -11,7 +11,7 @@ use tile_platform::{HotkeyBindingStatus, HotkeyRoute, PermissionStatus};
 
 use crate::build_kind::BuildKind;
 use crate::config_store::{ConfigRecovery, RecoveryKind};
-use crate::update::UpdateStatus;
+use crate::update::{UpdateErrorKind, UpdateStatus};
 
 /// Serializable form of [`BuildKind`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -163,8 +163,9 @@ pub enum UpdateStatusDto {
     ReadyToRelaunch {
         version: String,
     },
+    /// Only the cause crosses to the UI; the raw updater text stays in the log.
     Error {
-        message: String,
+        kind: UpdateErrorKind,
     },
 }
 
@@ -195,7 +196,7 @@ impl From<UpdateStatus> for UpdateStatusDto {
             },
             #[cfg(target_os = "macos")]
             UpdateStatus::ReadyToRelaunch { version } => Self::ReadyToRelaunch { version },
-            UpdateStatus::Error { message } => Self::Error { message },
+            UpdateStatus::Error { kind } => Self::Error { kind },
         }
     }
 }
@@ -306,6 +307,14 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&progress).unwrap(),
             r#"{"status":"downloading","version":"1.2.3","downloadedBytes":512,"totalBytes":1024}"#
+        );
+
+        let failed = UpdateStatusDto::from(UpdateStatus::Error {
+            kind: crate::update::UpdateErrorKind::Signature,
+        });
+        assert_eq!(
+            serde_json::to_string(&failed).unwrap(),
+            r#"{"status":"error","kind":"signature"}"#
         );
     }
 }
