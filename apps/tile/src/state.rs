@@ -2122,6 +2122,7 @@ mod tests {
         let state = state_with_orientation(&dir, false).with_config_recovery(Some(
             crate::config_store::ConfigRecovery {
                 kind: crate::config_store::RecoveryKind::Corrupt,
+                some_fields_reset: true,
                 backup_path: None,
             },
         ));
@@ -2141,6 +2142,7 @@ mod tests {
         let state = state_with_orientation(&dir, false).with_config_recovery(Some(
             crate::config_store::ConfigRecovery {
                 kind: crate::config_store::RecoveryKind::PartialReset,
+                some_fields_reset: true,
                 backup_path: Some(backup.clone()),
             },
         ));

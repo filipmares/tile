@@ -54,6 +54,8 @@ const STRINGS = {
     "newer-version":
       "Your settings were saved by a newer version of Tile. Settings this version understands were kept.",
   } satisfies Record<ConfigRecovery["kind"], string>,
+  newerVersionWithResets:
+    "Your settings were saved by a newer version of Tile. Some settings couldn't be read and were reset to their defaults.",
   recoveredWithBackup: "A copy of the old file was kept.",
   recoveredWithoutBackup:
     "The old file could not be copied, so changes made now will not be saved until Tile restarts — that keeps the old file from being overwritten.",
@@ -323,7 +325,10 @@ async function bootConfigRecovery(): Promise<void> {
   }
   if (!recovery) return;
 
-  const reason = STRINGS.recoveryReason[recovery.kind];
+  const reason =
+    recovery.kind === "newer-version" && recovery.someFieldsReset
+      ? STRINGS.newerVersionWithResets
+      : STRINGS.recoveryReason[recovery.kind];
   if (recovery.backupPath) {
     dom.recoveryMessage.textContent = `${reason} ${STRINGS.recoveredWithBackup}`;
     dom.recoveryPath.textContent = recovery.backupPath;

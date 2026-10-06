@@ -434,11 +434,13 @@ export interface BuildInfo {
  * `ConfigRecoveryDto` — this launch could not load the saved settings as-is.
  * `kind` says why: unreadable (`corrupt`, started from defaults), some fields
  * reset (`partial-reset`), or written by a newer Tile (`newer-version`).
- * `backupPath` is null when the old file could not be kept, in which case
- * nothing is being saved this session.
+ * `someFieldsReset` is true whenever any setting fell back to its default,
+ * including for a `newer-version` file. `backupPath` is null when the old
+ * file could not be kept, in which case nothing is being saved this session.
  */
 export interface ConfigRecovery {
   kind: "corrupt" | "partial-reset" | "newer-version";
+  someFieldsReset: boolean;
   backupPath: string | null;
 }
 

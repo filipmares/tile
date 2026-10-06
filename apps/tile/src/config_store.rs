@@ -76,6 +76,10 @@ pub enum RecoveryKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigRecovery {
     pub kind: RecoveryKind,
+    /// Whether any field was reset to its default. Always true for
+    /// [`RecoveryKind::Corrupt`] and [`RecoveryKind::PartialReset`]; a
+    /// [`RecoveryKind::NewerVersion`] file may also have unreadable fields.
+    pub some_fields_reset: bool,
     /// Where the original file was moved. `None` when it could not be moved
     /// aside, in which case nothing may be saved over it this session.
     pub backup_path: Option<PathBuf>,
@@ -113,6 +117,14 @@ pub fn load_from_dir(dir: &Path) -> LoadedConfig {
     let (config, origin, recovery_kind) = match fs::read_to_string(&path) {
         Ok(contents) => match Config::from_json_lenient(&contents) {
             Ok(loaded) => {
+                if !loaded.reset_fields.is_empty() {
+                    log::warn!(
+                        "config at {} has unreadable settings ({}); reset them to defaults",
+                        path.display(),
+                        loaded.reset_fields.join(", ")
+                    );
+                }
+                let some_fields_reset = !loaded.reset_fields.is_empty();
                 let kind = if loaded.is_newer_schema() {
                     log::warn!(
                         "config at {} has schema version {}, newer than the supported {}; \
@@ -123,16 +135,15 @@ pub fn load_from_dir(dir: &Path) -> LoadedConfig {
                     );
                     Some(RecoveryKind::NewerVersion)
                 } else if !loaded.reset_fields.is_empty() {
-                    log::warn!(
-                        "config at {} has unreadable settings ({}); reset them to defaults",
-                        path.display(),
-                        loaded.reset_fields.join(", ")
-                    );
                     Some(RecoveryKind::PartialReset)
                 } else {
                     None
                 };
-                (loaded.config, ConfigOrigin::Loaded, kind)
+                (
+                    loaded.config,
+                    ConfigOrigin::Loaded,
+                    kind.map(|kind| (kind, some_fields_reset)),
+                )
             }
             Err(err) => {
                 log::warn!(
@@ -142,7 +153,7 @@ pub fn load_from_dir(dir: &Path) -> LoadedConfig {
                 (
                     Config::default(),
                     ConfigOrigin::Corrupt,
-                    Some(RecoveryKind::Corrupt),
+                    Some((RecoveryKind::Corrupt, true)),
                 )
             }
         },
@@ -158,11 +169,11 @@ pub fn load_from_dir(dir: &Path) -> LoadedConfig {
             (
                 Config::default(),
                 ConfigOrigin::Corrupt,
-                Some(RecoveryKind::Corrupt),
+                Some((RecoveryKind::Corrupt, true)),
             )
         }
     };
-    let recovery = recovery_kind.map(|kind| back_up(dir, &path, kind));
+    let recovery = recovery_kind.map(|(kind, reset)| back_up(dir, &path, kind, reset));
     let mut config = config;
     if let Some(recovery) = &recovery {
         // Whoever owned the old file has used Tile before; the welcome
@@ -186,7 +197,7 @@ pub fn load_from_dir(dir: &Path) -> LoadedConfig {
 
 /// Moves a config that could not be loaded as-is out of the way so it
 /// survives the next save, then trims old backups.
-fn back_up(dir: &Path, path: &Path, kind: RecoveryKind) -> ConfigRecovery {
+fn back_up(dir: &Path, path: &Path, kind: RecoveryKind, some_fields_reset: bool) -> ConfigRecovery {
     let backup = unused_backup_path(dir, unix_seconds());
     let backup_path = match fs::rename(path, &backup) {
         Ok(()) => {
@@ -214,7 +225,11 @@ fn back_up(dir: &Path, path: &Path, kind: RecoveryKind) -> ConfigRecovery {
     if let Some(keep) = &backup_path {
         prune_backups(dir, keep);
     }
-    ConfigRecovery { kind, backup_path }
+    ConfigRecovery {
+        kind,
+        some_fields_reset,
+        backup_path,
+    }
 }
 
 /// Sort key for a backup file name: `(timestamp, same-second suffix)`, or
@@ -600,8 +615,24 @@ mod tests {
         assert!(!loaded.config.launch_on_login);
         let recovery = loaded.recovery.expect("a newer file is reported");
         assert_eq!(recovery.kind, RecoveryKind::NewerVersion);
+        assert!(!recovery.some_fields_reset);
         let backup = recovery.backup_path.expect("the original is kept");
         assert_eq!(fs::read_to_string(&backup).unwrap(), original);
+    }
+
+    #[test]
+    fn a_newer_schema_version_with_a_bad_field_reports_both() {
+        let dir = TempDir::new();
+        let original = format!(
+            r#"{{"schemaVersion":{},"launchOnLogin":"maybe"}}"#,
+            CONFIG_SCHEMA_VERSION + 1
+        );
+        fs::write(config_file_path(&dir.0), &original).unwrap();
+
+        let recovery = load_from_dir(&dir.0).recovery.unwrap();
+
+        assert_eq!(recovery.kind, RecoveryKind::NewerVersion);
+        assert!(recovery.some_fields_reset);
     }
 
     #[test]

@@ -48,6 +48,9 @@ pub struct BuildInfoDto {
 pub struct ConfigRecoveryDto {
     /// Why the saved file could not be loaded as-is.
     pub kind: ConfigRecoveryKindDto,
+    /// Whether any setting was reset to its default. A `newer-version` file
+    /// may have had unreadable fields too.
+    pub some_fields_reset: bool,
     /// Where the unreadable file was kept, or `None` when it could not be
     /// moved aside and settings are therefore not being saved this session.
     pub backup_path: Option<String>,
@@ -76,6 +79,7 @@ impl From<&ConfigRecovery> for ConfigRecoveryDto {
     fn from(recovery: &ConfigRecovery) -> Self {
         ConfigRecoveryDto {
             kind: recovery.kind.into(),
+            some_fields_reset: recovery.some_fields_reset,
             backup_path: recovery
                 .backup_path
                 .as_ref()
