@@ -19,13 +19,18 @@
 //! `objc2-*` wrapper crates for the parts that matter most, so a version bump
 //! in those crates cannot silently break window moving or hotkeys.
 //!
-//! The **one** place Objective-C messaging is unavoidable is display
+//! The **one** place Objective-C messaging is unavoidable for window
+//! management is display
 //! enumeration: `NSScreen.visibleFrame` (the menu-bar/Dock-excluding work area)
 //! has no CoreGraphics equivalent. That code uses `objc2`'s low-level
 //! `msg_send!` with the runtime class lookup `class!(NSScreen)` (so no
 //! `objc2-app-kit` typed API, and no `MainThreadMarker` gating), and only the
 //! geometry type `NSRect` comes from `objc2-foundation` (for its `Encode`
 //! impl, required for correct struct-return dispatch).
+//!
+//! The hotkey backend uses the same style to observe `NSWorkspace` wake and
+//! session-switch notifications, with a `block2` block, so it can re-register
+//! its Carbon hotkeys afterwards.
 //!
 //! ## Coordinate spaces
 //!
@@ -51,6 +56,8 @@ use core_foundation::boolean::CFBoolean;
 use core_foundation::dictionary::CFDictionary;
 use core_foundation::string::CFString;
 
+use block2::RcBlock;
+use objc2::rc::{autoreleasepool, Retained};
 use objc2::runtime::AnyObject;
 use objc2::{class, msg_send, sel};
 use objc2_foundation::NSRect;
@@ -142,7 +149,6 @@ mod ffi {
     pub const kEventHotKeyPressed: u32 = 5;
     pub const kEventParamDirectObject: u32 = 0x2D2D_2D2D; // '----'
     pub const typeEventHotKeyID: u32 = 0x686B_6964; // 'hkid'
-    pub const eventHotKeyExistsErr: OSStatus = -9878;
     pub const noErr: OSStatus = 0;
 
     #[link(name = "ApplicationServices", kind = "framework")]
@@ -228,6 +234,14 @@ mod ffi {
         pub static kCGWindowNumber: CFStringRef;
         pub static kCGWindowOwnerPID: CFStringRef;
         pub static kCGWindowLayer: CFStringRef;
+    }
+
+    #[link(name = "AppKit", kind = "framework")]
+    extern "C" {
+        /// `NSNotificationName` (an `NSString *`) constants posted on
+        /// `NSWorkspace.sharedWorkspace.notificationCenter`.
+        pub static NSWorkspaceDidWakeNotification: *const c_void;
+        pub static NSWorkspaceSessionDidBecomeActiveNotification: *const c_void;
     }
 
     #[link(name = "Carbon", kind = "framework")]
@@ -1777,87 +1791,27 @@ struct HotkeyState {
     actions: Mutex<HashMap<u32, WindowAction>>,
 }
 
-pub struct MacHotkeyBackend {
-    // TODO(hotkey-resilience): re-register hotkeys on
-    // `NSWorkspaceDidWakeNotification` / `NSWorkspaceSessionDidBecomeActiveNotification`.
-    // Carbon `RegisterEventHotKey` registrations live in the WindowServer and
-    // survive sleep and fast user switching in practice, so this is defensive
-    // only. It needs an Objective-C block observer (a `block2` dependency) whose
-    // callback hops back to the main thread that owns this backend, which is
-    // more machinery than this backend currently carries; the Windows backend
-    // is where hotkeys were actually being lost.
+/// Carbon registrations plus the bindings they serve.
+///
+/// Shared between [`MacHotkeyBackend::apply`] and the [`WorkspaceObserver`]
+/// so a wake or session switch can re-register exactly what the last apply
+/// requested, with the same route/status bookkeeping.
+struct Registrar {
     state: Arc<HotkeyState>,
-    /// Installed `EventHandlerRef`, stored as an address so the struct stays
-    /// `Send`. `0` means "not installed".
-    handler: usize,
     /// Live `EventHotKeyRef`s, as addresses, for later unregistration.
     registered: Vec<usize>,
     next_id: u32,
+    /// Bindings from the last apply, replayed on recovery.
+    bindings: Vec<HotkeyBinding>,
+    /// Statuses from the last registration pass.
+    statuses: Vec<HotkeyBindingStatus>,
+    /// `true` from the first apply until shutdown.
+    active: bool,
 }
 
-// SAFETY: the only non-`Send` conceptual data are the Carbon handles, stored as
-// plain `usize` addresses; the shared `Arc<HotkeyState>` is `Send + Sync`. The
-// Carbon APIs that consume these handles must be called on the main thread,
-// which is a documented caller requirement, not a memory-safety property.
-unsafe impl Send for MacHotkeyBackend {}
-
-impl MacHotkeyBackend {
-    pub fn new(events: Sender<ActionRequest>) -> Result<Self> {
-        Ok(Self {
-            state: Arc::new(HotkeyState {
-                sender: Mutex::new(events),
-                actions: Mutex::new(HashMap::new()),
-            }),
-            handler: 0,
-            registered: Vec::new(),
-            next_id: 1,
-        })
-    }
-
-    /// Installs the shared keyboard event handler once, lazily.
-    ///
-    /// Must run on the main thread (which owns the Carbon run loop).
-    fn ensure_handler_installed(&mut self) -> Result<()> {
-        if self.handler != 0 {
-            return Ok(());
-        }
-        let spec = ffi::EventTypeSpec {
-            eventClass: ffi::kEventClassKeyboard,
-            eventKind: ffi::kEventHotKeyPressed,
-        };
-        let mut handler_ref: ffi::EventHandlerRef = std::ptr::null_mut();
-        // The callback receives a pointer to our `HotkeyState`, which stays
-        // alive for as long as `self` (and is removed before drop).
-        let user_data = Arc::as_ptr(&self.state) as *mut c_void;
-        // SAFETY: `GetApplicationEventTarget` returns the process-wide target;
-        // `hotkey_handler` matches `EventHandlerUPP`; `spec`/`handler_ref` are
-        // valid pointers; `user_data` outlives the handler.
-        let status = unsafe {
-            ffi::InstallEventHandler(
-                ffi::GetApplicationEventTarget(),
-                hotkey_handler,
-                1,
-                &spec,
-                user_data,
-                &mut handler_ref,
-            )
-        };
-        if status != ffi::noErr {
-            return Err(PlatformError::os(
-                "InstallEventHandler",
-                format!("OSStatus {status}"),
-            ));
-        }
-        self.handler = handler_ref as usize;
-        Ok(())
-    }
-}
-
-impl HotkeyBackend for MacHotkeyBackend {
-    fn apply(&mut self, bindings: &[HotkeyBinding]) -> Result<HotkeyApplyReport> {
-        self.ensure_handler_installed()?;
-
-        // Drop everything previously held.
+impl Registrar {
+    /// Unregisters every live hotkey and forgets their actions.
+    fn release_all(&mut self) {
         for hotkey_ref in self.registered.drain(..) {
             // SAFETY: each address was returned by `RegisterEventHotKey` and is
             // unregistered at most once (we drain the vec).
@@ -1866,8 +1820,13 @@ impl HotkeyBackend for MacHotkeyBackend {
         if let Ok(mut map) = self.state.actions.lock() {
             map.clear();
         }
+    }
 
-        let mut statuses = Vec::new();
+    /// Replaces every registration with fresh ones for `bindings`.
+    fn register(&mut self, bindings: &[HotkeyBinding]) -> Vec<HotkeyBindingStatus> {
+        self.release_all();
+
+        let mut statuses = Vec::with_capacity(bindings.len());
         for binding in bindings {
             let hotkey = binding.hotkey;
             let action = binding.action;
@@ -1915,20 +1874,268 @@ impl HotkeyBackend for MacHotkeyBackend {
                     reason: None,
                 });
             } else {
-                let reason = if status == ffi::eventHotKeyExistsErr {
-                    "hotkey is already registered by another application".to_string()
-                } else {
-                    format!("RegisterEventHotKey failed with OSStatus {status}")
-                };
                 // One bad binding must not abort the rest.
                 statuses.push(HotkeyBindingStatus {
                     binding: *binding,
                     route: HotkeyRoute::Unavailable,
-                    reason: Some(reason),
+                    reason: Some(hotkey_registration_failure_reason(status)),
                 });
             }
         }
 
+        self.bindings = bindings.to_vec();
+        self.statuses = statuses.clone();
+        self.active = true;
+        statuses
+    }
+
+    /// Re-registers the last applied bindings after a lifecycle event.
+    ///
+    /// Carbon registrations normally survive sleep and fast user switching,
+    /// so this is defensive: it guarantees a fresh WindowServer registration
+    /// if one was silently dropped.
+    fn recover(&mut self, event: HotkeyLifecycleEvent) {
+        if !should_reregister_hotkeys(self.active, self.bindings.len()) {
+            log::debug!(
+                "hotkey recovery after {}: no hotkeys to re-register",
+                event.label()
+            );
+            return;
+        }
+        let before = std::mem::take(&mut self.statuses);
+        let bindings = std::mem::take(&mut self.bindings);
+        let after = self.register(&bindings);
+        let summary = summarize_hotkey_recovery(&before, &after);
+        log::info!(
+            "hotkey recovery after {}: re-registered {}/{} hotkeys ({} recovered, {} lost)",
+            event.label(),
+            summary.registered,
+            after.len(),
+            summary.recovered,
+            summary.lost,
+        );
+        for status in after
+            .iter()
+            .filter(|status| status.route != HotkeyRoute::Registered)
+        {
+            log::warn!(
+                "hotkey {} unavailable after {}: {}",
+                status.binding.hotkey,
+                event.label(),
+                status.reason.as_deref().unwrap_or("unknown reason"),
+            );
+        }
+    }
+
+    fn shutdown(&mut self) {
+        self.release_all();
+        self.bindings.clear();
+        self.statuses.clear();
+        self.active = false;
+    }
+}
+
+fn lock_registrar(registrar: &Mutex<Registrar>) -> std::sync::MutexGuard<'_, Registrar> {
+    // A panic mid-registration leaves the bookkeeping no worse than the next
+    // full `register` pass can repair, so recover from poisoning.
+    registrar
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Observers on `NSWorkspace.sharedWorkspace.notificationCenter` that
+/// re-register hotkeys after a wake or session switch.
+///
+/// The blocks run on `NSOperationQueue.mainQueue`, i.e. the main thread that
+/// owns the Carbon event target, and hold only a weak reference to the
+/// registrar. Dropping the observer removes every registration.
+struct WorkspaceObserver {
+    center: Retained<AnyObject>,
+    tokens: Vec<Retained<AnyObject>>,
+}
+
+impl WorkspaceObserver {
+    fn install(registrar: &Arc<Mutex<Registrar>>) -> Option<Self> {
+        autoreleasepool(|_| {
+            // SAFETY: `sharedWorkspace`, `notificationCenter` and `mainQueue`
+            // take no arguments and return (autoreleased) objects, which
+            // `Retained` retains.
+            let workspace: Option<Retained<AnyObject>> =
+                unsafe { msg_send![class!(NSWorkspace), sharedWorkspace] };
+            let center: Option<Retained<AnyObject>> =
+                unsafe { msg_send![&*workspace?, notificationCenter] };
+            let center = center?;
+            let queue: Option<Retained<AnyObject>> =
+                unsafe { msg_send![class!(NSOperationQueue), mainQueue] };
+            let queue = queue?;
+
+            let mut observer = Self {
+                center,
+                tokens: Vec::new(),
+            };
+            for event in HotkeyLifecycleEvent::ALL {
+                // SAFETY: reading immutable `NSString *` constants exported by
+                // AppKit, which is always loaded in a Tauri app.
+                let name = unsafe {
+                    match event {
+                        HotkeyLifecycleEvent::Wake => ffi::NSWorkspaceDidWakeNotification,
+                        HotkeyLifecycleEvent::SessionActive => {
+                            ffi::NSWorkspaceSessionDidBecomeActiveNotification
+                        }
+                    }
+                } as *const AnyObject;
+                if name.is_null() {
+                    log::warn!("NSWorkspace {} notification is unavailable", event.label());
+                    continue;
+                }
+                let weak = Arc::downgrade(registrar);
+                let block = RcBlock::new(move |_notification: *mut AnyObject| {
+                    if let Some(registrar) = weak.upgrade() {
+                        lock_registrar(&registrar).recover(event);
+                    }
+                });
+                // SAFETY: `name` is a valid NSString, `object` may be nil,
+                // `queue` is the main operation queue and the center copies
+                // the block. The returned token is retained until `Drop`.
+                let token: Option<Retained<AnyObject>> = unsafe {
+                    msg_send![
+                        &*observer.center,
+                        addObserverForName: name,
+                        object: std::ptr::null::<AnyObject>(),
+                        queue: &*queue,
+                        usingBlock: &*block,
+                    ]
+                };
+                match token {
+                    Some(token) => observer.tokens.push(token),
+                    None => log::warn!(
+                        "could not observe NSWorkspace {} notifications",
+                        event.label()
+                    ),
+                }
+            }
+            (!observer.tokens.is_empty()).then_some(observer)
+        })
+    }
+}
+
+impl Drop for WorkspaceObserver {
+    fn drop(&mut self) {
+        for token in self.tokens.drain(..) {
+            // SAFETY: `token` was returned by `addObserverForName:...` on this
+            // center and is removed exactly once.
+            let _: () = unsafe { msg_send![&*self.center, removeObserver: &*token] };
+        }
+    }
+}
+
+pub struct MacHotkeyBackend {
+    state: Arc<HotkeyState>,
+    registrar: Arc<Mutex<Registrar>>,
+    /// Installed `EventHandlerRef`, stored as an address so the struct stays
+    /// `Send`. `0` means "not installed".
+    handler: usize,
+    /// Re-registers hotkeys after wake / session switch; installed lazily on
+    /// the first apply and removed on shutdown.
+    observer: Option<WorkspaceObserver>,
+}
+
+// SAFETY: the Carbon handles are stored as plain `usize` addresses and the
+// shared `Arc<HotkeyState>` / `Arc<Mutex<Registrar>>` are `Send + Sync`. The
+// `WorkspaceObserver`'s retained Objective-C objects (notification center and
+// observer tokens) are only messaged with `removeObserver:`, which
+// `NSNotificationCenter` documents as thread-safe, and retain/release is
+// atomic. The Carbon APIs that consume these handles must be called on the
+// main thread, which is a documented caller requirement, not a memory-safety
+// property.
+unsafe impl Send for MacHotkeyBackend {}
+
+impl MacHotkeyBackend {
+    pub fn new(events: Sender<ActionRequest>) -> Result<Self> {
+        let state = Arc::new(HotkeyState {
+            sender: Mutex::new(events),
+            actions: Mutex::new(HashMap::new()),
+        });
+        Ok(Self {
+            registrar: Arc::new(Mutex::new(Registrar {
+                state: Arc::clone(&state),
+                registered: Vec::new(),
+                next_id: 1,
+                bindings: Vec::new(),
+                statuses: Vec::new(),
+                active: false,
+            })),
+            state,
+            handler: 0,
+            observer: None,
+        })
+    }
+
+    /// Installs the shared keyboard event handler once, lazily.
+    ///
+    /// Must run on the main thread (which owns the Carbon run loop).
+    fn ensure_handler_installed(&mut self) -> Result<()> {
+        if self.handler != 0 {
+            return Ok(());
+        }
+        let spec = ffi::EventTypeSpec {
+            eventClass: ffi::kEventClassKeyboard,
+            eventKind: ffi::kEventHotKeyPressed,
+        };
+        let mut handler_ref: ffi::EventHandlerRef = std::ptr::null_mut();
+        // The callback receives a pointer to our `HotkeyState`, which stays
+        // alive for as long as `self` (and is removed before drop).
+        let user_data = Arc::as_ptr(&self.state) as *mut c_void;
+        // SAFETY: `GetApplicationEventTarget` returns the process-wide target;
+        // `hotkey_handler` matches `EventHandlerUPP`; `spec`/`handler_ref` are
+        // valid pointers; `user_data` outlives the handler.
+        let status = unsafe {
+            ffi::InstallEventHandler(
+                ffi::GetApplicationEventTarget(),
+                hotkey_handler,
+                1,
+                &spec,
+                user_data,
+                &mut handler_ref,
+            )
+        };
+        if status != ffi::noErr {
+            return Err(PlatformError::os(
+                "InstallEventHandler",
+                format!("OSStatus {status}"),
+            ));
+        }
+        self.handler = handler_ref as usize;
+        Ok(())
+    }
+
+    /// Starts observing wake / session-switch notifications once. A failure
+    /// only loses the defensive recovery, so it is logged, not returned.
+    fn ensure_observer_installed(&mut self) {
+        if self.observer.is_some() {
+            return;
+        }
+        self.observer = WorkspaceObserver::install(&self.registrar);
+        if self.observer.is_some() {
+            log::debug!("observing NSWorkspace wake and session notifications for hotkey recovery");
+        } else {
+            log::warn!(
+                "could not observe NSWorkspace wake/session notifications; hotkeys will not be re-registered after sleep"
+            );
+        }
+    }
+}
+
+impl HotkeyBackend for MacHotkeyBackend {
+    fn apply(&mut self, bindings: &[HotkeyBinding]) -> Result<HotkeyApplyReport> {
+        // SAFETY: `+[NSThread isMainThread]` takes no arguments and returns BOOL.
+        let on_main: bool = unsafe { msg_send![class!(NSThread), isMainThread] };
+        if !on_main {
+            log::warn!("hotkeys applied off the main thread; Carbon expects the main thread");
+        }
+        self.ensure_handler_installed()?;
+        self.ensure_observer_installed();
+        let statuses = lock_registrar(&self.registrar).register(bindings);
         Ok(HotkeyApplyReport {
             bindings: statuses,
             hook_installed: false,
@@ -1937,18 +2144,15 @@ impl HotkeyBackend for MacHotkeyBackend {
     }
 
     fn shutdown(&mut self) {
-        for hotkey_ref in self.registered.drain(..) {
-            // SAFETY: see `apply`; each handle is unregistered at most once.
-            unsafe { ffi::UnregisterEventHotKey(hotkey_ref as ffi::EventHotKeyRef) };
-        }
+        // Stop recovery first so no notification can re-register hotkeys
+        // after they are released below.
+        self.observer = None;
+        lock_registrar(&self.registrar).shutdown();
         if self.handler != 0 {
             // SAFETY: `self.handler` is a live handler ref we installed; removed
             // exactly once (guarded by the reset below).
             unsafe { ffi::RemoveEventHandler(self.handler as ffi::EventHandlerRef) };
             self.handler = 0;
-        }
-        if let Ok(mut map) = self.state.actions.lock() {
-            map.clear();
         }
     }
 }

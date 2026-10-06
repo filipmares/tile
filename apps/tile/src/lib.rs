@@ -414,7 +414,8 @@ fn open_welcome_for_first_run<R: Runtime>(app: &AppHandle<R>, state: &AppState) 
 
 /// Background poll: applies hotkeys as soon as permission is granted. Only
 /// calls the non-prompting `permission_status(false)`, so it is safe off the
-/// main thread.
+/// main thread. The apply itself is handed to the main thread, which owns the
+/// macOS Carbon event target and its wake/session-switch observers.
 fn poll_until_granted<R: Runtime>(app: AppHandle<R>, state: Arc<AppState>) {
     thread::Builder::new()
         .name("tile-permission-poll".into())
@@ -423,15 +424,16 @@ fn poll_until_granted<R: Runtime>(app: AppHandle<R>, state: Arc<AppState>) {
             match state.permission_status(false) {
                 Ok(PermissionStatus::Granted) | Ok(PermissionStatus::NotRequired) => {
                     log::info!("accessibility permission granted; applying hotkeys");
-                    state.apply_hotkeys();
-                    // The shortcuts the welcome describes only started working
-                    // just now, so this is the first honest moment to show it.
+                    // The shortcuts the welcome describes only start working
+                    // once applied, so that is the first honest moment to show
+                    // it.
                     let handle = app.clone();
                     let state = state.clone();
                     if let Err(err) = app.run_on_main_thread(move || {
+                        state.apply_hotkeys();
                         open_welcome_for_first_run(&handle, &state);
                     }) {
-                        log::error!("could not open the welcome window: {err}");
+                        log::error!("could not apply hotkeys on the main thread: {err}");
                     }
                     break;
                 }
