@@ -1,5 +1,5 @@
-// The shortcut list: every action, its binding, the filter over the list,
-// and the recorder that captures a new chord.
+// The shortcut list: every action, its binding, and the recorder that
+// captures a new chord. Searching the list is the settings search's job.
 
 import { listen } from "@tauri-apps/api/event";
 import { getHotkeyStatus, setBinding } from "./api";
@@ -14,6 +14,7 @@ import {
   isMac,
 } from "./hotkey";
 import { renderWholeConfig, saveSetting } from "./settings";
+import { applySettingsSearch, openByUser } from "./settingsSearch";
 import { config } from "./state";
 import {
   ACTIONS,
@@ -30,7 +31,6 @@ const STRINGS = {
   counts: (total: number, assigned: number) =>
     `${total} shortcuts · ${assigned} assigned`,
   noneAssigned: "No shortcuts assigned yet.",
-  noMatch: (filter: string) => `No shortcuts match \u201c${filter}\u201d.`,
   applyError: (error: string) =>
     `Windows could not apply the latest shortcut change. A previously active shortcut may still be in effect. ${error}`,
   hookUnavailable:
@@ -81,10 +81,6 @@ let hotkeyStatus: HotkeyStatus = {
 let recording: WindowAction | null = null;
 /** Which list the row being recorded is in, so focus can go back to it. */
 let recordingScope: Scope = "all";
-/** Current text in the shortcut filter. Empty means "show everything". */
-let shortcutFilter = "";
-/** The user's family open/closed state, stashed while a filter is active. */
-let openBeforeFilter: Set<string> | null = null;
 
 /**
  * For each action sharing its hotkey with others (only possible from a
@@ -219,72 +215,46 @@ function renderBindingLists(cfg: Config): void {
 
   }
 
-  const filter = shortcutFilter.trim().toLowerCase();
-  const matchesFilter = (label: string): boolean =>
-    label.toLowerCase().includes(filter);
-
   const hasRendered = dom.bindings.childElementCount > 0;
-  const currentlyOpen = new Set(
-    [...dom.bindings.querySelectorAll<HTMLDetailsElement>("details[open]")]
+  // Read through the search, which may be holding families open: a
+  // re-render keeps the user's own open/closed choice, and the search then
+  // re-opens whatever still matches.
+  const openFamilies = new Set(
+    [...dom.bindings.querySelectorAll<HTMLDetailsElement>("details")]
+      .filter(openByUser)
       .map((details) => details.dataset.family)
       .filter((family): family is string => family !== undefined),
   );
 
-  // Filtering force-opens every matching family, which would otherwise
-  // overwrite the user's own open/closed state. Stash it on the way in and
-  // put it back when the filter clears. The stash has to be read into a local
-  // first: clearing it before the read would silently discard it.
-  const restore = filter ? null : openBeforeFilter;
-  if (filter && openBeforeFilter === null) {
-    openBeforeFilter = currentlyOpen;
-  } else if (!filter) {
-    openBeforeFilter = null;
-  }
-
-  function renderHotkeyApplyError(): void {
-    const error = hotkeyStatus.applyError;
-    dom.hotkeyApplyError.hidden = error === null;
-    dom.hotkeyApplyError.textContent =
-      error === null
-        ? ""
-        : STRINGS.applyError(error);
-  }
-  const openFamilies = filter ? currentlyOpen : (restore ?? currentlyOpen);
-
   dom.bindings.replaceChildren();
-  let shown = 0;
 
   for (const family of FAMILIES) {
     const actions = ACTIONS.filter((a) => a.family === family.id);
     if (actions.length === 0) continue;
 
-    const matches = filter ? actions.filter((a) => matchesFilter(a.label)) : actions;
-    // A family with nothing to show is noise while filtering.
-    if (matches.length === 0) continue;
-
     const group = document.createElement("li");
     group.className = "binding-group";
+    group.dataset.searchGroup = "";
 
     const disclosure = document.createElement("details");
     disclosure.className = "binding-group__disclosure";
     disclosure.dataset.family = family.id;
-    // While filtering, every surviving family opens: a match hidden inside a
-    // collapsed group is the one thing a filter must never do. The user's own
-    // open/closed state is restored as soon as the filter is cleared.
-    disclosure.open = filter
-      ? true
-      : hasRendered
-        ? openFamilies.has(family.id)
-        : family.id === "halves" || actions.some(({ id }) => cfg.bindings[id]);
+    // A group of its own, so the search opens a collapsed family that holds
+    // a match.
+    disclosure.dataset.searchGroup = "";
+    disclosure.open = hasRendered
+      ? openFamilies.has(family.id)
+      : family.id === "halves" || actions.some(({ id }) => cfg.bindings[id]);
 
     const summary = document.createElement("summary");
     summary.className = "binding-group__summary";
 
     const heading = document.createElement("span");
     heading.className = "binding-group__title";
+    heading.dataset.searchHeading = "";
     heading.textContent = family.label;
 
-    // Counts describe the family, not the filter. A number that moved while
+    // Counts describe the family, not the search. A number that moved while
     // typing would read as a bug rather than as information.
     const assignedCount = actions.filter(({ id }) => cfg.bindings[id]).length;
     const count = document.createElement("span");
@@ -297,22 +267,25 @@ function renderBindingLists(cfg: Config): void {
     const list = document.createElement("ul");
     list.className = "binding-group__list";
 
-    for (const { id, label } of matches) {
+    for (const { id, label } of actions) {
       list.append(renderBinding(cfg, conflicts, id, label, "all"));
     }
 
     disclosure.append(list);
     group.append(disclosure);
     dom.bindings.append(group);
-    shown += matches.length;
   }
 
-  if (filter && shown === 0) {
-    const empty = document.createElement("li");
-    empty.className = "shortcut-empty";
-    empty.textContent = STRINGS.noMatch(shortcutFilter.trim());
-    dom.bindings.append(empty);
-  }
+  applySettingsSearch();
+}
+
+function renderHotkeyApplyError(): void {
+  const error = hotkeyStatus.applyError;
+  dom.hotkeyApplyError.hidden = error === null;
+  dom.hotkeyApplyError.textContent =
+    error === null
+      ? ""
+      : STRINGS.applyError(error);
 }
 
 function renderBinding(
@@ -326,6 +299,11 @@ function renderBinding(
 
   const li = document.createElement("li");
   li.className = "binding";
+  // The same action can be listed twice (active and all); the search counts
+  // it once.
+  li.dataset.searchKey = `binding:${id}`;
+  // Still found by its key while the button reads "Press keys…".
+  li.dataset.searchText = hk ? formatHotkey(hk) : STRINGS.unbound;
 
   const name = document.createElement("span");
   name.className = "binding__label";
@@ -518,12 +496,4 @@ async function applyBinding(
   // A failed save has already re-rendered from the settings Tile kept.
   if (saved === false) return;
   await renderWholeConfig(saved !== null);
-}
-
-/** Re-renders the list as the user types into the filter. */
-export function wireShortcutEvents(): void {
-  dom.shortcutFilter.addEventListener("input", () => {
-    shortcutFilter = dom.shortcutFilter.value;
-    renderBindings();
-  });
 }

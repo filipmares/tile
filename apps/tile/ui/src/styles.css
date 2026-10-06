@@ -724,14 +724,38 @@ select {
   border-color: var(--warning-border);
 }
 
-.all-shortcuts__filter {
+/* One search over every setting, at the top of the window. It stays in reach
+   while the page scrolls under it. */
+.settings-search {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   display: grid;
-  gap: 6px;
-  padding: 12px 0 4px;
+  gap: 10px;
+  margin: -12px 0 -8px;
+  padding: 12px 0 8px;
+  background: var(--bg);
 }
 
-.all-shortcuts__filter input {
+.settings-search__input {
   width: 100%;
+  padding: 7px 10px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.settings-search__empty {
+  margin: 0;
+  color: var(--text-dim);
+}
+
+/* Set by the settings search; kept apart from `hidden`, which the screens
+   own. */
+[data-search-hidden] {
+  display: none !important;
 }
 
 /* The welcome screen: its own window, and the only place Tile teaches its

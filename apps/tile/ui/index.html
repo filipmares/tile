@@ -130,6 +130,20 @@
         </footer>
       </section>
 
+      <div class="settings-search" role="search">
+        <label class="sr-only" for="settings-search">Search settings</label>
+        <input
+          type="search"
+          id="settings-search"
+          class="settings-search__input"
+          placeholder="Search settings"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <p class="settings-search__empty" id="settings-search-empty" hidden></p>
+        <p class="sr-only" id="settings-search-status" aria-live="polite"></p>
+      </div>
+
       <section
         id="development-panel"
         class="panel panel--development"
@@ -249,7 +263,7 @@
       <section class="section" aria-labelledby="behaviour-heading">
         <div class="section__header">
           <div>
-            <h2 id="behaviour-heading">Behaviour</h2>
+            <h2 id="behaviour-heading" data-search-heading>Behaviour</h2>
             <p class="section__description">
               Fine-tune spacing and what happens when you repeat a shortcut.
             </p>
@@ -358,7 +372,7 @@
         </details>
 
         <div class="settings-group settings-group--last">
-          <h3 class="settings-group__title">Motion</h3>
+          <h3 class="settings-group__title" data-search-heading>Motion</h3>
           <label class="field field--inline">
             <input type="checkbox" id="animate-moves" name="animate-moves" />
             <span class="field__label">Animate window movement</span>
@@ -390,9 +404,9 @@
         </div>
 
         <div class="settings-group settings-group--last">
-          <h3 class="settings-group__title">Startup</h3>
+          <h3 class="settings-group__title" data-search-heading>Startup</h3>
           <label class="field field--inline">
-            <input type="checkbox" id="launch-on-login" name="launch-on-login" />
+                      <input type="checkbox" id="launch-on-login" name="launch-on-login" />
             <span class="field__label">Launch Tile at login</span>
           </label>
           <p class="field__error" id="launch-error" role="alert" hidden></p>
@@ -406,7 +420,7 @@
       <section class="section" aria-labelledby="bindings-heading">
         <div class="section__header">
           <div>
-            <h2 id="bindings-heading">Shortcuts</h2>
+            <h2 id="bindings-heading" data-search-heading>Shortcuts</h2>
             <p class="section__description">
               Customize the keys Tile uses to move and resize windows.
             </p>
@@ -427,31 +441,21 @@
         <p class="section__hint" id="recording-status" aria-live="assertive"></p>
         <p class="field__error" id="binding-error" role="alert" hidden></p>
 
-        <div class="shortcut-subsection">
-          <h3 class="shortcut-subsection__title">Active shortcuts</h3>
+        <div class="shortcut-subsection" data-search-group>
+          <h3 class="shortcut-subsection__title" data-search-heading>
+            Active shortcuts
+          </h3>
           <p class="shortcut-subsection__description">
             Your currently assigned shortcuts.
           </p>
           <ul class="bindings bindings--active" id="assigned-bindings"></ul>
         </div>
 
-        <details class="all-shortcuts" id="all-shortcuts">
+        <details class="all-shortcuts" id="all-shortcuts" data-search-group>
           <summary class="all-shortcuts__summary">
-            <span>All available shortcuts</span>
+            <span data-search-heading>All available shortcuts</span>
             <span class="all-shortcuts__count" id="all-shortcuts-count"></span>
           </summary>
-          <div class="all-shortcuts__filter">
-            <label class="field__label" for="shortcut-filter">
-              Find a shortcut
-            </label>
-            <input
-              type="search"
-              id="shortcut-filter"
-              placeholder="Search by name…"
-              autocomplete="off"
-              spellcheck="false"
-            />
-          </div>
           <ul class="bindings" id="bindings"></ul>
         </details>
       </section>
