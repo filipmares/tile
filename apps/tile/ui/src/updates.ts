@@ -2,6 +2,7 @@
 
 import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { checkForUpdates, getUpdateStatus, installUpdate } from "./api";
 import { dom, showOnly } from "./dom";
 import { updateErrorKind, updateErrorMessage } from "./errors";
@@ -32,6 +33,14 @@ const STRINGS = {
   versionUnknown: "Tile",
 };
 
+const RELEASE_NOTE_URL = /https?:\/\/[^\s<>"']+/g;
+const TRAILING_URL_PUNCTUATION = /[.,!?;:]+$/;
+const CLOSING_DELIMITERS = new Map([
+  [")", "("],
+  ["]", "["],
+  ["}", "{"],
+]);
+
 const updateIntent = window.sessionStorage.getItem("tile-update-intent");
 window.sessionStorage.removeItem("tile-update-intent");
 
@@ -49,8 +58,7 @@ function renderUpdateStatus(status: UpdateStatus): void {
     dom.updateProgress.removeAttribute("value");
     dom.installUpdate.hidden = true;
     dom.checkUpdate.disabled = false;
-    dom.updateNotes.hidden = updateNotes === null;
-    dom.updateNotes.textContent = updateNotes ?? "";
+    renderUpdateNotes(updateNotes);
 
     switch (status.status) {
       case "unavailable":
@@ -67,12 +75,11 @@ function renderUpdateStatus(status: UpdateStatus): void {
       case "current":
         setUpdateAnnouncement(STRINGS.current);
         updateNotes = null;
-        dom.updateNotes.hidden = true;
+        renderUpdateNotes(updateNotes);
         break;
       case "available":
         updateNotes = status.notes;
-        dom.updateNotes.textContent = updateNotes ?? "";
-        dom.updateNotes.hidden = updateNotes === null;
+        renderUpdateNotes(updateNotes);
         setUpdateAnnouncement(STRINGS.available(status.version));
         dom.installUpdate.textContent = STRINGS.updateNow;
         dom.installUpdate.hidden = false;
@@ -111,6 +118,51 @@ function renderUpdateStatus(status: UpdateStatus): void {
     if (status.status !== "error") {
       dom.checkUpdate.textContent = STRINGS.checkForUpdates;
     }
+}
+
+function renderUpdateNotes(notes: string | null): void {
+  dom.updateNotes.replaceChildren();
+  dom.updateNotes.hidden = notes === null;
+  if (notes === null) return;
+
+  let cursor = 0;
+  for (const match of notes.matchAll(RELEASE_NOTE_URL)) {
+    const url = trimReleaseNoteUrl(match[0]);
+    const index = match.index;
+    dom.updateNotes.append(document.createTextNode(notes.slice(cursor, index)));
+
+    const link = document.createElement("a");
+    link.className = "updates__notes-link";
+    link.href = url;
+    link.textContent = url;
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      void openUrl(url).catch((err) =>
+        console.error("could not open the update changelog", err),
+      );
+    });
+    dom.updateNotes.append(link);
+    cursor = index + url.length;
+  }
+
+  dom.updateNotes.append(document.createTextNode(notes.slice(cursor)));
+}
+
+function trimReleaseNoteUrl(candidate: string): string {
+  let url = candidate.replace(TRAILING_URL_PUNCTUATION, "");
+
+  while (url.length > 0) {
+    const closing = url.charAt(url.length - 1);
+    const opening = closing ? CLOSING_DELIMITERS.get(closing) : undefined;
+    if (!closing || !opening) break;
+
+    const openingCount = url.split(opening).length - 1;
+    const closingCount = url.split(closing).length - 1;
+    if (closingCount <= openingCount) break;
+    url = url.slice(0, -1).replace(TRAILING_URL_PUNCTUATION, "");
+  }
+
+  return url;
 }
 
 function setUpdateAnnouncement(text: string): void {

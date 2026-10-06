@@ -213,6 +213,19 @@ body {
   white-space: pre-wrap;
 }
 
+.updates__notes-link {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.updates__notes-link:hover {
+  color: var(--text);
+  text-decoration-thickness: 2px;
+}
+
 .updates__actions {
   width: 100%;
   flex-direction: column;
