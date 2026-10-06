@@ -15,7 +15,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tile_core::WindowAction;
-use tile_platform::PlatformError;
+use tile_platform::{PermissionStatus, PlatformError};
 
 use crate::logging;
 use crate::state::{is_permission_denied, ActionOutcome, ActionRequest, AppState};
@@ -152,9 +152,18 @@ pub fn show_menu_notice<R: Runtime>(app: &AppHandle<R>, message: &str) {
 fn on_permission_denied<R: Runtime>(app: &AppHandle<R>, err: &PlatformError) {
     // One failed call proves nothing on its own, so ask macOS again. A real
     // revocation flips the shared state, which refreshes the tray and the
-    // settings window exactly as the monitor would have.
-    if let Err(check_err) = crate::permission::refresh(app, false) {
-        log::warn!("could not re-check permission after a denied action: {check_err}");
+    // settings window exactly as the monitor would have. If trust is back by
+    // now, telling the user it is missing would be wrong. `NotRequired`
+    // (Windows: an elevated target) keeps its own dialog.
+    match crate::permission::refresh(app, false) {
+        Ok(PermissionStatus::Granted) => {
+            log::info!("a denied action raced a permission grant; not reporting it");
+            return;
+        }
+        Ok(PermissionStatus::Denied | PermissionStatus::NotRequired) => {}
+        Err(check_err) => {
+            log::warn!("could not re-check permission after a denied action: {check_err}");
+        }
     }
 
     let state = app.state::<Arc<AppState>>();

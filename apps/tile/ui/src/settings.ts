@@ -86,7 +86,7 @@ const STRINGS = {
   grantPrompt: "Grant permission…",
   grantOpenSettings: "Open Accessibility settings…",
   accessibilityOpened:
-    "The Accessibility list should now be open. Follow the steps above.",
+    "Continue in the settings app that opened, using the steps above.",
   accessibilityFailed: (err: unknown) => String(err),
   revealFailed: (err: unknown) => `Could not show Tile in Finder: ${String(err)}`,
 };
@@ -545,14 +545,17 @@ function setPermissionStatus(text: string): void {
 
 async function grantPermission(): Promise<void> {
   setPermissionStatus("");
+  let message: string;
   try {
     await requestAccessibility();
-    setPermissionStatus(STRINGS.accessibilityOpened);
+    message = STRINGS.accessibilityOpened;
   } catch (err) {
-    setPermissionStatus(STRINGS.accessibilityFailed(err));
+    message = STRINGS.accessibilityFailed(err);
   }
   await renderAccessibilityHelp();
   await refreshPermission();
+  // Granted meanwhile: the panel is gone and there is nothing left to say.
+  if (!dom.permissionPanel.hidden) setPermissionStatus(message);
 }
 
 /** Refreshes the permission panel, polling while permission is denied. */
