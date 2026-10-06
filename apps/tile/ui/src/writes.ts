@@ -29,12 +29,15 @@ interface WriteHooks {
   render: () => void;
   /** Runs when another window committed a change. */
   changedElsewhere: () => void;
+  /** Re-renders after another window's change; defaults to `render`. */
+  renderElsewhere: (() => void) | null;
 }
 
 const hooks: WriteHooks = {
   beforeWrite: () => {},
   render: () => {},
   changedElsewhere: () => {},
+  renderElsewhere: null,
 };
 
 /** Plugs the current screen into the queue. Call once, at boot. */
@@ -93,7 +96,9 @@ function saveConfig(write: () => Promise<Config>): Promise<Config | null> {
  * way. The read is queued too, so it can never land before a write made
  * earlier and hand back an older config.
  */
-export async function reconcileWhenIdle(): Promise<void> {
+export async function reconcileWhenIdle(
+  render: () => void = hooks.render,
+): Promise<void> {
   do {
     await enqueue(async () => {
       try {
@@ -103,7 +108,7 @@ export async function reconcileWhenIdle(): Promise<void> {
       }
     });
   } while (pendingWrites > 0);
-  hooks.render();
+  render();
 }
 
 /** Shows (or, with `null`, clears) the error line beside a control. */
@@ -158,7 +163,7 @@ export async function followChangesElsewhere(): Promise<void> {
     await listen<ConfigChanged>(CONFIG_CHANGED, (event) => {
       if (event.payload.source === self) return;
       hooks.changedElsewhere();
-      void reconcileWhenIdle();
+      void reconcileWhenIdle(hooks.renderElsewhere ?? hooks.render);
     });
   } catch (err) {
     console.error("could not listen for settings changes", err);

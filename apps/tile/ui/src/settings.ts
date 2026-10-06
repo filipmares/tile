@@ -643,9 +643,22 @@ export async function bootSettings(): Promise<void> {
       renderBehaviour();
       renderBindings();
     },
+    renderElsewhere: () => {
+      // A field mid-edit only commits on change, so nothing is queued for it
+      // yet; keep what the user is typing rather than resetting it.
+      const active = document.activeElement;
+      const editing =
+        active instanceof HTMLInputElement && active.type !== "checkbox"
+          ? active.value
+          : null;
+      renderBehaviour();
+      renderBindings();
+      if (editing !== null) (active as HTMLInputElement).value = editing;
+    },
   });
   wireEvents();
-  void followChangesElsewhere();
+  // Subscribed before the first read below, so no change is missed between.
+  await followChangesElsewhere();
   // Build provenance is fetched first and separately: if it fails, the rest of
   // the settings UI should still load.
   try {
