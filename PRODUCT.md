@@ -71,7 +71,8 @@ spreading sizes back across separate keys.
 - 76 window actions — halves, thirds, two-thirds, fourths, sixths, ninths,
   corners, corner thirds, maximize, maximize-height, almost-maximize, center,
   restore, display throws, and incremental move/resize/halve-double. **Six ship
-  bound to keys**; the rest are reachable only by binding them yourself.
+  bound to keys**; the rest are reachable by binding them yourself, and the
+  common layouts also from the tray/menu-bar menu.
 - Default keymap: `Control`+`Option` (macOS) or `Win` (Windows) plus the arrows;
   display throws add `Command` (macOS) or `Alt` (Windows).
 - Repeat cycles size for the horizontal arrows and corners; the cycle set is
