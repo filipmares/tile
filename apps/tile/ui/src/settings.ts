@@ -690,11 +690,6 @@ function wireEvents(): void {
       setPermissionStatus(STRINGS.revealFailed(err));
     }
   });
-  // A grant or revocation noticed in the background (or by a failed action)
-  // shows here straight away, even while the panel is hidden and not polling.
-  void listen(PERMISSION_CHANGED_EVENT, () => void refreshPermission()).catch(
-    (err) => console.error("could not listen for permission changes", err),
-  );
 }
 
 let booted = false;
@@ -742,6 +737,15 @@ export async function bootSettings(): Promise<void> {
     console.error("could not read build info", err);
   }
   await bootConfigRecovery();
+  // A grant or revocation noticed in the background (or by a failed action)
+  // shows here straight away, even while the panel is hidden and not polling.
+  // Awaited before the first permission check below, so a change in between
+  // is not lost.
+  try {
+    await listen(PERMISSION_CHANGED_EVENT, () => void refreshPermission());
+  } catch (err) {
+    console.error("could not listen for permission changes", err);
+  }
   // Subscribed before the first fetch, so a change in between is not lost.
   try {
     await listenForHotkeyStatus();
