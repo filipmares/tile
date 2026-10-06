@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   BuildInfo,
   Config,
+  ConfigRecovery,
   CycleSize,
   Gaps,
   Hotkey,
@@ -19,6 +20,17 @@ export const getConfig = (): Promise<Config> => invoke("get_config");
 
 /** Build provenance — fixed for the process, so read once at boot. */
 export const getBuildInfo = (): Promise<BuildInfo> => invoke("get_build_info");
+
+/** The unread-settings notice still owed to the user, if any. */
+export const getConfigRecovery = (): Promise<ConfigRecovery | null> =>
+  invoke("get_config_recovery");
+
+export const dismissConfigRecovery = (): Promise<void> =>
+  invoke("dismiss_config_recovery");
+
+/** Shows the kept copy of the unreadable settings file in the file manager. */
+export const revealConfigBackup = (): Promise<void> =>
+  invoke("reveal_config_backup");
 
 export const setBinding = (
   action: WindowAction,

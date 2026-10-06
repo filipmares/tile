@@ -197,6 +197,29 @@
         </dialog>
       </section>
 
+      <!-- Shown once, after a launch that could not read the saved settings.
+           Tile carries on from defaults either way; this says so, and says
+           where the old file went, rather than looking as if it forgot. -->
+      <section
+        id="recovery-panel"
+        class="panel panel--warning"
+        hidden
+        aria-labelledby="recovery-heading"
+      >
+        <h2 id="recovery-heading">Settings were reset</h2>
+        <p id="recovery-message"></p>
+        <p class="panel__hint" id="recovery-path" hidden></p>
+        <div class="panel__actions">
+          <button id="recovery-open-folder" type="button" class="button">
+            Open folder
+          </button>
+          <button id="recovery-dismiss" type="button" class="button">
+            Dismiss
+          </button>
+        </div>
+        <p class="panel__hint" id="recovery-status" role="status"></p>
+      </section>
+
       <section
         id="permission-panel"
         class="panel panel--warning"

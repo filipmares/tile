@@ -10,6 +10,7 @@ use tile_core::{Hotkey, WindowAction};
 use tile_platform::{HotkeyBindingStatus, HotkeyRoute, PermissionStatus};
 
 use crate::build_kind::BuildKind;
+use crate::config_store::ConfigRecovery;
 use crate::update::UpdateStatus;
 
 /// Serializable form of [`BuildKind`].
@@ -38,6 +39,27 @@ pub struct BuildInfoDto {
     /// `None` when no config directory could be resolved, in which case
     /// settings live in memory only for this run.
     pub config_dir: Option<String>,
+}
+
+/// Tells the settings UI that this launch could not read the saved settings
+/// and started from defaults.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigRecoveryDto {
+    /// Where the unreadable file was kept, or `None` when it could not be
+    /// moved aside and settings are therefore not being saved this session.
+    pub backup_path: Option<String>,
+}
+
+impl From<&ConfigRecovery> for ConfigRecoveryDto {
+    fn from(recovery: &ConfigRecovery) -> Self {
+        ConfigRecoveryDto {
+            backup_path: recovery
+                .backup_path
+                .as_ref()
+                .map(|path| path.display().to_string()),
+        }
+    }
 }
 
 /// Serializable form of [`PermissionStatus`].

@@ -62,6 +62,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_config,
             commands::get_build_info,
+            commands::get_config_recovery,
+            commands::dismiss_config_recovery,
+            commands::reveal_config_backup,
             commands::set_binding,
             commands::set_gaps,
             commands::set_cycling,
@@ -225,10 +228,12 @@ fn setup_app<R: Runtime>(app: &AppHandle<R>) -> Result<(), Box<dyn std::error::E
             config_store::LoadedConfig {
                 config: Config::default(),
                 origin: config_store::ConfigOrigin::Corrupt,
+                recovery: None,
             }
         }
     };
     let show_orientation = loaded.is_first_run() && !loaded.config.orientation_shown;
+    let recovery = loaded.recovery;
     let config = loaded.config;
     let launch_on_login = config.launch_on_login;
     log::info!(
@@ -239,14 +244,18 @@ fn setup_app<R: Runtime>(app: &AppHandle<R>) -> Result<(), Box<dyn std::error::E
             .unwrap_or_else(|| "<memory only>".into())
     );
 
-    let state = Arc::new(AppState::new(
-        window_backend,
-        hotkey_backend,
-        config,
-        build_kind,
-        config_dir,
-        show_orientation,
-    ));
+    let recovered = recovery.is_some();
+    let state = Arc::new(
+        AppState::new(
+            window_backend,
+            hotkey_backend,
+            config,
+            build_kind,
+            config_dir,
+            show_orientation,
+        )
+        .with_config_recovery(recovery),
+    );
     app.manage(state.clone());
     let updates = Arc::new(UpdateManager::new(build_kind));
     app.manage(updates.clone());
@@ -306,6 +315,15 @@ fn setup_app<R: Runtime>(app: &AppHandle<R>) -> Result<(), Box<dyn std::error::E
         })?;
 
     autostart::reconcile_on_launch(app, build_kind, launch_on_login);
+    // Starting from defaults silently would look like Tile forgot everything;
+    // settings carries the notice that says what happened and where the old
+    // file went.
+    if recovered {
+        log::info!("opening settings to explain that saved settings could not be read");
+        if let Err(err) = window::open_settings(app, build_kind) {
+            log::error!("failed to open settings window: {err}");
+        }
+    }
     begin_permission_flow(app, state);
     update::begin_update_checks(app.clone(), updates);
 

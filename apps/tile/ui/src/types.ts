@@ -428,6 +428,15 @@ export interface BuildInfo {
   configDir: string | null;
 }
 
+/**
+ * `ConfigRecoveryDto` — this launch could not read the saved settings and
+ * started from defaults. `backupPath` is null when the old file could not be
+ * kept, in which case nothing is being saved this session.
+ */
+export interface ConfigRecovery {
+  backupPath: string | null;
+}
+
 export type UpdateStatus =
   | { status: "unavailable" }
   | { status: "idle" }

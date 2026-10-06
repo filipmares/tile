@@ -1193,7 +1193,8 @@ select {
   vertical-align: middle;
 }
 
-#development-config-dir {
+#development-config-dir,
+#recovery-path {
   overflow-wrap: anywhere;
   user-select: text;
 }

@@ -12,8 +12,8 @@ use tile_core::{Config, CycleSize, Gaps, Hotkey, SubsequentExecutionMode, Window
 
 use crate::autostart;
 use crate::dto::{
-    BuildInfoDto, HotkeyBindingStatusDto, HotkeyStatusDto, PermissionStatusDto, UpdateStatusDto,
-    WelcomeStatusDto,
+    BuildInfoDto, ConfigRecoveryDto, HotkeyBindingStatusDto, HotkeyStatusDto, PermissionStatusDto,
+    UpdateStatusDto, WelcomeStatusDto,
 };
 use crate::state::AppState;
 use crate::update::UpdateManager;
@@ -41,6 +41,44 @@ pub fn get_build_info(state: State<'_, Shared>) -> BuildInfoDto {
         kind: state.build_kind().into(),
         config_dir: state.config_dir().map(|dir| dir.display().to_string()),
     }
+}
+
+/// The notice owed to the user when this launch could not read their saved
+/// settings, or `None` once dismissed (or when nothing went wrong).
+#[tauri::command]
+pub fn get_config_recovery(state: State<'_, Shared>) -> Option<ConfigRecoveryDto> {
+    state
+        .config_recovery()
+        .as_ref()
+        .map(ConfigRecoveryDto::from)
+}
+
+#[tauri::command]
+pub fn dismiss_config_recovery(state: State<'_, Shared>) {
+    state.dismiss_config_recovery();
+}
+
+/// Shows the kept copy of an unreadable config in the file manager, or the
+/// settings folder when it could not be kept. The path comes from app state,
+/// never from the UI.
+#[tauri::command]
+pub fn reveal_config_backup<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, Shared>,
+) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+
+    let backup = state
+        .config_recovery()
+        .and_then(|recovery| recovery.backup_path);
+    let result = match (backup, state.config_dir()) {
+        (Some(path), _) => app.opener().reveal_item_in_dir(path),
+        (None, Some(dir)) => app
+            .opener()
+            .open_path(dir.display().to_string(), None::<&str>),
+        (None, None) => return Err("Tile has no settings folder on this machine.".into()),
+    };
+    result.map_err(|err| err.to_string())
 }
 
 #[tauri::command]
