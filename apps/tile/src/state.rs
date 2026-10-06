@@ -450,20 +450,22 @@ impl AppState {
         })
     }
 
-    /// Binds `hotkey` to `action` as one config change. When another action
-    /// already holds the hotkey it is unbound in the same write if `replace`
-    /// is set; otherwise nothing changes and the error names the holder, so a
-    /// chord can never be taken from an action the user was not asked about.
+    /// Binds `hotkey` to `action` as one config change. Other actions holding
+    /// the hotkey are unbound in the same write only if every one of them is
+    /// in `replace`, the holders the user agreed to replace. Otherwise nothing
+    /// changes and the error names the holders, so a chord is never taken from
+    /// an action the user was not asked about, even one that picked it up
+    /// while they were being asked.
     pub fn set_binding(
         &self,
         action: WindowAction,
         hotkey: Option<Hotkey>,
-        replace: bool,
+        replace: &[WindowAction],
     ) -> Result<Config, SettingsError> {
         self.commit_config(|config, undo| {
             if let Some(hk) = hotkey {
                 let holders = config.actions_using(hk, action);
-                if !replace && !holders.is_empty() {
+                if holders.iter().any(|holder| !replace.contains(holder)) {
                     let names: Vec<_> = holders.iter().map(ToString::to_string).collect();
                     return Err(SettingsError::shortcut_taken(format!(
                         "{hk} is already used by {}",
@@ -2349,7 +2351,7 @@ mod tests {
         let hk = before.binding(WindowAction::LeftHalf).unwrap();
 
         let err = state
-            .set_binding(WindowAction::Center, Some(hk), false)
+            .set_binding(WindowAction::Center, Some(hk), &[])
             .unwrap_err();
         assert_eq!(
             err.kind,
@@ -2358,8 +2360,19 @@ mod tests {
         assert_eq!(state.config(), before);
         assert_eq!(applies.load(Ordering::Relaxed), 0);
 
+        // Approval to replace one action does not cover a different holder,
+        // such as one that took the chord while the user was being asked.
+        let err = state
+            .set_binding(WindowAction::Center, Some(hk), &[WindowAction::RightHalf])
+            .unwrap_err();
+        assert_eq!(
+            err.kind,
+            crate::settings_error::SettingsErrorKind::ShortcutTaken
+        );
+        assert_eq!(state.config(), before);
+
         let config = state
-            .set_binding(WindowAction::Center, Some(hk), true)
+            .set_binding(WindowAction::Center, Some(hk), &[WindowAction::LeftHalf])
             .unwrap();
         assert_eq!(config.binding(WindowAction::Center), Some(hk));
         assert_eq!(config.binding(WindowAction::LeftHalf), None);
@@ -2367,11 +2380,9 @@ mod tests {
 
         // Clearing, or rebinding a chord to its own action, is never a conflict.
         state
-            .set_binding(WindowAction::Center, Some(hk), false)
+            .set_binding(WindowAction::Center, Some(hk), &[])
             .unwrap();
-        state
-            .set_binding(WindowAction::Center, None, false)
-            .unwrap();
+        state.set_binding(WindowAction::Center, None, &[]).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
 

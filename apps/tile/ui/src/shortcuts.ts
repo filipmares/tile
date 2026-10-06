@@ -488,18 +488,18 @@ async function confirmAndApply(
     }
   }
 
-  await applyBinding(action, hotkey, holders.length > 0);
+  await applyBinding(action, hotkey, holders);
 }
 
 /**
- * Saves one binding. `replace` lets the backend unbind whichever action held
- * the chord in the same write; without it, a chord taken in the meantime by
- * another window is refused rather than silently moved.
+ * Saves one binding. `replace` names the actions the user agreed to take the
+ * chord from; the backend unbinds them in the same write, and refuses rather
+ * than silently moving a chord any other action picked up meanwhile.
  */
 async function applyBinding(
   action: WindowAction,
   hotkey: Hotkey | null,
-  replace = false,
+  replace: WindowAction[] = [],
 ): Promise<void> {
   const saved = await saveSetting(dom.bindingError, () =>
     setBinding(action, hotkey, replace),

@@ -922,10 +922,9 @@ impl Config {
     /// Every action other than `action` that `hotkey` is bound to, in
     /// catalogue order. Binding `hotkey` to `action` would unbind these.
     pub fn actions_using(&self, hotkey: Hotkey, action: WindowAction) -> Vec<WindowAction> {
-        self.bindings
-            .iter()
-            .filter(|(a, h)| **a != action && **h == Some(hotkey))
-            .map(|(a, _)| *a)
+        WindowAction::ALL
+            .into_iter()
+            .filter(|a| *a != action && self.binding(*a) == Some(hotkey))
             .collect()
     }
 

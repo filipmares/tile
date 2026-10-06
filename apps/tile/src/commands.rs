@@ -3,7 +3,7 @@
 //! Commands are intentionally thin: every real decision lives in
 //! `tile_core::Engine` or on [`AppState`]. Mutating commands return the updated
 //! [`Config`] so the UI always re-renders from the persisted truth rather than
-//! guessing (e.g. [`set_binding`] with `replace` unbinds a conflicting action). When a
+//! guessing (e.g. [`set_binding`] with `replace` unbinds the conflicting actions it names). When a
 //! change cannot be saved or applied they return a [`SettingsError`] instead,
 //! having left the running app on its previous settings.
 
@@ -104,18 +104,19 @@ pub fn reveal_config_backup<R: Runtime>(
     result.map_err(|err| err.to_string())
 }
 
-/// Binds `hotkey` to `action`. If another action already uses the hotkey the
-/// call fails with `shortcutTaken` unless `replace` is set, in which case the
-/// other action is unbound in the same write.
+/// Binds `hotkey` to `action`. If another action uses the hotkey the call
+/// fails with `shortcutTaken` unless that action is listed in `replace` (the
+/// holders the user agreed to replace), in which case it is unbound in the
+/// same write.
 #[tauri::command]
 pub fn set_binding<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, Shared>,
     action: WindowAction,
     hotkey: Option<Hotkey>,
-    replace: Option<bool>,
+    replace: Option<Vec<WindowAction>>,
 ) -> Result<Config, SettingsError> {
-    let config = state.set_binding(action, hotkey, replace.unwrap_or(false))?;
+    let config = state.set_binding(action, hotkey, &replace.unwrap_or_default())?;
     crate::tray::sync_bindings(&app);
     Ok(config)
 }
