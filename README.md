@@ -145,8 +145,8 @@ the screen, and nothing shrinks below a quarter of the work area.
 The step sizes (`sizeStep`, `widthStep` and `moveStep`, each defaulting to 30)
 and the floor (`minimumWindowWidth`, `minimumWindowHeight`, defaulting to 25%
 of the work area) are in **Settings ▸ Advanced**, as is the width and height of
-Almost Maximize (90% by default). Steps range from 1 to 1000 px, and the
-fractions from 1% to 100%.
+Almost Maximize (90% by default). Steps range from 1 to 1000 (physical pixels
+on Windows, points on macOS), and the fractions from 1% to 100%.
 
 `config.json` carries a `schemaVersion` (currently `1`; a file without one is
 treated as version 1). Settings are read one at a time, so a hand edit that

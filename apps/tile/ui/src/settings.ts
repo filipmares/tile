@@ -23,6 +23,7 @@ import {
 import { confirmDialog } from "./confirm";
 import { dom } from "./dom";
 import { resetErrorMessage, settingsErrorMessage } from "./errors";
+import { isMac } from "./hotkey";
 import {
   listenForHotkeyStatus,
   refreshHotkeyStatus,
@@ -669,6 +670,13 @@ function wireEvents(): void {
 
   for (const control of ADVANCED_CONTROLS) {
     control.input.addEventListener("change", () => void commitAdvanced(control));
+  }
+  // Steps are in the backend's own unit: physical pixels on Windows, points
+  // on macOS.
+  if (isMac()) {
+    for (const unit of document.querySelectorAll("[data-step-unit]")) {
+      unit.textContent = "pt";
+    }
   }
 
   wireShortcutEvents();
