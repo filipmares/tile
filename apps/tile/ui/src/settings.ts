@@ -47,10 +47,16 @@ const STRINGS = {
     "Settings changed after the reset, so it can no longer be undone.",
   undone: "Previous settings restored.",
   configDir: (dir: string) => `Settings are stored in ${dir}`,
-  recoveredWithBackup:
-    "Tile could not read your settings, so it started from defaults. A copy of the old file was kept.",
+  recoveryReason: {
+    corrupt: "Tile could not read your settings, so it started from defaults.",
+    "partial-reset":
+      "Some settings couldn't be read and were reset to their defaults.",
+    "newer-version":
+      "Your settings were saved by a newer version of Tile. Settings this version understands were kept.",
+  } satisfies Record<ConfigRecovery["kind"], string>,
+  recoveredWithBackup: "A copy of the old file was kept.",
   recoveredWithoutBackup:
-    "Tile could not read your settings, so it started from defaults. The old file could not be copied, so changes made now will not be saved until Tile restarts — that keeps the old file from being overwritten.",
+    "The old file could not be copied, so changes made now will not be saved until Tile restarts — that keeps the old file from being overwritten.",
   openFolderFailed: (err: unknown) =>
     `Could not open the folder: ${String(err)}`,
   loadFailed: (err: unknown) => `Could not load settings: ${String(err)}`,
@@ -317,12 +323,13 @@ async function bootConfigRecovery(): Promise<void> {
   }
   if (!recovery) return;
 
+  const reason = STRINGS.recoveryReason[recovery.kind];
   if (recovery.backupPath) {
-    dom.recoveryMessage.textContent = STRINGS.recoveredWithBackup;
+    dom.recoveryMessage.textContent = `${reason} ${STRINGS.recoveredWithBackup}`;
     dom.recoveryPath.textContent = recovery.backupPath;
     dom.recoveryPath.hidden = false;
   } else {
-    dom.recoveryMessage.textContent = STRINGS.recoveredWithoutBackup;
+    dom.recoveryMessage.textContent = `${reason} ${STRINGS.recoveredWithoutBackup}`;
   }
   dom.recoveryPanel.hidden = false;
 

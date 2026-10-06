@@ -10,7 +10,7 @@ use tile_core::{Hotkey, WindowAction};
 use tile_platform::{HotkeyBindingStatus, HotkeyRoute, PermissionStatus};
 
 use crate::build_kind::BuildKind;
-use crate::config_store::ConfigRecovery;
+use crate::config_store::{ConfigRecovery, RecoveryKind};
 use crate::update::UpdateStatus;
 
 /// Serializable form of [`BuildKind`].
@@ -46,14 +46,36 @@ pub struct BuildInfoDto {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigRecoveryDto {
+    /// Why the saved file could not be loaded as-is.
+    pub kind: ConfigRecoveryKindDto,
     /// Where the unreadable file was kept, or `None` when it could not be
     /// moved aside and settings are therefore not being saved this session.
     pub backup_path: Option<String>,
 }
 
+/// Serializable form of [`RecoveryKind`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ConfigRecoveryKindDto {
+    Corrupt,
+    PartialReset,
+    NewerVersion,
+}
+
+impl From<RecoveryKind> for ConfigRecoveryKindDto {
+    fn from(kind: RecoveryKind) -> Self {
+        match kind {
+            RecoveryKind::Corrupt => Self::Corrupt,
+            RecoveryKind::PartialReset => Self::PartialReset,
+            RecoveryKind::NewerVersion => Self::NewerVersion,
+        }
+    }
+}
+
 impl From<&ConfigRecovery> for ConfigRecoveryDto {
     fn from(recovery: &ConfigRecovery) -> Self {
         ConfigRecoveryDto {
+            kind: recovery.kind.into(),
             backup_path: recovery
                 .backup_path
                 .as_ref()

@@ -2120,7 +2120,10 @@ mod tests {
         std::fs::write(&path, b"precious but broken").unwrap();
 
         let state = state_with_orientation(&dir, false).with_config_recovery(Some(
-            crate::config_store::ConfigRecovery { backup_path: None },
+            crate::config_store::ConfigRecovery {
+                kind: crate::config_store::RecoveryKind::Corrupt,
+                backup_path: None,
+            },
         ));
         state
             .update_config(|config| config.launch_on_login = !config.launch_on_login)
@@ -2137,6 +2140,7 @@ mod tests {
         let backup = dir.join("config.corrupt-1.json");
         let state = state_with_orientation(&dir, false).with_config_recovery(Some(
             crate::config_store::ConfigRecovery {
+                kind: crate::config_store::RecoveryKind::PartialReset,
                 backup_path: Some(backup.clone()),
             },
         ));

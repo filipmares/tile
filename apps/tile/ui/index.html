@@ -197,12 +197,14 @@
         </dialog>
       </section>
 
-      <!-- Shown once, after a launch that could not read the saved settings.
-           Tile carries on from defaults either way; this says so, and says
-           where the old file went, rather than looking as if it forgot. -->
+      <!-- Shown once, after a launch that could not load the saved settings
+           as-is (unreadable, partly reset, or from a newer Tile). It says so,
+           and says where the old file went, rather than looking as if Tile
+           forgot. -->
       <section
         id="recovery-panel"
         class="panel panel--warning"
+        role="status"
         hidden
         aria-labelledby="recovery-heading"
       >
