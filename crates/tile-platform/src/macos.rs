@@ -66,7 +66,7 @@ use tile_core::{ActionRequest, Rect, Screen, WindowAction, WindowId, WindowSnaps
 
 use crate::{
     AnimationSession, HotkeyApplyReport, HotkeyBackend, HotkeyBinding, HotkeyBindingStatus,
-    HotkeyRoute, PermissionStatus, PlatformError, Result, WindowBackend,
+    HotkeyRoute, HotkeyStatusListener, PermissionStatus, PlatformError, Result, WindowBackend,
 };
 
 // The pure, host-testable helpers (`flip_rect`, `carbon_key_code`,
@@ -1807,6 +1807,10 @@ struct Registrar {
     statuses: Vec<HotkeyBindingStatus>,
     /// `true` from the first apply until shutdown.
     active: bool,
+    /// Orders reports from recovery against those returned by apply.
+    revision: u64,
+    /// Told when a recovery changes what the last report said.
+    listener: Option<HotkeyStatusListener>,
 }
 
 impl Registrar {
@@ -1914,6 +1918,12 @@ impl Registrar {
             summary.recovered,
             summary.lost,
         );
+        if after != before {
+            let report = self.report(after.clone());
+            if let Some(listener) = &self.listener {
+                listener(report);
+            }
+        }
         for status in after
             .iter()
             .filter(|status| status.route != HotkeyRoute::Registered)
@@ -1924,6 +1934,17 @@ impl Registrar {
                 event.label(),
                 status.reason.as_deref().unwrap_or("unknown reason"),
             );
+        }
+    }
+
+    fn report(&mut self, bindings: Vec<HotkeyBindingStatus>) -> HotkeyApplyReport {
+        self.revision += 1;
+        HotkeyApplyReport {
+            bindings,
+            hook_installed: false,
+            hook_unavailable: false,
+            warning: None,
+            revision: self.revision,
         }
     }
 
@@ -2064,6 +2085,8 @@ impl MacHotkeyBackend {
                 bindings: Vec::new(),
                 statuses: Vec::new(),
                 active: false,
+                revision: 0,
+                listener: None,
             })),
             state,
             handler: 0,
@@ -2135,14 +2158,13 @@ impl HotkeyBackend for MacHotkeyBackend {
         }
         self.ensure_handler_installed()?;
         self.ensure_observer_installed();
-        let statuses = lock_registrar(&self.registrar).register(bindings);
-        Ok(HotkeyApplyReport {
-            bindings: statuses,
-            hook_installed: false,
-            hook_unavailable: false,
-            warning: None,
-            revision: 0,
-        })
+        let mut registrar = lock_registrar(&self.registrar);
+        let statuses = registrar.register(bindings);
+        Ok(registrar.report(statuses))
+    }
+
+    fn set_status_listener(&mut self, listener: HotkeyStatusListener) {
+        lock_registrar(&self.registrar).listener = Some(listener);
     }
 
     fn shutdown(&mut self) {
