@@ -124,6 +124,10 @@ jobs:
         working-directory: apps/tile/ui
         run: npm ci
 
+      - name: Check Tauri npm and crate versions match
+        working-directory: apps/tile/ui
+        run: node scripts/check-tauri-versions.mjs
+
       - name: Build frontend
         working-directory: apps/tile/ui
         run: npm run build
