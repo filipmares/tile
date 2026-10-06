@@ -424,6 +424,9 @@ function renderBuildInfo(info: BuildInfo): void {
   // The launch-on-login toggle is the one control whose behaviour differs, so
   // it says so where it is, not only in the panel at the top.
   dom.launchDevelopmentNote.hidden = false;
+  // Linked only here: a description can be read even while hidden, and an
+  // installed build must not be told its login item is not applied.
+  dom.launch.setAttribute("aria-describedby", dom.launchDevelopmentNote.id);
   if (info.configDir) {
     dom.developmentConfigDir.textContent = STRINGS.configDir(info.configDir);
     dom.developmentConfigDir.hidden = false;

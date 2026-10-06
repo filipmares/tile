@@ -128,10 +128,9 @@ export function applySettingsSearch(): void {
   }
 
   for (const group of groups) {
-    const visible =
-      !active ||
-      [...shown].some((item) => group.contains(item)) ||
-      matchesTerms(withHeadings("", [group, ...groupsAround(group)]), terms);
+    // Headings already count toward the items under them, so a group shows
+    // only for an item it holds; an empty group is not a result.
+    const visible = !active || [...shown].some((item) => group.contains(item));
     setHidden(group, !visible);
 
     if (!(group instanceof HTMLDetailsElement)) continue;
