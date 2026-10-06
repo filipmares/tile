@@ -50,12 +50,12 @@ const STRINGS = {
   recoveryReason: {
     corrupt: "Tile could not read your settings, so it started from defaults.",
     "partial-reset":
-      "Some settings couldn't be read and were reset to their defaults.",
+      "Some settings couldn't be read: they were reset to their defaults, and any unreadable shortcuts were cleared.",
     "newer-version":
       "Your settings were saved by a newer version of Tile. Settings this version understands were kept.",
   } satisfies Record<ConfigRecovery["kind"], string>,
   newerVersionWithResets:
-    "Your settings were saved by a newer version of Tile. Some settings couldn't be read and were reset to their defaults.",
+    "Your settings were saved by a newer version of Tile. Some settings couldn't be read: they were reset to their defaults, and any unreadable shortcuts were cleared.",
   recoveredWithBackup: "A copy of the old file was kept.",
   recoveredWithoutBackup:
     "The old file could not be copied, so changes made now will not be saved until Tile restarts — that keeps the old file from being overwritten.",

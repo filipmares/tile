@@ -176,9 +176,12 @@ pub fn load_from_dir(dir: &Path) -> LoadedConfig {
     let recovery = recovery_kind.map(|(kind, reset)| back_up(dir, &path, kind, reset));
     let mut config = config;
     if let Some(recovery) = &recovery {
-        // Whoever owned the old file has used Tile before; the welcome
-        // walkthrough is not owed to them on this launch or the next.
-        config.orientation_shown = true;
+        // Whoever owned an unreadable file has used Tile before; the welcome
+        // walkthrough is not owed to them on this launch or the next. A file
+        // that was read field by field keeps its own `orientationShown`.
+        if recovery.kind == RecoveryKind::Corrupt {
+            config.orientation_shown = true;
+        }
         // With the old file safely aside, put a readable one in its place so
         // the next launch neither repeats this notice nor mistakes the user
         // for a first run.
@@ -599,6 +602,19 @@ mod tests {
         let next = load_from_dir(&dir.0);
         assert!(next.recovery.is_none());
         assert!(!next.config.launch_on_login);
+    }
+
+    #[test]
+    fn a_partial_reset_keeps_a_readable_orientation_marker() {
+        let dir = TempDir::new();
+        fs::write(
+            config_file_path(&dir.0),
+            br#"{"orientationShown":false,"sizeStep":"big"}"#,
+        )
+        .unwrap();
+        let loaded = load_from_dir(&dir.0);
+        assert!(loaded.recovery.is_some());
+        assert!(!loaded.config.orientation_shown);
     }
 
     #[test]

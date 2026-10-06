@@ -41,17 +41,19 @@ pub struct BuildInfoDto {
     pub config_dir: Option<String>,
 }
 
-/// Tells the settings UI that this launch could not read the saved settings
-/// and started from defaults.
+/// Tells the settings UI that this launch could not load the saved settings
+/// as-is: the file was unreadable and Tile started from defaults, some
+/// settings were reset or cleared while the rest were kept, or the file came
+/// from a newer Tile and only what this version understands was loaded.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigRecoveryDto {
     /// Why the saved file could not be loaded as-is.
     pub kind: ConfigRecoveryKindDto,
-    /// Whether any setting was reset to its default. A `newer-version` file
-    /// may have had unreadable fields too.
+    /// Whether any setting was reset to its default or, for an unreadable
+    /// shortcut, cleared. A `newer-version` file may have had these too.
     pub some_fields_reset: bool,
-    /// Where the unreadable file was kept, or `None` when it could not be
+    /// Where the original file was kept, or `None` when it could not be
     /// moved aside and settings are therefore not being saved this session.
     pub backup_path: Option<String>,
 }
