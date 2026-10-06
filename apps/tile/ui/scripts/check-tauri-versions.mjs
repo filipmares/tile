@@ -41,7 +41,11 @@ if (checked === 0) {
 if (mismatches.length > 0) {
   console.error("Tauri npm packages and Rust crates must share major.minor:");
   for (const m of mismatches) console.error(`  ${m}`);
-  console.error("Update apps/tile/ui with `npm install @tauri-apps/<pkg>@~<major.minor>`.");
+  console.error(
+    "Update only the lockfile in apps/tile/ui, keeping the ^2 ranges: " +
+      "`npm install --package-lock-only @tauri-apps/<pkg>@~<major.minor>`, " +
+      "then restore `^2` in package.json and package-lock.json.",
+  );
   process.exit(1);
 }
 console.log(`Tauri npm packages match their crates (${checked} checked).`);
