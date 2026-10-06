@@ -10,7 +10,7 @@ export function foldText(text: string): string {
   return text
     .normalize("NFKD")
     .replace(/\p{M}/gu, "")
-    .toLocaleLowerCase()
+    .toLowerCase()
     .replace(/\s+/g, " ")
     .trim();
 }

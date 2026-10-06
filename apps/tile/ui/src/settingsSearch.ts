@@ -178,9 +178,9 @@ function scheduleAnnouncement(text: string): void {
 }
 
 function setQuery(value: string): void {
-  const next = queryTerms(value);
-  if (next.join(" ") === terms.join(" ")) return;
-  terms = next;
+  // Re-applied even when the terms are unchanged: the empty state quotes the
+  // query as typed.
+  terms = queryTerms(value);
   applySettingsSearch();
 }
 
@@ -190,6 +190,10 @@ function isFindShortcut(e: KeyboardEvent): boolean {
 }
 
 export function wireSettingsSearch(): void {
+  dom.settingsSearch.setAttribute(
+    "aria-keyshortcuts",
+    isMac() ? "Meta+F" : "Control+F",
+  );
   dom.settingsSearch.addEventListener("input", () =>
     setQuery(dom.settingsSearch.value),
   );
