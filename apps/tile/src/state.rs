@@ -2455,6 +2455,46 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Settings ▸ Advanced saves through the same path as every other
+    /// control, so its values persist, reset to defaults, and come back on
+    /// undo.
+    #[test]
+    fn advanced_settings_persist_reset_and_undo() {
+        use tile_core::AdvancedSetting;
+
+        let dir = reset_test_dir(line!());
+        let state = state_with_orientation(&dir, false);
+        state
+            .update_config(|config| config.set_advanced(AdvancedSetting::MoveStep(32.0)))
+            .unwrap();
+        let saved = state
+            .update_config(|config| {
+                config.set_advanced(AdvancedSetting::AlmostMaximizeWidth(1.5));
+                config.set_advanced(AdvancedSetting::AnimationFps(60));
+            })
+            .unwrap();
+        assert_eq!(saved.move_step, 32.0);
+        assert_eq!(saved.almost_maximize_width, 1.0, "clamped, not defaulted");
+        assert_eq!(saved.animation.fps, 60);
+        assert_eq!(crate::config_store::load_from_dir(&dir).config, saved);
+
+        let defaults = Config::default();
+        let reset = state.reset_to_defaults(default_login()).unwrap();
+        assert_eq!(reset.move_step, defaults.move_step);
+        assert_eq!(reset.almost_maximize_width, defaults.almost_maximize_width);
+        assert_eq!(reset.animation.fps, defaults.animation.fps);
+
+        let restored = state
+            .undo_reset_to_defaults(None)
+            .unwrap()
+            .expect("nothing changed since the reset");
+        assert_eq!(restored.move_step, 32.0);
+        assert_eq!(restored.almost_maximize_width, 1.0);
+        assert_eq!(restored.animation.fps, 60);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Any change after a reset — from the settings window or the welcome
     /// window — ends the undo, so it can never overwrite a newer choice.
     #[test]

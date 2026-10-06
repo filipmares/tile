@@ -1,5 +1,5 @@
-// The settings screen: behaviour, motion and startup controls, the write
-// queue every change goes through, restore defaults and its undo, the
+// The settings screen: behaviour, motion, startup and advanced controls, the
+// write queue every change goes through, restore defaults and its undo, the
 // permission panel, and the notice shown when saved settings were unreadable.
 
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -14,6 +14,7 @@ import {
   revealConfigBackup,
   setAnimation,
   setAnimationDuration,
+  setAdvanced,
   setCycling,
   setGaps,
   setLaunchOnLogin,
@@ -31,6 +32,7 @@ import {
 } from "./shortcuts";
 import { config, setConfig } from "./state";
 import {
+  AdvancedField,
   BuildInfo,
   Config,
   ConfigRecovery,
@@ -224,6 +226,7 @@ async function restoreDefaults(): Promise<void> {
     dom.gapsError,
     dom.motionError,
     dom.launchError,
+    dom.advancedError,
   ]) {
     setSettingsError(target, null);
   }
@@ -299,6 +302,116 @@ function renderBehaviour(): void {
   mirrorAnimationDuration(String(config.animation.durationMs));
   setAnimationDurationEnabled(config.animation.enabled);
   dom.launch.checked = config.launchOnLogin;
+  renderAdvanced(config);
+}
+
+/**
+ * One Settings ▸ Advanced control. Fractions are shown as whole percentages;
+ * `min` and `max` are in the shown unit and match `Config::set_advanced`.
+ */
+interface AdvancedControl {
+  input: HTMLInputElement;
+  field: AdvancedField;
+  min: number;
+  max: number;
+  /** The saved value, in the unit the control shows. */
+  read: (cfg: Config) => number;
+  /** A shown value, in the unit the config stores. */
+  toValue: (shown: number) => number;
+}
+
+const fromPercent = (shown: number): number => shown / 100;
+const asIs = (shown: number): number => shown;
+
+function percentControl(
+  input: HTMLInputElement,
+  field: AdvancedField,
+  read: (cfg: Config) => number,
+): AdvancedControl {
+  return {
+    input,
+    field,
+    min: 1,
+    max: 100,
+    read: (cfg) => Math.round(read(cfg) * 100),
+    toValue: fromPercent,
+  };
+}
+
+function stepControl(
+  input: HTMLInputElement,
+  field: AdvancedField,
+  read: (cfg: Config) => number,
+): AdvancedControl {
+  return {
+    input,
+    field,
+    min: 1,
+    max: 1000,
+    read: (cfg) => Math.round(read(cfg)),
+    toValue: asIs,
+  };
+}
+
+const ADVANCED_CONTROLS: AdvancedControl[] = [
+  percentControl(
+    dom.advancedAlmostMaximizeWidth,
+    "almostMaximizeWidth",
+    (cfg) => cfg.almostMaximizeWidth,
+  ),
+  percentControl(
+    dom.advancedAlmostMaximizeHeight,
+    "almostMaximizeHeight",
+    (cfg) => cfg.almostMaximizeHeight,
+  ),
+  stepControl(dom.advancedSizeStep, "sizeStep", (cfg) => cfg.sizeStep),
+  stepControl(dom.advancedWidthStep, "widthStep", (cfg) => cfg.widthStep),
+  stepControl(dom.advancedMoveStep, "moveStep", (cfg) => cfg.moveStep),
+  percentControl(
+    dom.advancedMinimumWidth,
+    "minimumWindowWidth",
+    (cfg) => cfg.minimumWindowWidth,
+  ),
+  percentControl(
+    dom.advancedMinimumHeight,
+    "minimumWindowHeight",
+    (cfg) => cfg.minimumWindowHeight,
+  ),
+  {
+    input: dom.advancedAnimationFps,
+    field: "animationFps",
+    min: 15,
+    max: 240,
+    read: (cfg) => cfg.animation.fps,
+    toValue: asIs,
+  },
+];
+
+function renderAdvanced(cfg: Config): void {
+  for (const control of ADVANCED_CONTROLS) {
+    control.input.value = String(control.read(cfg));
+  }
+}
+
+/**
+ * Saves one Advanced control once its edit is committed (blur or Enter).
+ * An empty or unparseable field goes back to the saved value; anything else
+ * is clamped to the control's range here so the field settles at once, and
+ * then shows whatever the backend actually saved.
+ */
+async function commitAdvanced(control: AdvancedControl): Promise<void> {
+  const raw = control.input.value.trim();
+  const parsed = Number(raw);
+  if (raw === "" || !Number.isFinite(parsed)) {
+    if (config) control.input.value = String(control.read(config));
+    return;
+  }
+  const shown = Math.round(Math.min(control.max, Math.max(control.min, parsed)));
+  control.input.value = String(shown);
+  const setting = { field: control.field, value: control.toValue(shown) };
+  if (await saveSetting(dom.advancedError, () => setAdvanced(setting))) {
+    if (config) control.input.value = String(control.read(config));
+  }
 }
 
 /** Marks the window as a development build. Installed builds render nothing. */
@@ -553,6 +666,10 @@ function wireEvents(): void {
     const enabled = dom.launch.checked;
     void saveSetting(dom.launchError, () => setLaunchOnLogin(enabled));
   });
+
+  for (const control of ADVANCED_CONTROLS) {
+    control.input.addEventListener("change", () => void commitAdvanced(control));
+  }
 
   wireShortcutEvents();
 

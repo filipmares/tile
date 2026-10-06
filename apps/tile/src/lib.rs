@@ -71,6 +71,7 @@ pub fn run() {
             commands::set_cycling,
             commands::set_animation,
             commands::set_animation_duration,
+            commands::set_advanced,
             commands::set_launch_on_login,
             commands::reset_to_defaults,
             commands::undo_reset_to_defaults,
