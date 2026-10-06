@@ -34,8 +34,6 @@ const ANNOUNCE_DELAY_MS = 500;
 
 let terms: string[] = [];
 let announceTimer: number | null = null;
-/** The last thing queued for the live region; a re-render repeats nothing. */
-let pendingAnnouncement = "";
 
 /** Every section the search covers: the settings sections of the window. */
 function sections(): HTMLElement[] {
@@ -69,7 +67,9 @@ function headingText(group: HTMLElement): string {
 }
 
 function itemText(item: HTMLElement): string {
-  const parts = [item.textContent ?? ""];
+  // `data-search-text` carries text the item stands for but is not showing
+  // right now, such as a shortcut's key while it is being re-recorded.
+  const parts = [item.textContent ?? "", item.dataset.searchText ?? ""];
   for (const control of item.querySelectorAll<HTMLElement>(
     "[aria-label], [aria-describedby]",
   )) {
@@ -172,9 +172,12 @@ export function applySettingsSearch(): void {
 
 /** Says the result count once typing pauses, not on every keystroke. */
 function scheduleAnnouncement(text: string): void {
-  if (text === pendingAnnouncement) return;
-  pendingAnnouncement = text;
-  if (announceTimer !== null) window.clearTimeout(announceTimer);
+  if (announceTimer !== null) {
+    window.clearTimeout(announceTimer);
+    announceTimer = null;
+  }
+  // Already said; a re-render with the same result repeats nothing.
+  if (text === dom.settingsSearchStatus.textContent) return;
   announceTimer = window.setTimeout(() => {
     announceTimer = null;
     dom.settingsSearchStatus.textContent = text;

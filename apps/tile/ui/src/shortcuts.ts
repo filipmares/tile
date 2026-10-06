@@ -302,6 +302,8 @@ function renderBinding(
   // The same action can be listed twice (active and all); the search counts
   // it once.
   li.dataset.searchKey = `binding:${id}`;
+  // Still found by its key while the button reads "Press keys…".
+  li.dataset.searchText = hk ? formatHotkey(hk) : STRINGS.unbound;
 
   const name = document.createElement("span");
   name.className = "binding__label";
