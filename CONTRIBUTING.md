@@ -53,6 +53,19 @@ cargo build --workspace
 > [CI workflow](.github/workflows/ci.yml) — `cargo clippy --all-targets` is what
 > catches breakage inside the other platform's `#[cfg]` and `#[cfg(test)]` code.
 
+## Manual QA checklist
+
+CI cannot see the UI. Before merging a change to a window or its styles, check
+by hand:
+
+- **150% and 200% display scaling**, and 200% zoom or large text: open
+  Settings, Welcome, Update and About at each window's minimum size. Nothing
+  may clip, overlap or scroll sideways. `npm run dev` in `apps/tile/ui` with
+  browser zoom at 200% and the viewport at the window's minimum size (see
+  `apps/tile/src/window.rs`) is a quick stand-in.
+- Light and dark appearance, and with reduced motion turned on.
+- Keyboard only: every control is reachable and shows a focus ring.
+
 ## Development builds
 
 Every build that is not produced by the release workflow is a **development
