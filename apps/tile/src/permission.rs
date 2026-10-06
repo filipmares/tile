@@ -76,6 +76,9 @@ pub enum GrantStep {
 pub struct PermissionTracker {
     state: PermissionState,
     prompted: bool,
+    /// Bumped on every transition, so effects dispatched for an older one can
+    /// tell they have been superseded.
+    generation: u64,
 }
 
 impl Default for PermissionTracker {
@@ -89,6 +92,7 @@ impl PermissionTracker {
         Self {
             state: PermissionState::Unknown,
             prompted: false,
+            generation: 0,
         }
     }
 
@@ -112,12 +116,21 @@ impl PermissionTracker {
             PermissionStatus::Granted | PermissionStatus::NotRequired => PermissionState::Granted,
         };
         let previous = std::mem::replace(&mut self.state, next);
-        match (previous, next) {
+        let transition = match (previous, next) {
             (PermissionState::Unknown, PermissionState::Denied) => Some(Transition::Blocked),
             (PermissionState::Granted, PermissionState::Denied) => Some(Transition::Revoked),
             (PermissionState::Denied, PermissionState::Granted) => Some(Transition::Granted),
             _ => None,
+        };
+        if transition.is_some() {
+            self.generation += 1;
         }
+        transition
+    }
+
+    /// Identifies the latest transition. See [`refresh`].
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// Notes that the system prompt has been requested this session.
@@ -182,18 +195,29 @@ pub fn refresh<R: Runtime>(
 ) -> tile_platform::Result<PermissionStatus> {
     let state = app.state::<Arc<AppState>>().inner().clone();
     let (status, transition) = state.refresh_permission(prompt)?;
-    if let Some(transition) = transition {
-        on_transition(app, &state, transition, status);
+    if let Some((transition, generation)) = transition {
+        on_transition(app, &state, transition, generation, status);
     }
     Ok(status)
 }
 
+/// Carries out a transition's effects.
+///
+/// Observations are recorded in order under the tracker lock, but the effects
+/// run after it is released (holding it here could deadlock against the main
+/// thread, which tray updates wait on). Two refreshes racing a grant and a
+/// revocation could therefore act out of order, so every one-shot effect first
+/// checks that its transition is still the latest and is dropped otherwise.
+/// The tray and the settings window always re-read the current state, so they
+/// end up right whichever order their updates land in.
 fn on_transition<R: Runtime>(
     app: &AppHandle<R>,
     state: &Arc<AppState>,
     transition: Transition,
+    generation: u64,
     status: PermissionStatus,
 ) {
+    let is_current = move |state: &AppState| state.permission_generation() == generation;
     match transition {
         Transition::Blocked => {
             log::info!("accessibility permission denied");
@@ -207,6 +231,10 @@ fn on_transition<R: Runtime>(
             let handle = app.clone();
             let state = state.clone();
             if let Err(err) = app.run_on_main_thread(move || {
+                if !is_current(&state) {
+                    log::info!("permission changed again before hotkeys were applied");
+                    return;
+                }
                 state.apply_hotkeys();
                 crate::open_welcome_for_first_run(&handle, &state);
             }) {
@@ -216,9 +244,13 @@ fn on_transition<R: Runtime>(
         Transition::Revoked => {
             log::warn!("accessibility permission was revoked while Tile was running");
             let handle = app.clone();
-            let kind = state.build_kind();
+            let state = state.clone();
             if let Err(err) = app.run_on_main_thread(move || {
-                if let Err(err) = crate::window::open_settings(&handle, kind) {
+                if !is_current(&state) {
+                    log::info!("permission was granted again before settings opened");
+                    return;
+                }
+                if let Err(err) = crate::window::open_settings(&handle, state.build_kind()) {
                     log::error!("failed to open settings window: {err}");
                 }
             }) {
@@ -385,6 +417,25 @@ mod tests {
         tracker.observe(PermissionStatus::Granted);
         tracker.observe(PermissionStatus::Denied);
         assert_eq!(tracker.grant_step(), GrantStep::OpenSettings);
+    }
+
+    #[test]
+    fn every_transition_supersedes_the_one_before() {
+        let mut tracker = PermissionTracker::new();
+        assert_eq!(tracker.generation(), 0);
+        tracker.observe(PermissionStatus::Denied);
+        let blocked = tracker.generation();
+        tracker.observe(PermissionStatus::Denied);
+        assert_eq!(
+            tracker.generation(),
+            blocked,
+            "no transition, no new generation"
+        );
+        tracker.observe(PermissionStatus::Granted);
+        let granted = tracker.generation();
+        assert!(granted > blocked);
+        tracker.observe(PermissionStatus::Denied);
+        assert!(tracker.generation() > granted);
     }
 
     #[test]

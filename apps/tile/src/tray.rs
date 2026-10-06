@@ -381,10 +381,6 @@ fn build_menu<R: Runtime>(
         items.push(warning);
         items.push(warning_separator);
     }
-    if let Some((header, dev_separator)) = &dev_header {
-        items.push(header);
-        items.push(dev_separator);
-    }
     items.extend(actions.iter().map(|item| item.as_ref()));
     items.push(&actions_separator);
     items.push(&about);

@@ -240,13 +240,22 @@ impl AppState {
     pub fn refresh_permission(
         &self,
         prompt: bool,
-    ) -> tile_platform::Result<(PermissionStatus, Option<Transition>)> {
+    ) -> tile_platform::Result<(PermissionStatus, Option<(Transition, u64)>)> {
         let mut tracker = lock(&self.permission);
         if prompt {
             tracker.mark_prompted();
         }
         let status = self.permission_status(prompt)?;
-        Ok((status, tracker.observe(status)))
+        let transition = tracker
+            .observe(status)
+            .map(|transition| (transition, tracker.generation()));
+        Ok((status, transition))
+    }
+
+    /// The latest permission transition's generation. See
+    /// [`crate::permission::refresh`].
+    pub fn permission_generation(&self) -> u64 {
+        lock(&self.permission).generation()
     }
 
     /// Whether Tile is known to lack the permission it needs right now.
