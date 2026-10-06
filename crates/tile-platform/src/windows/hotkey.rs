@@ -4,38 +4,69 @@
 //! `RegisterHotKey` is the normal path. A `WH_KEYBOARD_LL` hook is installed
 //! only while a binding needs extended-key identity or permission to override a
 //! shortcut already owned by Windows.
+//!
+//! # Resilience
+//!
+//! Windows can silently break both routes without telling the owner:
+//!
+//! * A low-level hook that does not return within `LowLevelHooksTimeout` is
+//!   removed (Windows 7+) without notification.
+//! * Sleep, lock and the secure desktop swallow key-ups, so keys we claimed can
+//!   look permanently held.
+//!
+//! The owner thread therefore keeps the hook callback lock-free (its table lives
+//! in a thread-local the callback only ever *tries* to borrow), owns a hidden
+//! top-level window that receives resume / unlock / display-on notifications,
+//! and runs a cheap watchdog timer while the hook is installed. Each of these
+//! triggers a [`RecoveryReason`] that clears transient key state and re-arms the
+//! hook; lifecycle events also re-validate the native registrations.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::cell::{Cell, RefCell};
+use std::fmt;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use tile_core::{ActionRequest, Hotkey, KeyCode, Modifiers, WindowAction};
 
-use windows::core::{HRESULT, PCWSTR};
+use windows::core::{w, HRESULT, PCWSTR};
 use windows::Win32::Foundation::{
-    ERROR_HOTKEY_ALREADY_REGISTERED, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM,
+    ERROR_HOTKEY_ALREADY_REGISTERED, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Power::{
+    RegisterPowerSettingNotification, UnregisterPowerSettingNotification, HPOWERNOTIFY,
+    POWERBROADCAST_SETTING,
+};
+use windows::Win32::System::RemoteDesktop::{
+    WTSRegisterSessionNotification, WTSUnRegisterSessionNotification, NOTIFY_FOR_THIS_SESSION,
+};
+use windows::Win32::System::SystemInformation::GetTickCount;
+use windows::Win32::System::SystemServices::GUID_CONSOLE_DISPLAY_STATE;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, RegisterHotKey, SendInput, UnregisterHotKey, HOT_KEY_MODIFIERS, INPUT,
-    INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, MOD_ALT, MOD_CONTROL,
-    MOD_NOREPEAT, MOD_SHIFT, MOD_WIN, VIRTUAL_KEY, VK_ADD, VK_BACK, VK_CONTROL, VK_DECIMAL,
-    VK_DELETE, VK_DIVIDE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_F10, VK_F11, VK_F12, VK_F13,
-    VK_F14, VK_F15, VK_F16, VK_F17, VK_F18, VK_F19, VK_F2, VK_F20, VK_F21, VK_F22, VK_F23, VK_F24,
-    VK_F3, VK_F4, VK_F5, VK_F6, VK_F7, VK_F8, VK_F9, VK_HOME, VK_INSERT, VK_LEFT, VK_LWIN, VK_MENU,
-    VK_MULTIPLY, VK_NEXT, VK_NONAME, VK_NUMPAD0, VK_NUMPAD1, VK_NUMPAD2, VK_NUMPAD3, VK_NUMPAD4,
-    VK_NUMPAD5, VK_NUMPAD6, VK_NUMPAD7, VK_NUMPAD8, VK_NUMPAD9, VK_OEM_1, VK_OEM_2, VK_OEM_3,
-    VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_7, VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS,
-    VK_PRIOR, VK_RETURN, VK_RIGHT, VK_RWIN, VK_SHIFT, VK_SPACE, VK_SUBTRACT, VK_TAB, VK_UP,
+    GetAsyncKeyState, GetLastInputInfo, RegisterHotKey, SendInput, UnregisterHotKey,
+    HOT_KEY_MODIFIERS, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
+    KEYEVENTF_KEYUP, LASTINPUTINFO, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN,
+    VIRTUAL_KEY, VK_ADD, VK_BACK, VK_CONTROL, VK_DECIMAL, VK_DELETE, VK_DIVIDE, VK_DOWN, VK_END,
+    VK_ESCAPE, VK_F1, VK_F10, VK_F11, VK_F12, VK_F13, VK_F14, VK_F15, VK_F16, VK_F17, VK_F18,
+    VK_F19, VK_F2, VK_F20, VK_F21, VK_F22, VK_F23, VK_F24, VK_F3, VK_F4, VK_F5, VK_F6, VK_F7,
+    VK_F8, VK_F9, VK_HOME, VK_INSERT, VK_LEFT, VK_LWIN, VK_MENU, VK_MULTIPLY, VK_NEXT, VK_NONAME,
+    VK_NUMPAD0, VK_NUMPAD1, VK_NUMPAD2, VK_NUMPAD3, VK_NUMPAD4, VK_NUMPAD5, VK_NUMPAD6, VK_NUMPAD7,
+    VK_NUMPAD8, VK_NUMPAD9, VK_OEM_1, VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_7,
+    VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_RWIN,
+    VK_SHIFT, VK_SPACE, VK_SUBTRACT, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, DispatchMessageW, GetMessageW, PeekMessageW, PostThreadMessageW,
-    SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT,
-    LLKHF_EXTENDED, MSG, PM_NOREMOVE, WH_KEYBOARD_LL, WM_APP, WM_HOTKEY, WM_KEYDOWN, WM_KEYUP,
-    WM_SYSKEYDOWN, WM_SYSKEYUP,
+    CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
+    KillTimer, PeekMessageW, PostThreadMessageW, RegisterClassExW, SetTimer, SetWindowsHookExW,
+    TranslateMessage, UnhookWindowsHookEx, UnregisterClassW, DEVICE_NOTIFY_WINDOW_HANDLE,
+    HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, MSG, PBT_APMRESUMEAUTOMATIC,
+    PBT_POWERSETTINGCHANGE, PM_NOREMOVE, WH_KEYBOARD_LL, WM_APP, WM_HOTKEY, WM_KEYDOWN, WM_KEYUP,
+    WM_POWERBROADCAST, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER, WM_WTSSESSION_CHANGE, WNDCLASSEXW,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WTS_CONSOLE_CONNECT, WTS_REMOTE_CONNECT,
+    WTS_SESSION_UNLOCK,
 };
 
 use crate::{
@@ -44,11 +75,35 @@ use crate::{
 };
 
 const COMMAND_MESSAGE: u32 = WM_APP + 0x544;
+const RECOVER_MESSAGE: u32 = WM_APP + 0x545;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 const INJECTED_TAG: usize = 0x54_49_4C_45;
 const REQUEST_PENDING: u8 = 0;
 const REQUEST_COMMITTING: u8 = 1;
 const REQUEST_CANCELLED: u8 = 2;
+
+/// Key-repeat gaps never exceed the 1 s maximum typematic delay, so a claimed
+/// key that has not been seen for longer than this lost its key-up (sleep, lock,
+/// secure desktop) and its next key-down is a fresh press.
+const STALE_KEY_MS: u32 = 2_000;
+/// How late a hook callback, or how long a stretch of owner-thread work, may be
+/// before we assume Windows may have timed the hook out. Kept below the
+/// documented `LowLevelHooksTimeout` range so we err towards re-arming.
+const HOOK_LATENCY_LIMIT_MS: u32 = 200;
+/// Watchdog cadence while the hook is installed (one wake-up per interval).
+const WATCHDOG_INTERVAL_MS: u32 = 15_000;
+/// Timer delivery slack beyond which the owner thread is considered stalled.
+const WATCHDOG_STALL_SLACK_MS: u32 = 5_000;
+/// How long the hook must be silent while the user is active before it is
+/// presumed silently removed.
+const HOOK_SILENCE_MS: u32 = 60_000;
+/// Back-off between silence-heuristic re-arms (mouse-only use looks the same).
+const SILENT_REARM_MIN_BACKOFF_MS: u32 = 60_000;
+const SILENT_REARM_MAX_BACKOFF_MS: u32 = 30 * 60_000;
+/// Minimum spacing between latency-triggered re-arms.
+const LATENCY_REARM_MIN_GAP_MS: u32 = 10_000;
+/// Lifecycle notifications often arrive in bursts (resume, display on, unlock).
+const LIFECYCLE_COALESCE_MS: u32 = 2_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct HookBinding {
@@ -59,14 +114,29 @@ struct HookBinding {
     repeat: bool,
 }
 
-struct HookState {
+/// Dispatch table read by the hook callback.
+///
+/// A low-level hook is always called on the thread that installed it, so the
+/// table lives in a thread-local of the owner thread instead of behind a lock.
+/// The callback only ever `try_borrow`s it and passes the key through when it
+/// cannot, so it can never block past `LowLevelHooksTimeout`.
+struct HookDispatch {
     sender: Sender<ActionRequest>,
     bindings: Vec<HookBinding>,
 }
 
-static HOOK_STATE: OnceLock<Mutex<Option<HookState>>> = OnceLock::new();
+thread_local! {
+    static HOOK_DISPATCH: RefCell<Option<HookDispatch>> = const { RefCell::new(None) };
+    static DISPLAY_STATE: Cell<Option<u32>> = const { Cell::new(None) };
+}
+
 static SWALLOWED_KEYS: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
 static HELD_KEYS: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
+static LAST_KEY_DOWN: [AtomicU32; 512] = [const { AtomicU32::new(0) }; 512];
+/// Tick (`GetTickCount` base) of the last event the hook observed.
+static HOOK_LAST_EVENT: AtomicU32 = AtomicU32::new(0);
+/// Set by the callback when it was invoked later than [`HOOK_LATENCY_LIMIT_MS`].
+static HOOK_LATE: AtomicU32 = AtomicU32::new(0);
 
 const fn key_index(vk: u16, extended: bool) -> usize {
     (vk as usize & 0xFF) + if extended { 256 } else { 0 }
@@ -96,10 +166,12 @@ fn clear_key_bits(bits: &[AtomicU64; 8]) {
     }
 }
 
+#[cfg(test)]
 fn mark_swallowed(vk: u16, extended: bool) {
     set_key_bit(&SWALLOWED_KEYS, vk, extended);
 }
 
+#[cfg(test)]
 fn take_swallowed(vk: u16, extended: bool) -> bool {
     take_key_bit(&SWALLOWED_KEYS, vk, extended)
 }
@@ -117,6 +189,252 @@ fn clear_swallowed() {
 #[cfg(test)]
 const fn swallow_index(vk: u16, extended: bool) -> usize {
     key_index(vk, extended)
+}
+
+/// Milliseconds from `earlier` to `later` on the wrapping 32-bit tick clock.
+fn tick_elapsed(later: u32, earlier: u32) -> u32 {
+    later.wrapping_sub(earlier)
+}
+
+fn now_tick() -> u32 {
+    unsafe { GetTickCount() }
+}
+
+/// Per-key transient state the hook verdicts read and update.
+struct KeyTracker<'a> {
+    swallowed: &'a [AtomicU64; 8],
+    held: &'a [AtomicU64; 8],
+    last_down: &'a [AtomicU32; 512],
+}
+
+impl KeyTracker<'static> {
+    fn global() -> Self {
+        Self {
+            swallowed: &SWALLOWED_KEYS,
+            held: &HELD_KEYS,
+            last_down: &LAST_KEY_DOWN,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyVerdict {
+    Pass,
+    Swallow {
+        action: Option<WindowAction>,
+        suppress_start_menu: bool,
+    },
+}
+
+/// Decides what the hook does with a key-down. Pure apart from `tracker`.
+///
+/// A key we already claimed is normally an auto-repeat and stays swallowed. It
+/// is forgotten instead when its modifiers no longer match (the user let go of
+/// them mid-press) or when it has not been seen for [`STALE_KEY_MS`] (its
+/// key-up was lost to sleep, lock or the secure desktop) — otherwise a single
+/// lost key-up would make that shortcut dead until the key is tapped alone.
+fn key_down_verdict(
+    bindings: &[HookBinding],
+    vk: u16,
+    extended: bool,
+    now: u32,
+    modifiers: impl FnOnce() -> Modifiers,
+    tracker: &KeyTracker<'_>,
+) -> KeyVerdict {
+    if is_modifier_vk(vk) {
+        return KeyVerdict::Pass;
+    }
+    let mods = modifiers();
+    let matched = match_binding_in(bindings, vk, extended, mods);
+    let last_down = &tracker.last_down[key_index(vk, extended)];
+
+    if key_bit_is_set(tracker.swallowed, vk, extended) {
+        let stale = tick_elapsed(now, last_down.load(Ordering::Relaxed)) > STALE_KEY_MS;
+        if let (false, Some(binding)) = (stale, matched) {
+            last_down.store(now, Ordering::Relaxed);
+            return KeyVerdict::Swallow {
+                action: repeat_action(binding),
+                suppress_start_menu: false,
+            };
+        }
+        take_key_bit(tracker.swallowed, vk, extended);
+        take_key_bit(tracker.held, vk, extended);
+    }
+
+    let Some(binding) = matched else {
+        return KeyVerdict::Pass;
+    };
+    let repeated = !binding.repeat && set_key_bit(tracker.held, vk, extended);
+    set_key_bit(tracker.swallowed, vk, extended);
+    last_down.store(now, Ordering::Relaxed);
+    KeyVerdict::Swallow {
+        action: (!repeated).then_some(binding.action),
+        suppress_start_menu: mods.contains(Modifiers::META),
+    }
+}
+
+/// Returns whether the hook swallows a key-up (only for keys it claimed).
+fn key_up_verdict(vk: u16, extended: bool, tracker: &KeyTracker<'_>) -> bool {
+    take_key_bit(tracker.held, vk, extended);
+    take_key_bit(tracker.swallowed, vk, extended)
+}
+
+/// Why the owner thread is re-arming the hotkey machinery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecoveryReason {
+    Resume,
+    SessionUnlock,
+    SessionReconnect,
+    DisplayOn,
+    OwnerStall { ms: u32 },
+    LateHookCallback { ms: u32 },
+    HookSilent { ms: u32 },
+}
+
+impl RecoveryReason {
+    /// Lifecycle events can leave every route stale; watchdog findings only
+    /// concern the hook.
+    fn is_lifecycle(self) -> bool {
+        matches!(
+            self,
+            Self::Resume | Self::SessionUnlock | Self::SessionReconnect | Self::DisplayOn
+        )
+    }
+
+    fn to_wparam(self) -> Option<usize> {
+        Some(match self {
+            Self::Resume => 1,
+            Self::SessionUnlock => 2,
+            Self::SessionReconnect => 3,
+            Self::DisplayOn => 4,
+            _ => return None,
+        })
+    }
+
+    fn from_wparam(value: usize) -> Option<Self> {
+        Some(match value {
+            1 => Self::Resume,
+            2 => Self::SessionUnlock,
+            3 => Self::SessionReconnect,
+            4 => Self::DisplayOn,
+            _ => return None,
+        })
+    }
+}
+
+impl fmt::Display for RecoveryReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Resume => f.write_str("resume from sleep"),
+            Self::SessionUnlock => f.write_str("session unlock"),
+            Self::SessionReconnect => f.write_str("session reconnect"),
+            Self::DisplayOn => f.write_str("display power-on"),
+            Self::OwnerStall { ms } => write!(f, "hotkey thread stalled for {ms} ms"),
+            Self::LateHookCallback { ms } => {
+                write!(f, "keyboard hook callback delivered {ms} ms late")
+            }
+            Self::HookSilent { ms } => {
+                write!(f, "keyboard hook silent for {ms} ms while input was active")
+            }
+        }
+    }
+}
+
+/// Maps a `WM_WTSSESSION_CHANGE` code to a recovery.
+fn session_recovery_reason(code: u32) -> Option<RecoveryReason> {
+    match code {
+        WTS_SESSION_UNLOCK => Some(RecoveryReason::SessionUnlock),
+        WTS_CONSOLE_CONNECT | WTS_REMOTE_CONNECT => Some(RecoveryReason::SessionReconnect),
+        _ => None,
+    }
+}
+
+/// Only an off -> on transition of `GUID_CONSOLE_DISPLAY_STATE` (0 = off,
+/// 1 = on, 2 = dimmed) counts; Windows reports the current state once on
+/// registration, which must not trigger a recovery.
+fn display_turned_on(previous: Option<u32>, current: u32) -> bool {
+    previous == Some(0) && current == 1
+}
+
+/// One watchdog observation, all on the `GetTickCount` clock.
+#[derive(Debug, Clone, Copy)]
+struct WatchdogSample {
+    now: u32,
+    last_input: u32,
+    last_hook_event: u32,
+}
+
+/// Pure decision logic for detecting a hook Windows removed without telling us.
+#[derive(Debug, Clone)]
+struct HookWatchdog {
+    last_tick: u32,
+    last_seen_hook_event: u32,
+    last_silent_rearm: Option<u32>,
+    silent_backoff_ms: u32,
+    last_latency_rearm: Option<u32>,
+}
+
+impl HookWatchdog {
+    fn new(now: u32, last_hook_event: u32) -> Self {
+        Self {
+            last_tick: now,
+            last_seen_hook_event: last_hook_event,
+            last_silent_rearm: None,
+            silent_backoff_ms: SILENT_REARM_MIN_BACKOFF_MS,
+            last_latency_rearm: None,
+        }
+    }
+
+    /// Restarts stall measurement, e.g. after the timer was (re)armed or the
+    /// hook re-installed.
+    fn restart(&mut self, now: u32, last_hook_event: u32) {
+        self.last_tick = now;
+        self.last_seen_hook_event = last_hook_event;
+    }
+
+    fn on_tick(&mut self, sample: WatchdogSample) -> Option<RecoveryReason> {
+        let gap = tick_elapsed(sample.now, self.last_tick);
+        self.last_tick = sample.now;
+
+        if sample.last_hook_event != self.last_seen_hook_event {
+            self.last_seen_hook_event = sample.last_hook_event;
+            self.last_silent_rearm = None;
+            self.silent_backoff_ms = SILENT_REARM_MIN_BACKOFF_MS;
+        }
+
+        if gap > WATCHDOG_INTERVAL_MS + WATCHDOG_STALL_SLACK_MS {
+            return Some(RecoveryReason::OwnerStall { ms: gap });
+        }
+
+        let since_input = tick_elapsed(sample.now, sample.last_input);
+        let since_hook = tick_elapsed(sample.now, sample.last_hook_event);
+        let active = since_input <= WATCHDOG_INTERVAL_MS && since_input < since_hook;
+        if !active || since_hook < HOOK_SILENCE_MS {
+            return None;
+        }
+        if let Some(last) = self.last_silent_rearm {
+            if tick_elapsed(sample.now, last) < self.silent_backoff_ms {
+                return None;
+            }
+            self.silent_backoff_ms = self
+                .silent_backoff_ms
+                .saturating_mul(2)
+                .min(SILENT_REARM_MAX_BACKOFF_MS);
+        }
+        self.last_silent_rearm = Some(sample.now);
+        Some(RecoveryReason::HookSilent { ms: since_hook })
+    }
+
+    /// Rate-limits re-arms triggered by a late callback or a busy owner thread.
+    fn allow_latency_rearm(&mut self, now: u32) -> bool {
+        if let Some(last) = self.last_latency_rearm {
+            if tick_elapsed(now, last) < LATENCY_REARM_MIN_GAP_MS {
+                return false;
+            }
+        }
+        self.last_latency_rearm = Some(now);
+        true
+    }
 }
 
 enum Command {
@@ -188,6 +506,146 @@ struct OwnerState {
     hook: Option<HHOOK>,
     next_id: i32,
     module: HINSTANCE,
+    notifications: Option<NotificationWindow>,
+    watchdog: HookWatchdog,
+    watchdog_timer: usize,
+    last_lifecycle_recovery: Option<u32>,
+}
+
+const NOTIFICATION_CLASS: PCWSTR = w!("TileHotkeyNotifications");
+
+/// Hidden top-level window that receives the broadcasts a message-only window
+/// never sees: `WM_POWERBROADCAST` (resume, display power) and, once
+/// registered, `WM_WTSSESSION_CHANGE` (unlock, reconnect).
+struct NotificationWindow {
+    hwnd: HWND,
+    module: HINSTANCE,
+    display: Option<HPOWERNOTIFY>,
+    session: bool,
+}
+
+impl NotificationWindow {
+    fn create(module: HINSTANCE) -> Result<Self> {
+        unsafe {
+            let class = WNDCLASSEXW {
+                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+                lpfnWndProc: Some(notification_wndproc),
+                hInstance: module,
+                lpszClassName: NOTIFICATION_CLASS,
+                ..Default::default()
+            };
+            // A zero atom usually means a previous backend in this process
+            // already registered the class; window creation reports real
+            // failures.
+            RegisterClassExW(&class);
+            let hwnd = CreateWindowExW(
+                WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                NOTIFICATION_CLASS,
+                w!("Tile hotkey notifications"),
+                WS_POPUP,
+                0,
+                0,
+                0,
+                0,
+                None,
+                None,
+                Some(module),
+                None,
+            )
+            .map_err(|e| PlatformError::os("CreateWindowExW", e.message()))?;
+
+            let session = match WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION) {
+                Ok(()) => true,
+                Err(err) => {
+                    log::warn!(
+                        "session notifications unavailable; hotkeys will not re-arm on unlock: {}",
+                        err.message()
+                    );
+                    false
+                }
+            };
+            DISPLAY_STATE.with(|state| state.set(None));
+            let display = match RegisterPowerSettingNotification(
+                HANDLE(hwnd.0),
+                &GUID_CONSOLE_DISPLAY_STATE,
+                DEVICE_NOTIFY_WINDOW_HANDLE,
+            ) {
+                Ok(handle) => Some(handle),
+                Err(err) => {
+                    log::warn!("display power notifications unavailable: {}", err.message());
+                    None
+                }
+            };
+            Ok(Self {
+                hwnd,
+                module,
+                display,
+                session,
+            })
+        }
+    }
+
+    fn destroy(self) {
+        unsafe {
+            if let Some(display) = self.display {
+                let _ = UnregisterPowerSettingNotification(display);
+            }
+            if self.session {
+                let _ = WTSUnRegisterSessionNotification(self.hwnd);
+            }
+            let _ = DestroyWindow(self.hwnd);
+            let _ = UnregisterClassW(NOTIFICATION_CLASS, Some(self.module));
+        }
+    }
+}
+
+fn post_recovery(reason: RecoveryReason) {
+    let Some(code) = reason.to_wparam() else {
+        return;
+    };
+    unsafe {
+        let _ = PostThreadMessageW(
+            GetCurrentThreadId(),
+            RECOVER_MESSAGE,
+            WPARAM(code),
+            LPARAM(0),
+        );
+    }
+}
+
+unsafe extern "system" fn notification_wndproc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match message {
+        WM_POWERBROADCAST => {
+            let event = wparam.0 as u32;
+            if event == PBT_APMRESUMEAUTOMATIC {
+                post_recovery(RecoveryReason::Resume);
+            } else if event == PBT_POWERSETTINGCHANGE && lparam.0 != 0 {
+                let setting = &*(lparam.0 as *const POWERBROADCAST_SETTING);
+                if setting.PowerSetting == GUID_CONSOLE_DISPLAY_STATE
+                    && setting.DataLength as usize >= std::mem::size_of::<u32>()
+                {
+                    let current = std::ptr::read_unaligned(setting.Data.as_ptr() as *const u32);
+                    let previous = DISPLAY_STATE.with(|state| state.replace(Some(current)));
+                    if display_turned_on(previous, current) {
+                        post_recovery(RecoveryReason::DisplayOn);
+                    }
+                }
+            }
+            LRESULT(1)
+        }
+        WM_WTSSESSION_CHANGE => {
+            if let Some(reason) = session_recovery_reason(wparam.0 as u32) {
+                post_recovery(reason);
+            }
+            LRESULT(0)
+        }
+        _ => DefWindowProcW(hwnd, message, wparam, lparam),
+    }
 }
 
 pub struct WindowsHotkeyBackend {
@@ -199,15 +657,6 @@ pub struct WindowsHotkeyBackend {
 
 impl WindowsHotkeyBackend {
     pub fn new(events: Sender<ActionRequest>) -> Result<Self> {
-        let hook_state = HOOK_STATE.get_or_init(|| Mutex::new(None));
-        *hook_state
-            .lock()
-            .map_err(|_| PlatformError::os("hotkey", "hook state mutex poisoned"))? =
-            Some(HookState {
-                sender: events.clone(),
-                bindings: Vec::new(),
-            });
-
         let (commands, command_rx) = mpsc::channel();
         let (ready_tx, ready_rx) = mpsc::channel();
         let startup_cancelled = std::sync::Arc::new(AtomicBool::new(false));
@@ -308,11 +757,6 @@ impl HotkeyBackend for WindowsHotkeyBackend {
         if let Some(handle) = self.thread.take() {
             let _ = handle.join();
         }
-        if let Some(state) = HOOK_STATE.get() {
-            if let Ok(mut guard) = state.lock() {
-                *guard = None;
-            }
-        }
         clear_transient_keys();
     }
 }
@@ -347,12 +791,22 @@ fn owner_thread_main(
         );
 
         let mut owner = OwnerState {
-            events,
+            events: events.clone(),
             registered: Vec::new(),
             hook: None,
             next_id: 1,
             module: module.into(),
+            notifications: None,
+            watchdog: HookWatchdog::new(now_tick(), HOOK_LAST_EVENT.load(Ordering::Relaxed)),
+            watchdog_timer: 0,
+            last_lifecycle_recovery: None,
         };
+        HOOK_DISPATCH.with(|dispatch| {
+            *dispatch.borrow_mut() = Some(HookDispatch {
+                sender: events,
+                bindings: Vec::new(),
+            });
+        });
         if startup_cancelled.load(Ordering::Acquire)
             || ready.send(Ok(GetCurrentThreadId())).is_err()
         {
@@ -361,6 +815,15 @@ fn owner_thread_main(
         if !await_start(&commands, &startup_cancelled) {
             return;
         }
+        owner.notifications = match NotificationWindow::create(owner.module) {
+            Ok(window) => Some(window),
+            Err(err) => {
+                log::warn!(
+                    "hotkeys will not re-arm after sleep or unlock; notification window failed: {err}"
+                );
+                None
+            }
+        };
         log::debug!("Windows hotkey owner thread entered its message loop");
 
         let mut msg: MSG = std::mem::zeroed();
@@ -369,18 +832,33 @@ fn owner_thread_main(
             if result == 0 || result == -1 {
                 break;
             }
+            let started = Instant::now();
+            // Recovery work is deliberately thorough and must not count as a
+            // stall that triggers another recovery.
+            let mut measured = true;
             if msg.message == COMMAND_MESSAGE {
                 if !drain_commands(&commands, &mut owner) {
                     break;
                 }
-                continue;
-            }
-            if msg.message == WM_HOTKEY {
+            } else if msg.message == WM_HOTKEY {
                 owner.dispatch_registered(msg.wParam.0 as i32);
-                continue;
+            } else if msg.message == RECOVER_MESSAGE && msg.hwnd.0.is_null() {
+                if let Some(reason) = RecoveryReason::from_wparam(msg.wParam.0) {
+                    owner.recover(reason);
+                }
+                measured = false;
+            } else if msg.message == WM_TIMER
+                && msg.hwnd.0.is_null()
+                && owner.watchdog_timer != 0
+                && msg.wParam.0 == owner.watchdog_timer
+            {
+                owner.watchdog_tick();
+                measured = false;
+            } else {
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
             }
-            let _ = TranslateMessage(&msg);
-            DispatchMessageW(&msg);
+            owner.check_latency(measured.then(|| started.elapsed()));
         }
         owner.release_all();
         log::debug!("Windows hotkey owner thread released all native state");
@@ -422,6 +900,7 @@ fn drain_commands(commands: &Receiver<Command>, owner: &mut OwnerState) -> bool 
                 } else {
                     owner.apply(&bindings, deadline, &control)
                 };
+                owner.sync_watchdog();
                 let _ = reply.send(result);
             }
             Command::Shutdown => return false,
@@ -707,17 +1186,192 @@ impl OwnerState {
     }
 
     fn install_hook(&mut self) -> Result<()> {
+        let hook = Self::set_hook(self.module)?;
+        self.hook = Some(hook);
+        Ok(())
+    }
+
+    fn set_hook(module: HINSTANCE) -> Result<HHOOK> {
         let hook = unsafe {
             SetWindowsHookExW(
                 WH_KEYBOARD_LL,
                 Some(low_level_keyboard_proc),
-                Some(self.module),
+                Some(module),
                 0,
             )
             .map_err(|e| PlatformError::os("SetWindowsHookExW", e.message()))?
         };
-        self.hook = Some(hook);
-        Ok(())
+        // Silence is measured from (re)installation, not from the last event
+        // a previous, possibly dead, hook saw.
+        HOOK_LAST_EVENT.store(now_tick(), Ordering::Relaxed);
+        Ok(hook)
+    }
+
+    /// Installs a fresh hook before removing the old one, so a live hook never
+    /// leaves a gap. Unhooking fails harmlessly when Windows already removed it.
+    fn rearm_hook(&mut self) -> Result<bool> {
+        let Some(old) = self.hook else {
+            return Ok(false);
+        };
+        let new = Self::set_hook(self.module)?;
+        self.hook = Some(new);
+        if let Err(err) = unsafe { UnhookWindowsHookEx(old) } {
+            log::debug!("previous keyboard hook was already gone: {}", err.message());
+        }
+        self.watchdog
+            .restart(now_tick(), HOOK_LAST_EVENT.load(Ordering::Relaxed));
+        Ok(true)
+    }
+
+    fn recover(&mut self, reason: RecoveryReason) {
+        let now = now_tick();
+        if reason.is_lifecycle() {
+            if let Some(last) = self.last_lifecycle_recovery {
+                if tick_elapsed(now, last) < LIFECYCLE_COALESCE_MS {
+                    log::debug!("Windows hotkeys: {reason} coalesced with a recent recovery");
+                    return;
+                }
+            }
+            self.last_lifecycle_recovery = Some(now);
+        }
+
+        clear_transient_keys();
+        let hook = match self.rearm_hook() {
+            Ok(true) => "keyboard hook re-armed",
+            Ok(false) => "no keyboard hook needed",
+            Err(err) => {
+                log::warn!("Windows hotkeys: could not re-arm keyboard hook after {reason}: {err}");
+                "keyboard hook re-arm failed"
+            }
+        };
+        if reason.is_lifecycle() {
+            let summary = self.revalidate_registrations();
+            log::info!(
+                "Windows hotkeys recovered after {reason}: transient keys cleared, {hook}, \
+                 registrations re-validated (kept={}, moved_to_hook={}, lost={})",
+                summary.kept,
+                summary.moved_to_hook,
+                summary.lost
+            );
+        } else {
+            log::info!("Windows hotkeys recovered after {reason}: transient keys cleared, {hook}");
+        }
+        self.sync_watchdog();
+    }
+
+    /// Re-registers every active native hotkey. A registration Windows dropped
+    /// is restored; one another application grabbed meanwhile falls back to the
+    /// hook, exactly as it would have on apply.
+    fn revalidate_registrations(&mut self) -> RevalidateSummary {
+        let mut summary = RevalidateSummary::default();
+        let active: Vec<_> = self
+            .registered
+            .iter()
+            .copied()
+            .filter(|binding| binding.enabled)
+            .collect();
+        let mut fallback = Vec::new();
+        for binding in active {
+            let _ = unsafe { UnregisterHotKey(None, binding.id) };
+            match register_binding(binding.id, binding.binding) {
+                Ok(()) => summary.kept += 1,
+                Err(err) => {
+                    self.registered.retain(|owned| owned.id != binding.id);
+                    if is_already_registered(&err) {
+                        log::warn!(
+                            "Windows hotkey {} was taken by another application; intercepting it instead",
+                            binding.binding.hotkey
+                        );
+                        fallback.push(to_hook_binding(binding.binding));
+                        summary.moved_to_hook += 1;
+                    } else {
+                        log::warn!(
+                            "Windows hotkey {} could not be re-registered: {}",
+                            binding.binding.hotkey,
+                            err.message()
+                        );
+                        summary.lost += 1;
+                    }
+                }
+            }
+        }
+        if !fallback.is_empty() {
+            let mut table = current_hook_bindings();
+            table.extend(fallback);
+            if let Err(err) = set_hook_bindings(table) {
+                log::warn!("Windows hotkeys: could not publish hook fallback: {err}");
+            } else if self.hook.is_none() {
+                if let Err(err) = self.install_hook() {
+                    log::warn!("Windows hotkeys: could not install hook for fallback: {err}");
+                }
+            }
+        }
+        summary
+    }
+
+    /// Runs the watchdog timer only while a hook exists to watch.
+    fn sync_watchdog(&mut self) {
+        match (self.hook.is_some(), self.watchdog_timer) {
+            (true, 0) => {
+                self.watchdog_timer = unsafe { SetTimer(None, 0, WATCHDOG_INTERVAL_MS, None) };
+                if self.watchdog_timer == 0 {
+                    log::warn!("Windows hotkeys: keyboard hook watchdog timer unavailable");
+                }
+                self.watchdog
+                    .restart(now_tick(), HOOK_LAST_EVENT.load(Ordering::Relaxed));
+            }
+            (false, timer) if timer != 0 => {
+                let _ = unsafe { KillTimer(None, timer) };
+                self.watchdog_timer = 0;
+            }
+            _ => {}
+        }
+    }
+
+    fn watchdog_tick(&mut self) {
+        if self.hook.is_none() {
+            return;
+        }
+        let mut info = LASTINPUTINFO {
+            cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
+            dwTime: 0,
+        };
+        let now = now_tick();
+        let last_input = if unsafe { GetLastInputInfo(&mut info) }.as_bool() {
+            info.dwTime
+        } else {
+            now.wrapping_sub(u32::MAX / 2)
+        };
+        let sample = WatchdogSample {
+            now,
+            last_input,
+            last_hook_event: HOOK_LAST_EVENT.load(Ordering::Relaxed),
+        };
+        if let Some(reason) = self.watchdog.on_tick(sample) {
+            self.recover(reason);
+        }
+    }
+
+    /// Re-arms the hook when the callback ran late or the owner thread itself
+    /// was busy long enough that Windows may have timed the hook out.
+    fn check_latency(&mut self, busy: Option<Duration>) {
+        let late = HOOK_LATE.swap(0, Ordering::Relaxed);
+        if self.hook.is_none() {
+            return;
+        }
+        let busy_ms = busy.map_or(0, |busy| {
+            u32::try_from(busy.as_millis()).unwrap_or(u32::MAX)
+        });
+        let reason = if busy_ms > HOOK_LATENCY_LIMIT_MS {
+            RecoveryReason::OwnerStall { ms: busy_ms }
+        } else if late != 0 {
+            RecoveryReason::LateHookCallback { ms: late }
+        } else {
+            return;
+        };
+        if self.watchdog.allow_latency_rearm(now_tick()) {
+            self.recover(reason);
+        }
     }
 
     fn cleanup_disabled_registrations(&mut self) -> Result<()> {
@@ -811,7 +1465,18 @@ impl OwnerState {
         if let Some(hook) = self.hook.take() {
             let _ = unsafe { UnhookWindowsHookEx(hook) };
         }
+        self.sync_watchdog();
+        if let Some(window) = self.notifications.take() {
+            window.destroy();
+        }
     }
+}
+
+#[derive(Debug, Default)]
+struct RevalidateSummary {
+    kept: usize,
+    moved_to_hook: usize,
+    lost: usize,
 }
 
 fn register_binding(id: i32, binding: HotkeyBinding) -> windows::core::Result<()> {
@@ -909,25 +1574,43 @@ fn unavailable(binding: HotkeyBinding, reason: impl Into<String>) -> HotkeyBindi
 }
 
 fn current_hook_bindings() -> Vec<HookBinding> {
-    HOOK_STATE
-        .get()
-        .and_then(|state| state.lock().ok())
-        .and_then(|guard| guard.as_ref().map(|state| state.bindings.clone()))
+    HOOK_DISPATCH
+        .try_with(|dispatch| {
+            dispatch
+                .try_borrow()
+                .ok()
+                .and_then(|guard| guard.as_ref().map(|state| state.bindings.clone()))
+        })
+        .ok()
+        .flatten()
         .unwrap_or_default()
 }
 
 fn set_hook_bindings(bindings: Vec<HookBinding>) -> Result<()> {
-    let state = HOOK_STATE
-        .get()
-        .ok_or_else(|| PlatformError::os("hotkey", "hook state is not initialized"))?;
-    let mut guard = state
-        .lock()
-        .map_err(|_| PlatformError::os("hotkey", "hook state mutex poisoned"))?;
-    let hook_state = guard
-        .as_mut()
-        .ok_or_else(|| PlatformError::os("hotkey", "hook state is unavailable"))?;
-    hook_state.bindings = bindings;
-    Ok(())
+    HOOK_DISPATCH
+        .try_with(|dispatch| {
+            let mut guard = dispatch
+                .try_borrow_mut()
+                .map_err(|_| PlatformError::os("hotkey", "hook table is in use"))?;
+            let state = guard
+                .as_mut()
+                .ok_or_else(|| PlatformError::os("hotkey", "hook state is unavailable"))?;
+            state.bindings = bindings;
+            Ok(())
+        })
+        .map_err(|_| PlatformError::os("hotkey", "hook state was torn down"))?
+}
+
+/// Records liveness and delivery latency for the watchdog. Called for every
+/// event, including injected ones, so it must stay trivial.
+fn note_hook_event(event_time: u32, now: u32) {
+    HOOK_LAST_EVENT.store(now, Ordering::Relaxed);
+    let latency = tick_elapsed(now, event_time);
+    // Some injectors stamp garbage times; anything absurd is not a delivery
+    // delay and is ignored.
+    if latency > HOOK_LATENCY_LIMIT_MS && latency < 60_000 {
+        HOOK_LATE.fetch_max(latency, Ordering::Relaxed);
+    }
 }
 
 unsafe extern "system" fn low_level_keyboard_proc(
@@ -936,57 +1619,69 @@ unsafe extern "system" fn low_level_keyboard_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     if code == HC_ACTION as i32 {
-        let message = wparam.0 as u32;
         let kb = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
-        if kb.dwExtraInfo != INJECTED_TAG {
-            let vk = kb.vkCode as u16;
-            let extended = (kb.flags.0 & LLKHF_EXTENDED.0) != 0;
-            if message == WM_KEYDOWN || message == WM_SYSKEYDOWN {
-                if key_bit_is_set(&SWALLOWED_KEYS, vk, extended) {
-                    if !is_modifier_vk(vk) {
-                        let mods = current_modifiers();
-                        if let Some(binding) = match_binding(vk, extended, mods) {
-                            repeat_action(binding)
-                                .into_iter()
-                                .for_each(send_hook_action);
-                        }
-                    }
-                    return LRESULT(1);
-                }
-
-                if !is_modifier_vk(vk) {
-                    let mods = current_modifiers();
-                    if let Some(binding) = match_binding(vk, extended, mods) {
-                        let repeated = !binding.repeat && set_key_bit(&HELD_KEYS, vk, extended);
-                        if !repeated {
-                            send_hook_action(binding.action);
-                        }
-                        mark_swallowed(vk, extended);
-                        if mods.contains(Modifiers::META) {
-                            suppress_start_menu();
-                        }
-                        return LRESULT(1);
-                    }
-                }
-            } else if message == WM_KEYUP || message == WM_SYSKEYUP {
-                take_key_bit(&HELD_KEYS, vk, extended);
-                if take_swallowed(vk, extended) {
-                    return LRESULT(1);
-                }
-            }
+        note_hook_event(kb.time, now_tick());
+        if kb.dwExtraInfo != INJECTED_TAG && handle_hook_key(wparam.0 as u32, kb) {
+            return LRESULT(1);
         }
     }
     CallNextHookEx(Some(HHOOK(std::ptr::null_mut())), code, wparam, lparam)
 }
 
-fn repeat_action(binding: HookBinding) -> Option<WindowAction> {
-    binding.repeat.then_some(binding.action)
+/// Returns whether the event is swallowed. Never blocks: if the dispatch table
+/// is unavailable the key simply passes through.
+fn handle_hook_key(message: u32, kb: &KBDLLHOOKSTRUCT) -> bool {
+    let vk = kb.vkCode as u16;
+    let extended = (kb.flags.0 & LLKHF_EXTENDED.0) != 0;
+    let tracker = KeyTracker::global();
+    if message == WM_KEYDOWN || message == WM_SYSKEYDOWN {
+        let verdict = HOOK_DISPATCH
+            .try_with(|dispatch| {
+                let Ok(guard) = dispatch.try_borrow() else {
+                    return KeyVerdict::Pass;
+                };
+                let Some(state) = guard.as_ref() else {
+                    return KeyVerdict::Pass;
+                };
+                let verdict = key_down_verdict(
+                    &state.bindings,
+                    vk,
+                    extended,
+                    kb.time,
+                    current_modifiers,
+                    &tracker,
+                );
+                if let KeyVerdict::Swallow {
+                    action: Some(action),
+                    ..
+                } = verdict
+                {
+                    let _ = state.sender.send(action.into());
+                }
+                verdict
+            })
+            .unwrap_or(KeyVerdict::Pass);
+        match verdict {
+            KeyVerdict::Pass => false,
+            KeyVerdict::Swallow {
+                suppress_start_menu: suppress,
+                ..
+            } => {
+                if suppress {
+                    unsafe { suppress_start_menu() };
+                }
+                true
+            }
+        }
+    } else if message == WM_KEYUP || message == WM_SYSKEYUP {
+        key_up_verdict(vk, extended, &tracker)
+    } else {
+        false
+    }
 }
 
-fn match_binding(vk: u16, extended: bool, mods: Modifiers) -> Option<HookBinding> {
-    let state = HOOK_STATE.get()?;
-    let guard = state.lock().ok()?;
-    match_binding_in(&guard.as_ref()?.bindings, vk, extended, mods)
+fn repeat_action(binding: HookBinding) -> Option<WindowAction> {
+    binding.repeat.then_some(binding.action)
 }
 
 fn match_binding_in(
@@ -1002,18 +1697,6 @@ fn match_binding_in(
                 .extended
                 .map_or(true, |required| required == extended)
     })
-}
-
-fn send_hook_action(action: WindowAction) {
-    let Some(state) = HOOK_STATE.get() else {
-        return;
-    };
-    let Ok(guard) = state.lock() else {
-        return;
-    };
-    if let Some(hook_state) = guard.as_ref() {
-        let _ = hook_state.sender.send(action.into());
-    }
 }
 
 fn current_modifiers() -> Modifiers {
@@ -1590,5 +2273,355 @@ mod tests {
         assert!(!key_bit_is_set(&SWALLOWED_KEYS, VK_LEFT.0, false));
         assert!(take_swallowed(VK_LEFT.0, true));
         assert!(!key_bit_is_set(&SWALLOWED_KEYS, VK_LEFT.0, true));
+    }
+
+    struct LocalKeys {
+        swallowed: [AtomicU64; 8],
+        held: [AtomicU64; 8],
+        last_down: [AtomicU32; 512],
+    }
+
+    impl LocalKeys {
+        fn new() -> Self {
+            Self {
+                swallowed: [const { AtomicU64::new(0) }; 8],
+                held: [const { AtomicU64::new(0) }; 8],
+                last_down: [const { AtomicU32::new(0) }; 512],
+            }
+        }
+
+        fn tracker(&self) -> KeyTracker<'_> {
+            KeyTracker {
+                swallowed: &self.swallowed,
+                held: &self.held,
+                last_down: &self.last_down,
+            }
+        }
+
+        fn down(&self, bindings: &[HookBinding], vk: u16, now: u32, mods: Modifiers) -> KeyVerdict {
+            key_down_verdict(bindings, vk, false, now, || mods, &self.tracker())
+        }
+
+        fn up(&self, vk: u16) -> bool {
+            key_up_verdict(vk, false, &self.tracker())
+        }
+    }
+
+    fn fired(action: WindowAction, start: bool) -> KeyVerdict {
+        KeyVerdict::Swallow {
+            action: Some(action),
+            suppress_start_menu: start,
+        }
+    }
+
+    const SWALLOW_SILENTLY: KeyVerdict = KeyVerdict::Swallow {
+        action: None,
+        suppress_start_menu: false,
+    };
+
+    #[test]
+    fn exclusive_binding_fires_once_and_swallows_its_repeats_and_key_up() {
+        let keys = LocalKeys::new();
+        let t = table();
+        assert_eq!(
+            keys.down(&t, VK_LEFT.0, 1_000, Modifiers::META),
+            fired(WindowAction::LeftHalf, true)
+        );
+        for now in [1_500, 1_533, 1_566] {
+            assert_eq!(
+                keys.down(&t, VK_LEFT.0, now, Modifiers::META),
+                SWALLOW_SILENTLY
+            );
+        }
+        assert!(keys.up(VK_LEFT.0), "claimed key-up is swallowed");
+        assert!(!keys.up(VK_LEFT.0), "and only once");
+        assert_eq!(
+            keys.down(&t, VK_LEFT.0, 1_700, Modifiers::META),
+            fired(WindowAction::LeftHalf, true),
+            "a new press after key-up fires again"
+        );
+    }
+
+    #[test]
+    fn repeating_binding_fires_on_every_auto_repeat() {
+        let keys = LocalKeys::new();
+        let t = vec![HookBinding {
+            repeat: true,
+            ..table()[0]
+        }];
+        assert_eq!(
+            keys.down(&t, VK_LEFT.0, 10, Modifiers::META),
+            fired(WindowAction::LeftHalf, true)
+        );
+        assert_eq!(
+            keys.down(&t, VK_LEFT.0, 500, Modifiers::META),
+            KeyVerdict::Swallow {
+                action: Some(WindowAction::LeftHalf),
+                suppress_start_menu: false,
+            }
+        );
+    }
+
+    #[test]
+    fn lost_key_up_does_not_kill_the_shortcut() {
+        // Sleep / lock / the secure desktop ate the key-up: the next press long
+        // after must be a fresh press, not a silently swallowed "repeat".
+        let keys = LocalKeys::new();
+        let t = table();
+        assert_eq!(
+            keys.down(&t, VK_LEFT.0, 1_000, Modifiers::META),
+            fired(WindowAction::LeftHalf, true)
+        );
+        assert_eq!(
+            keys.down(&t, VK_LEFT.0, 1_000 + STALE_KEY_MS + 1, Modifiers::META),
+            fired(WindowAction::LeftHalf, true)
+        );
+    }
+
+    #[test]
+    fn stale_detection_survives_tick_wraparound() {
+        let keys = LocalKeys::new();
+        let t = table();
+        let before_wrap = u32::MAX - 100;
+        keys.down(&t, VK_LEFT.0, before_wrap, Modifiers::META);
+        assert_eq!(
+            keys.down(&t, VK_LEFT.0, 200, Modifiers::META),
+            SWALLOW_SILENTLY,
+            "301 ms across the wrap is still an auto-repeat"
+        );
+        assert_eq!(
+            keys.down(&t, VK_LEFT.0, 200 + STALE_KEY_MS + 1, Modifiers::META),
+            fired(WindowAction::LeftHalf, true)
+        );
+    }
+
+    #[test]
+    fn releasing_modifiers_mid_press_hands_the_key_back() {
+        let keys = LocalKeys::new();
+        let t = table();
+        keys.down(&t, VK_LEFT.0, 100, Modifiers::META);
+        assert_eq!(
+            keys.down(&t, VK_LEFT.0, 400, Modifiers::NONE),
+            KeyVerdict::Pass,
+            "plain Left repeats belong to the application"
+        );
+        assert!(!keys.up(VK_LEFT.0), "its key-up must reach the app too");
+    }
+
+    #[test]
+    fn modifiers_and_unbound_keys_always_pass() {
+        let keys = LocalKeys::new();
+        let t = table();
+        assert_eq!(
+            keys.down(&t, VK_LWIN.0, 1, Modifiers::META),
+            KeyVerdict::Pass
+        );
+        assert_eq!(
+            keys.down(&t, VK_RIGHT.0, 1, Modifiers::META),
+            KeyVerdict::Pass
+        );
+        assert!(!keys.up(VK_RIGHT.0));
+    }
+
+    #[test]
+    fn start_menu_is_only_suppressed_for_win_chords() {
+        let keys = LocalKeys::new();
+        let t = vec![HookBinding {
+            mods: Modifiers::CONTROL,
+            ..table()[0]
+        }];
+        assert_eq!(
+            keys.down(&t, VK_LEFT.0, 1, Modifiers::CONTROL),
+            fired(WindowAction::LeftHalf, false)
+        );
+    }
+
+    #[test]
+    fn lifecycle_reasons_round_trip_through_the_message_queue() {
+        for reason in [
+            RecoveryReason::Resume,
+            RecoveryReason::SessionUnlock,
+            RecoveryReason::SessionReconnect,
+            RecoveryReason::DisplayOn,
+        ] {
+            assert!(reason.is_lifecycle());
+            let code = reason.to_wparam().expect("lifecycle reasons are postable");
+            assert_eq!(RecoveryReason::from_wparam(code), Some(reason));
+        }
+        for reason in [
+            RecoveryReason::OwnerStall { ms: 1 },
+            RecoveryReason::LateHookCallback { ms: 1 },
+            RecoveryReason::HookSilent { ms: 1 },
+        ] {
+            assert!(!reason.is_lifecycle());
+            assert_eq!(reason.to_wparam(), None);
+        }
+        assert_eq!(RecoveryReason::from_wparam(0), None);
+        assert_eq!(RecoveryReason::from_wparam(99), None);
+    }
+
+    #[test]
+    fn only_unlock_and_reconnect_session_events_recover() {
+        assert_eq!(
+            session_recovery_reason(WTS_SESSION_UNLOCK),
+            Some(RecoveryReason::SessionUnlock)
+        );
+        assert_eq!(
+            session_recovery_reason(WTS_CONSOLE_CONNECT),
+            Some(RecoveryReason::SessionReconnect)
+        );
+        assert_eq!(
+            session_recovery_reason(WTS_REMOTE_CONNECT),
+            Some(RecoveryReason::SessionReconnect)
+        );
+        // Lock (7) and disconnects must not trigger anything.
+        for code in [2, 4, 5, 6, 7, 9] {
+            assert_eq!(session_recovery_reason(code), None, "code {code}");
+        }
+    }
+
+    #[test]
+    fn display_recovery_needs_an_off_to_on_transition() {
+        assert!(!display_turned_on(None, 1), "initial report is not a wake");
+        assert!(display_turned_on(Some(0), 1));
+        assert!(!display_turned_on(Some(2), 1), "undimming is not a wake");
+        assert!(!display_turned_on(Some(1), 1));
+        assert!(!display_turned_on(Some(1), 0));
+    }
+
+    fn sample(now: u32, last_input: u32, last_hook_event: u32) -> WatchdogSample {
+        WatchdogSample {
+            now,
+            last_input,
+            last_hook_event,
+        }
+    }
+
+    #[test]
+    fn watchdog_flags_a_stalled_owner_thread() {
+        let mut dog = HookWatchdog::new(0, 0);
+        assert_eq!(dog.on_tick(sample(WATCHDOG_INTERVAL_MS, 0, 0)), None);
+        let late = 2 * WATCHDOG_INTERVAL_MS + WATCHDOG_STALL_SLACK_MS + 1;
+        assert_eq!(
+            dog.on_tick(sample(late, 0, 0)),
+            Some(RecoveryReason::OwnerStall {
+                ms: WATCHDOG_INTERVAL_MS + WATCHDOG_STALL_SLACK_MS + 1
+            })
+        );
+    }
+
+    #[test]
+    fn watchdog_stays_quiet_while_idle_or_while_the_hook_is_alive() {
+        let mut dog = HookWatchdog::new(0, 0);
+        let mut now = 0;
+        for _ in 0..20 {
+            now += WATCHDOG_INTERVAL_MS;
+            // Idle user: no recent input at all.
+            assert_eq!(dog.on_tick(sample(now, 0, 0)), None);
+        }
+        // Active user with a live hook: the hook saw the latest keystroke.
+        now += WATCHDOG_INTERVAL_MS;
+        assert_eq!(dog.on_tick(sample(now, now - 10, now - 10)), None);
+        // Recent input but the hook heard something within the silence window.
+        now += WATCHDOG_INTERVAL_MS;
+        assert_eq!(
+            dog.on_tick(sample(now, now - 5, now - HOOK_SILENCE_MS + 1)),
+            None
+        );
+    }
+
+    #[test]
+    fn watchdog_rearms_a_silent_hook_with_exponential_backoff() {
+        let mut dog = HookWatchdog::new(0, 0);
+        let mut now = HOOK_SILENCE_MS;
+        let mut rearms = Vec::new();
+        // An hour of activity the (dead) hook never hears about.
+        while now < 60 * 60_000 {
+            dog.restart(now - WATCHDOG_INTERVAL_MS, 0);
+            if dog.on_tick(sample(now, now - 1, 0)).is_some() {
+                rearms.push(now);
+            }
+            now += WATCHDOG_INTERVAL_MS;
+        }
+        assert_eq!(
+            rearms.first(),
+            Some(&HOOK_SILENCE_MS),
+            "first re-arm is immediate"
+        );
+        let gaps: Vec<u32> = rearms.windows(2).map(|w| w[1] - w[0]).collect();
+        assert!(
+            gaps.windows(2).all(|w| w[1] >= w[0]),
+            "gaps never shrink: {gaps:?}"
+        );
+        assert!(gaps[0] >= SILENT_REARM_MIN_BACKOFF_MS);
+        assert!(gaps
+            .iter()
+            .all(|&gap| gap <= SILENT_REARM_MAX_BACKOFF_MS + WATCHDOG_INTERVAL_MS));
+        assert!(rearms.len() <= 7, "re-arms must stay rare: {rearms:?}");
+    }
+
+    #[test]
+    fn hook_activity_resets_the_silence_backoff() {
+        let mut dog = HookWatchdog::new(HOOK_SILENCE_MS - WATCHDOG_INTERVAL_MS, 0);
+        let mut now = HOOK_SILENCE_MS;
+        assert_eq!(
+            dog.on_tick(sample(now, now - 1, 0)),
+            Some(RecoveryReason::HookSilent { ms: now })
+        );
+        now += WATCHDOG_INTERVAL_MS;
+        assert_eq!(dog.on_tick(sample(now, now - 1, 0)), None, "backing off");
+
+        // The hook comes back to life, then goes quiet again.
+        let alive_at = now + 1;
+        now += WATCHDOG_INTERVAL_MS;
+        assert_eq!(dog.on_tick(sample(now, alive_at, alive_at)), None);
+        while tick_elapsed(now, alive_at) < HOOK_SILENCE_MS {
+            now += WATCHDOG_INTERVAL_MS;
+            dog.on_tick(sample(now, alive_at, alive_at));
+        }
+        assert!(
+            dog.on_tick(sample(now, now - 1, alive_at)).is_some(),
+            "a fresh silence re-arms without waiting out the old back-off"
+        );
+    }
+
+    #[test]
+    fn latency_rearms_are_rate_limited() {
+        let mut dog = HookWatchdog::new(0, 0);
+        assert!(dog.allow_latency_rearm(100));
+        assert!(!dog.allow_latency_rearm(100 + LATENCY_REARM_MIN_GAP_MS - 1));
+        assert!(dog.allow_latency_rearm(100 + LATENCY_REARM_MIN_GAP_MS));
+    }
+
+    #[test]
+    fn tick_arithmetic_wraps() {
+        assert_eq!(tick_elapsed(5, u32::MAX - 4), 10);
+        assert_eq!(tick_elapsed(1_000, 400), 600);
+    }
+
+    #[test]
+    fn hook_table_is_owned_by_the_installing_thread() {
+        // The callback runs on the owner thread; other threads see no table and
+        // must get a pass-through rather than a block.
+        std::thread::spawn(|| {
+            assert!(current_hook_bindings().is_empty());
+            assert!(set_hook_bindings(Vec::new()).is_err());
+            let (tx, _rx) = mpsc::channel();
+            HOOK_DISPATCH.with(|dispatch| {
+                *dispatch.borrow_mut() = Some(HookDispatch {
+                    sender: tx,
+                    bindings: Vec::new(),
+                });
+            });
+            set_hook_bindings(table()).unwrap();
+            assert_eq!(current_hook_bindings(), table());
+            // While the owner holds the table mutably, readers back off.
+            HOOK_DISPATCH.with(|dispatch| {
+                let _held = dispatch.borrow_mut();
+                assert!(current_hook_bindings().is_empty());
+            });
+        })
+        .join()
+        .unwrap();
     }
 }
