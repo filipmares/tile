@@ -77,7 +77,6 @@ body {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  animation: about-fade-in 240ms ease-out both;
 }
 
 .about__identity {
@@ -137,6 +136,26 @@ body {
   }
 }
 
+/* Entrances and control feedback are authored motion too, so they only play
+   when the system has not asked for less. */
+@media (prefers-reduced-motion: no-preference) {
+  .about,
+  .updates,
+  .welcome {
+    animation: about-fade-in 240ms ease-out both;
+  }
+
+  .all-shortcuts__summary::before,
+  .binding-group__summary::before,
+  .settings-group__summary::before {
+    transition: transform 120ms ease;
+  }
+
+  .binding__key {
+    transition: background-color 120ms ease, border-color 120ms ease;
+  }
+}
+
 /* The dedicated update screen: one card, one job. */
 .updates {
   width: min(100%, 380px);
@@ -148,9 +167,6 @@ body {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 8%, transparent),
-    0 8px 20px color-mix(in srgb, var(--text) 7%, transparent);
-  animation: about-fade-in 240ms ease-out both;
 }
 
 /* Opening the window focuses the card so it is announced as the whole screen.
@@ -165,7 +181,6 @@ body {
   width: 48px;
   height: 48px;
   border-radius: 12px;
-  filter: drop-shadow(0 5px 10px color-mix(in srgb, var(--accent) 22%, transparent));
 }
 
 .updates__title {
@@ -322,7 +337,6 @@ body {
   border-right: 1.5px solid var(--text-dim);
   border-bottom: 1.5px solid var(--text-dim);
   transform: translateY(2px) rotate(-45deg);
-  transition: transform 120ms ease;
   content: "";
 }
 
@@ -381,7 +395,6 @@ body {
   border-bottom: 1.5px solid var(--text-dim);
   transform-origin: center;
   transform: translateY(2px) rotate(-45deg);
-  transition: transform 120ms ease;
   content: "";
 }
 
@@ -445,7 +458,6 @@ body {
   border: 1px solid var(--border);
   border-radius: 6px;
   cursor: pointer;
-  transition: background-color 120ms ease, border-color 120ms ease;
 }
 
 .binding__key:hover {
@@ -589,7 +601,6 @@ select {
   border-right: 1.5px solid var(--text-dim);
   border-bottom: 1.5px solid var(--text-dim);
   transform: translateY(2px) rotate(-45deg);
-  transition: transform 120ms ease;
   content: "";
 }
 
@@ -700,7 +711,6 @@ select {
   display: flex;
   flex-direction: column;
   gap: 20px;
-  animation: about-fade-in 240ms ease-out both;
 }
 
 /* Mark and name on one line, at title size. This window is eight seconds of a
@@ -1368,15 +1378,6 @@ fieldset:disabled {
 
   .field__grid {
     grid-template-columns: 1fr 72px;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    transition-duration: 0.01ms !important;
-    animation-duration: 0.01ms !important;
   }
 }
 
