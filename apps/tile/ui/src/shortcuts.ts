@@ -101,15 +101,26 @@ function conflictingActions(cfg: Config): Map<WindowAction, WindowAction[]> {
   return clashing;
 }
 
-/** The shortcut button for `action` in `scope`, or in the full list if that row is gone. */
+/**
+ * The shortcut button for `action` in `scope`, or in the full list if that
+ * row is gone. A row in the full list may sit in a closed family, where it
+ * cannot take focus, so its disclosures are opened on the way.
+ */
 function bindingButton(
   action: WindowAction,
   scope: Scope,
 ): HTMLButtonElement | null {
-  return (
+  const button =
     document.querySelector<HTMLButtonElement>(`#key-${scope}-${action}`) ??
-    document.querySelector<HTMLButtonElement>(`#key-all-${action}`)
-  );
+    document.querySelector<HTMLButtonElement>(`#key-all-${action}`);
+  for (
+    let details = button?.closest("details") ?? null;
+    details !== null;
+    details = details.parentElement?.closest("details") ?? null
+  ) {
+    details.open = true;
+  }
+  return button;
 }
 
 /**
