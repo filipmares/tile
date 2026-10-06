@@ -58,6 +58,13 @@ export const resetToDefaults = (): Promise<Config> =>
   invoke("reset_to_defaults");
 
 /**
+ * Puts back the settings the last reset replaced, or resolves to `null` once
+ * any other change has been made since, from any window.
+ */
+export const undoResetToDefaults = (): Promise<Config | null> =>
+  invoke("undo_reset_to_defaults");
+
+/**
  * Claims the one-time first-run orientation, and records that it happened.
  * True at most once, ever. The welcome screen claims it as it renders, so a
  * window that never opened leaves the first run owed for next launch.

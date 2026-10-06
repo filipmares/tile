@@ -254,24 +254,56 @@ pub fn reset_to_defaults<R: Runtime>(
     state: State<'_, Shared>,
 ) -> Result<Config, SettingsError> {
     let previous_login = state.config().launch_on_login;
-    let login = sync_autostart(&app, &state, Config::default().launch_on_login);
-    let kept_login = login.is_err().then_some(previous_login);
-    state
-        .update_config(|config| {
-            *config = Config::default();
-            if let Some(launch_on_login) = kept_login {
-                config.launch_on_login = launch_on_login;
-            }
-        })
-        .map_err(|err| {
-            if login.is_ok() {
-                revert_autostart(&app, &state, previous_login, err)
-            } else {
-                err
-            }
-        })?;
+    let default_login = Config::default().launch_on_login;
+    let login = sync_autostart(&app, &state, default_login);
+    let launch_on_login = if login.is_ok() {
+        default_login
+    } else {
+        previous_login
+    };
+    state.reset_to_defaults(launch_on_login).map_err(|err| {
+        if login.is_ok() {
+            revert_autostart(&app, &state, previous_login, err)
+        } else {
+            err
+        }
+    })?;
     crate::tray::sync_bindings(&app);
     login.map(|()| state.config())
+}
+
+/// Puts back the settings the last [`reset_to_defaults`] replaced, or returns
+/// `None` once any other change has been made since, from any window, so an
+/// undo can never overwrite a newer choice. The login item is handled as in
+/// reset: if it cannot be changed, it keeps its current value and the error
+/// says so.
+#[tauri::command]
+pub fn undo_reset_to_defaults<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, Shared>,
+) -> Result<Option<Config>, SettingsError> {
+    let Some(target_login) = state.reset_undo_launch_on_login() else {
+        return Ok(None);
+    };
+    let previous_login = state.config().launch_on_login;
+    let login = sync_autostart(&app, &state, target_login);
+    let kept_login = login.is_err().then_some(previous_login);
+    let restored = state.undo_reset_to_defaults(kept_login).map_err(|err| {
+        if login.is_ok() {
+            revert_autostart(&app, &state, previous_login, err)
+        } else {
+            err
+        }
+    })?;
+    if restored.is_none() {
+        // Another change got there first; the login item follows it instead.
+        if login.is_ok() {
+            sync_autostart(&app, &state, state.config().launch_on_login)?;
+        }
+        return Ok(None);
+    }
+    crate::tray::sync_bindings(&app);
+    login.map(|()| Some(state.config()))
 }
 
 #[tauri::command]

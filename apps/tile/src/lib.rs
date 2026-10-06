@@ -73,6 +73,7 @@ pub fn run() {
             commands::set_animation_duration,
             commands::set_launch_on_login,
             commands::reset_to_defaults,
+            commands::undo_reset_to_defaults,
             commands::take_orientation,
             commands::open_settings,
             commands::open_welcome,
