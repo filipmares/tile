@@ -165,26 +165,54 @@ fn classify_io(err: &std::io::Error, phase: UpdatePhase) -> UpdateErrorKind {
     }
 }
 
+/// What kind of HTTP failure `reqwest` reported, so the decision can be
+/// tested without a network (a `reqwest::Error` cannot be built by hand).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HttpFailure {
+    /// The server answered with an error status.
+    Status,
+    /// The response body broke off or could not be decoded.
+    Body,
+    /// The request could not be built at all.
+    Builder,
+    /// No connection: DNS, refused, proxy or TLS.
+    Connect,
+    /// Anything else, such as a timeout.
+    Other,
+}
+
+fn classify_http(failure: HttpFailure, phase: UpdatePhase) -> UpdateErrorKind {
+    match (failure, phase) {
+        (HttpFailure::Status, _) | (HttpFailure::Body, UpdatePhase::Check) => {
+            UpdateErrorKind::Server
+        }
+        (HttpFailure::Builder, _) => UpdateErrorKind::Unknown,
+        (HttpFailure::Connect, _) | (HttpFailure::Other, UpdatePhase::Check) => {
+            UpdateErrorKind::Offline
+        }
+        // A timeout or reset once bytes were flowing.
+        (HttpFailure::Body | HttpFailure::Other, UpdatePhase::Install) => {
+            UpdateErrorKind::Interrupted
+        }
+    }
+}
+
 fn classify(err: &tauri_plugin_updater::Error, phase: UpdatePhase) -> UpdateErrorKind {
     use tauri_plugin_updater::Error as E;
     match err {
         E::Reqwest(err) => {
-            if err.is_status() {
-                UpdateErrorKind::Server
+            let failure = if err.is_status() {
+                HttpFailure::Status
             } else if err.is_body() || err.is_decode() {
-                match phase {
-                    UpdatePhase::Check => UpdateErrorKind::Server,
-                    UpdatePhase::Install => UpdateErrorKind::Interrupted,
-                }
+                HttpFailure::Body
             } else if err.is_builder() {
-                UpdateErrorKind::Unknown
-            } else if phase == UpdatePhase::Install && !err.is_connect() {
-                // A timeout or reset once bytes were flowing.
-                UpdateErrorKind::Interrupted
+                HttpFailure::Builder
+            } else if err.is_connect() {
+                HttpFailure::Connect
             } else {
-                // Connect, DNS, proxy and timeout failures before anything arrived.
-                UpdateErrorKind::Offline
-            }
+                HttpFailure::Other
+            };
+            classify_http(failure, phase)
         }
         E::Io(err) => classify_io(err, phase),
         // A non-success download status is reported as `Network`.
@@ -658,6 +686,27 @@ mod tests {
             classify(&timeout(), UpdatePhase::Install),
             UpdateErrorKind::Interrupted
         );
+    }
+
+    #[test]
+    fn http_failures_depend_on_the_phase() {
+        use HttpFailure::*;
+        use UpdateErrorKind as K;
+        use UpdatePhase::{Check, Install};
+        for (failure, check, install) in [
+            (Status, K::Server, K::Server),
+            (Body, K::Server, K::Interrupted),
+            (Connect, K::Offline, K::Offline),
+            (Other, K::Offline, K::Interrupted),
+            (Builder, K::Unknown, K::Unknown),
+        ] {
+            assert_eq!(classify_http(failure, Check), check, "{failure:?} check");
+            assert_eq!(
+                classify_http(failure, Install),
+                install,
+                "{failure:?} install"
+            );
+        }
     }
 
     #[test]
