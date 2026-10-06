@@ -11,8 +11,8 @@ import {
   takeOrientation,
 } from "./api";
 import { dom } from "./dom";
-import { settingsErrorMessage } from "./errors";
 import { formatHotkey, isMac } from "./hotkey";
+import { config as sharedConfig, setConfig } from "./state";
 import {
   ActionPerformed,
   Config,
@@ -20,6 +20,12 @@ import {
   WelcomeStatus,
   WindowAction,
 } from "./types";
+import {
+  configureWrites,
+  followChangesElsewhere,
+  hasPendingWrites,
+  saveSetting,
+} from "./writes";
 
 /** User-facing copy for the welcome deck. */
 const STRINGS = {
@@ -701,6 +707,9 @@ async function claimKeyboard(target: HTMLElement): Promise<void> {
 
 /** Closes the welcome window. The walkthrough is over, however it ended. */
 function closeWelcome(): void {
+  // Closing mid-write would leave the user not knowing whether the
+  // launch-at-login change stuck; Escape reaches here too, not only the button.
+  if (hasPendingWrites()) return;
   void closeWelcomeWindow().catch((err) =>
     console.error("could not close the welcome window", err),
   );
@@ -895,28 +904,34 @@ export async function bootWelcome(): Promise<void> {
     console.error("could not listen for performed actions", err),
   );
 
+  // Subscribe before the first read, so a change made in Settings in between
+  // is not lost. The toggle goes through the same queue as the settings
+  // window, so a change made there while this window is open shows up here.
+  configureWrites({
+    render: () => {
+      if (sharedConfig) dom.welcomeLaunch.checked = sharedConfig.launchOnLogin;
+    },
+  });
+  await followChangesElsewhere();
   let cfg: Config | null = null;
   try {
     cfg = await getConfig();
+    setConfig(cfg);
   } catch (err) {
     console.error("could not load settings for the welcome screen", err);
   }
   dom.welcomeLaunch.checked = cfg?.launchOnLogin ?? true;
   dom.welcomeLaunch.addEventListener("change", async () => {
     const desired = dom.welcomeLaunch.checked;
-    dom.welcomeLaunch.disabled = true;
+    // Closing mid-write would leave the user not knowing whether it stuck.
     dom.welcomeDismiss.disabled = true;
     try {
-      cfg = await setLaunchOnLogin(desired);
-      dom.welcomeLaunch.checked = cfg.launchOnLogin;
-      setWalkNote(null);
-    } catch (err) {
-      console.error("could not update launch at login", err);
-      dom.welcomeLaunch.checked = cfg?.launchOnLogin ?? true;
-      setWalkNote(settingsErrorMessage(err));
+      const saved = await saveSetting(dom.welcomeLaunchError, () =>
+        setLaunchOnLogin(desired),
+      );
+      if (saved) dom.welcomeLaunch.checked = saved.launchOnLogin;
     } finally {
-      dom.welcomeLaunch.disabled = false;
-      dom.welcomeDismiss.disabled = false;
+      dom.welcomeDismiss.disabled = hasPendingWrites();
     }
   });
   dom.welcomeLaunch.disabled = false;

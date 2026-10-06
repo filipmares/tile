@@ -35,7 +35,7 @@
 //! [`AppState::perform_action_preemptible`].
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -97,6 +97,36 @@ pub struct AppState {
     /// The config a restore-defaults replaced, until any other settings
     /// change makes undoing it unsafe.
     reset_undo: Mutex<Option<Config>>,
+    /// Serializes settings writes across every window; see
+    /// [`SettingsTransaction`].
+    settings: Mutex<()>,
+    /// Bumped by every committed settings write, so a caller can tell whether
+    /// a transaction changed anything and other windows need telling.
+    revision: AtomicU64,
+}
+
+/// Changes the OS login item, as the settings commands do. Injected so the
+/// transaction can be exercised without a running app.
+pub type LoginItem<'a> = dyn FnMut(bool) -> Result<(), SettingsError> + 'a;
+
+/// Exclusive access to the settings for one whole read, login item, save and
+/// apply sequence.
+///
+/// The settings and welcome windows can both be open and both write, so a
+/// change like launch at login — which reads the old value, moves the OS
+/// login item, saves, and may have to move the login item back — must not
+/// interleave with another window's write. Every settings write holds one of
+/// these from its first read to its last side effect.
+///
+/// Nothing done under it may wait on the main thread: Tauri runs synchronous
+/// commands there, so a holder that blocked on it would deadlock against the
+/// next command. Tray menu updates happen after it is dropped; emitting an
+/// event only queues work and is safe under it. The lock is not reentrant:
+/// while holding one, use its methods, never the [`AppState`] conveniences
+/// that take their own.
+pub struct SettingsTransaction<'a> {
+    state: &'a AppState,
+    _guard: MutexGuard<'a, ()>,
 }
 
 impl AppState {
@@ -122,6 +152,16 @@ impl AppState {
             config_recovery: Mutex::new(None),
             saves_blocked: false,
             reset_undo: Mutex::new(None),
+            settings: Mutex::new(()),
+            revision: AtomicU64::new(0),
+        }
+    }
+
+    /// Starts a settings write, waiting for any other window's to finish.
+    pub fn settings_transaction(&self) -> SettingsTransaction<'_> {
+        SettingsTransaction {
+            state: self,
+            _guard: lock(&self.settings),
         }
     }
 
@@ -154,24 +194,10 @@ impl AppState {
         self.orientation_pending.load(Ordering::Relaxed)
     }
 
-    /// Claims the pending orientation, returning whether the caller won it.
-    /// Only the first caller gets `true`.
-    ///
-    /// Winning the claim persists `orientation_shown` immediately rather than
-    /// waiting for the user to dismiss the panel. Nothing else writes the
-    /// config at startup, so deferring would mean a user who quits without
-    /// touching a setting is shown the orientation again on the next launch.
-    ///
-    /// This deliberately saves without going through `update_config`: recording
-    /// that a welcome panel appeared is not a settings change and must not
-    /// re-register the OS hotkeys or disturb the recorded hotkey failures.
+    /// Claims the pending orientation in a transaction of its own; see
+    /// [`SettingsTransaction::take_orientation`].
     pub fn take_orientation(&self) -> bool {
-        let won = self.orientation_pending.swap(false, Ordering::Relaxed);
-        if won {
-            lock(&self.engine).config.orientation_shown = true;
-            self.save_config();
-        }
-        won
+        self.settings_transaction().take_orientation()
     }
 
     /// Whether this binary is a local development build or an installed one.
@@ -408,16 +434,6 @@ impl AppState {
         }
     }
 
-    /// Persists the current config atomically, logging (never panicking) on
-    /// failure. For bookkeeping writes only; settings changes go through
-    /// [`AppState::update_config`], which reports a failed save.
-    pub fn save_config(&self) {
-        let config = self.config();
-        if let Err(err) = self.persist(&config) {
-            log::error!("failed to save config: {err}");
-        }
-    }
-
     /// Writes `config` to the config directory. Without one, settings live in
     /// memory only — already logged at startup — and that is not an error.
     fn persist(&self, config: &Config) -> std::io::Result<()> {
@@ -433,113 +449,52 @@ impl AppState {
         config_store::save_to_dir(dir, config)
     }
 
-    /// Mutates the config, persists it, then re-applies hotkeys. Returns the
-    /// updated config so callers (commands) can hand truth back to the UI.
-    ///
-    /// A change that cannot be saved is rolled back before anything else sees
-    /// it, so the running app never disagrees with what is on disk and the UI
-    /// can simply re-read the config to show the truth.
-    ///
-    /// Any change ends the chance to undo a restore-defaults: undoing after it
-    /// would silently throw that change away.
+    /// Changes the config in a transaction of its own; see
+    /// [`SettingsTransaction::update_config`].
+    #[cfg(test)]
     pub fn update_config(&self, mutate: impl FnOnce(&mut Config)) -> Result<Config, SettingsError> {
-        self.commit_config(|config, undo| {
-            *undo = None;
-            mutate(config);
-            Ok(())
-        })
+        self.settings_transaction().update_config(mutate)
     }
 
-    /// Binds `hotkey` to `action` as one config change. Other actions holding
-    /// the hotkey are unbound in the same write only if every one of them is
-    /// in `replace`, the holders the user agreed to replace. Otherwise nothing
-    /// changes and the error names the holders, so a chord is never taken from
-    /// an action the user was not asked about, even one that picked it up
-    /// while they were being asked.
+    #[cfg(test)]
     pub fn set_binding(
         &self,
         action: WindowAction,
         hotkey: Option<Hotkey>,
         replace: &[WindowAction],
     ) -> Result<Config, SettingsError> {
-        self.commit_config(|config, undo| {
-            if let Some(hk) = hotkey {
-                let holders = config.actions_using(hk, action);
-                if holders.iter().any(|holder| !replace.contains(holder)) {
-                    let names: Vec<_> = holders.iter().map(ToString::to_string).collect();
-                    return Err(SettingsError::shortcut_taken(format!(
-                        "{hk} is already used by {}",
-                        names.join(", ")
-                    )));
-                }
-            }
-            *undo = None;
-            config.set_binding(action, hotkey);
-            Ok(())
-        })
+        self.settings_transaction()
+            .set_binding(action, hotkey, replace)
     }
 
-    /// Puts every setting back to its default, keeping what it replaced so
-    /// [`Self::undo_reset_to_defaults`] can bring it back. Resetting again
-    /// before anything else changed keeps the first snapshot: the settings
-    /// worth getting back are the ones from before the first reset, not the
-    /// defaults.
-    ///
-    /// `launch_on_login` is passed in because the login item is the caller's
-    /// to change: it stays as it was when the OS refused. Whether the
-    /// orientation was shown is a fact about this installation rather than a
-    /// setting, so a reset never rewinds it.
+    #[cfg(test)]
     pub fn reset_to_defaults(&self, launch_on_login: bool) -> Result<Config, SettingsError> {
-        self.commit_config(|config, undo| {
-            let previous = std::mem::take(config);
-            config.launch_on_login = launch_on_login;
-            config.orientation_shown = previous.orientation_shown;
-            undo.get_or_insert(previous);
-            Ok(())
-        })
+        self.settings_transaction()
+            .reset_to_defaults(launch_on_login)
     }
 
-    /// What launch at login would become if the last reset were undone, or
-    /// `None` when there is nothing to undo. Lets the caller move the login
-    /// item before the undo is committed, as every other change does.
+    #[cfg(test)]
     pub fn reset_undo_launch_on_login(&self) -> Option<bool> {
-        lock(&self.reset_undo)
-            .as_ref()
-            .map(|config| config.launch_on_login)
+        self.settings_transaction().reset_undo_launch_on_login()
     }
 
-    /// Restores the config a restore-defaults replaced, if no other change
-    /// has been made since — from this window or any other. Returns `None`
-    /// when there is nothing left to undo. `keep_login` overrides the restored
-    /// launch-at-login value when the OS refused to change the login item.
+    #[cfg(test)]
     pub fn undo_reset_to_defaults(
         &self,
         keep_login: Option<bool>,
     ) -> Result<Option<Config>, SettingsError> {
-        if lock(&self.reset_undo).is_none() {
-            return Ok(None);
-        }
-        let mut restored = false;
-        let config = self.commit_config(|config, undo| {
-            if let Some(mut previous) = undo.take() {
-                previous.orientation_shown |= config.orientation_shown;
-                if let Some(launch_on_login) = keep_login {
-                    previous.launch_on_login = launch_on_login;
-                }
-                *config = previous;
-                restored = true;
-            }
-            Ok(())
-        })?;
-        Ok(restored.then_some(config))
+        self.settings_transaction()
+            .undo_reset_to_defaults(keep_login)
     }
 
     /// The one path every settings write takes: mutate the config and the
     /// reset snapshot together under the engine lock, then normalize, persist,
-    /// and re-apply hotkeys. A failed save rolls both back, as does a `mutate`
-    /// that refuses the change.
+    /// and (unless `reapply_hotkeys` is false) re-apply hotkeys. A failed save
+    /// rolls both back, as does a `mutate` that refuses the change. Only a
+    /// [`SettingsTransaction`] calls this.
     fn commit_config(
         &self,
+        reapply_hotkeys: bool,
         mutate: impl FnOnce(&mut Config, &mut Option<Config>) -> Result<(), SettingsError>,
     ) -> Result<Config, SettingsError> {
         {
@@ -558,8 +513,11 @@ impl AppState {
                 *undo = previous_undo;
                 return Err(SettingsError::not_saved(err));
             }
+            self.revision.fetch_add(1, Ordering::Relaxed);
         }
-        self.apply_hotkeys();
+        if reapply_hotkeys {
+            self.apply_hotkeys();
+        }
         Ok(self.config())
     }
 
@@ -578,6 +536,239 @@ impl AppState {
     /// Releases OS hotkeys. Called on shutdown.
     pub fn shutdown_hotkeys(&self) {
         lock(&self.hotkeys).shutdown();
+    }
+}
+
+impl SettingsTransaction<'_> {
+    /// The config as this transaction sees it.
+    pub fn config(&self) -> Config {
+        self.state.config()
+    }
+
+    /// How many settings writes have been committed so far. Compare before
+    /// and after to learn whether this transaction changed anything.
+    pub fn revision(&self) -> u64 {
+        self.state.revision.load(Ordering::Relaxed)
+    }
+
+    /// Mutates the config, persists it, then re-applies hotkeys. Returns the
+    /// updated config so callers (commands) can hand truth back to the UI.
+    ///
+    /// A change that cannot be saved is rolled back before anything else sees
+    /// it, so the running app never disagrees with what is on disk and the UI
+    /// can simply re-read the config to show the truth.
+    ///
+    /// Any change ends the chance to undo a restore-defaults: undoing after it
+    /// would silently throw that change away.
+    pub fn update_config(&self, mutate: impl FnOnce(&mut Config)) -> Result<Config, SettingsError> {
+        self.state.commit_config(true, |config, undo| {
+            *undo = None;
+            mutate(config);
+            Ok(())
+        })
+    }
+
+    /// Binds `hotkey` to `action` as one config change. Other actions holding
+    /// the hotkey are unbound in the same write only if every one of them is
+    /// in `replace`, the holders the user agreed to replace. Otherwise nothing
+    /// changes and the error names the holders, so a chord is never taken from
+    /// an action the user was not asked about, even one that picked it up
+    /// while they were being asked.
+    pub fn set_binding(
+        &self,
+        action: WindowAction,
+        hotkey: Option<Hotkey>,
+        replace: &[WindowAction],
+    ) -> Result<Config, SettingsError> {
+        self.state.commit_config(true, |config, undo| {
+            if let Some(hk) = hotkey {
+                let holders = config.actions_using(hk, action);
+                if holders.iter().any(|holder| !replace.contains(holder)) {
+                    let names: Vec<_> = holders.iter().map(ToString::to_string).collect();
+                    return Err(SettingsError::shortcut_taken(format!(
+                        "{hk} is already used by {}",
+                        names.join(", ")
+                    )));
+                }
+            }
+            *undo = None;
+            config.set_binding(action, hotkey);
+            Ok(())
+        })
+    }
+
+    /// Claims the pending orientation, returning whether the caller won it.
+    /// Only the first caller gets `true`.
+    ///
+    /// Winning the claim persists `orientation_shown` immediately rather than
+    /// waiting for the user to dismiss the panel. Nothing else writes the
+    /// config at startup, so deferring would mean a user who quits without
+    /// touching a setting is shown the orientation again on the next launch.
+    ///
+    /// It commits like any other write, so it cannot interleave with one, but
+    /// recording that a welcome panel appeared is not a settings change: it
+    /// keeps the restore-defaults undo and does not re-register the OS
+    /// hotkeys or disturb the recorded hotkey failures. A failed save is
+    /// logged and rolled back like any other; the claim itself still stands,
+    /// so the orientation is not shown twice in one session.
+    pub fn take_orientation(&self) -> bool {
+        let won = self
+            .state
+            .orientation_pending
+            .swap(false, Ordering::Relaxed);
+        if won {
+            if let Err(err) = self.state.commit_config(false, |config, _| {
+                config.orientation_shown = true;
+                Ok(())
+            }) {
+                log::error!("could not record the first-run orientation: {err}");
+            }
+        }
+        won
+    }
+
+    /// Changes the OS login item first and only then records the preference,
+    /// so the checkbox never claims a login item the OS refused to create. A
+    /// failed save puts the login item back.
+    pub fn set_launch_on_login(
+        &self,
+        enabled: bool,
+        login_item: &mut LoginItem<'_>,
+    ) -> Result<Config, SettingsError> {
+        let previous = self.config().launch_on_login;
+        login_item(enabled)?;
+        self.update_config(|config| config.launch_on_login = enabled)
+            .map_err(|err| revert_login_item(login_item, previous, err))
+    }
+
+    /// Restores every default, login item included. If the login item cannot
+    /// be changed, everything else is still restored and launch-at-login keeps
+    /// its current value, so the preference keeps matching the OS; the error
+    /// says so.
+    pub fn restore_defaults(
+        &self,
+        login_item: &mut LoginItem<'_>,
+    ) -> Result<Config, SettingsError> {
+        let previous_login = self.config().launch_on_login;
+        let default_login = Config::default().launch_on_login;
+        let login = login_item(default_login);
+        let launch_on_login = if login.is_ok() {
+            default_login
+        } else {
+            previous_login
+        };
+        let config = self.reset_to_defaults(launch_on_login).map_err(|err| {
+            if login.is_ok() {
+                revert_login_item(login_item, previous_login, err)
+            } else {
+                err
+            }
+        })?;
+        login.map(|()| config)
+    }
+
+    /// Puts back the settings the last restore replaced, login item included,
+    /// or returns `None` once any other change has been made since, from any
+    /// window. The login item is handled as in [`Self::restore_defaults`].
+    pub fn undo_restore_defaults(
+        &self,
+        login_item: &mut LoginItem<'_>,
+    ) -> Result<Option<Config>, SettingsError> {
+        let Some(target_login) = self.reset_undo_launch_on_login() else {
+            return Ok(None);
+        };
+        let previous_login = self.config().launch_on_login;
+        let login = login_item(target_login);
+        let kept_login = login.is_err().then_some(previous_login);
+        let restored = self.undo_reset_to_defaults(kept_login).map_err(|err| {
+            if login.is_ok() {
+                revert_login_item(login_item, previous_login, err)
+            } else {
+                err
+            }
+        })?;
+        let Some(restored) = restored else {
+            // Unreachable while the transaction is held, since nothing else
+            // can take the snapshot; if it ever happens, the login item
+            // follows the config that stands.
+            if login.is_ok() {
+                login_item(self.config().launch_on_login)?;
+            }
+            return Ok(None);
+        };
+        login.map(|()| Some(restored))
+    }
+
+    /// Puts every setting back to its default, keeping what it replaced so
+    /// [`Self::undo_reset_to_defaults`] can bring it back. Resetting again
+    /// before anything else changed keeps the first snapshot: the settings
+    /// worth getting back are the ones from before the first reset, not the
+    /// defaults.
+    ///
+    /// `launch_on_login` is passed in because the login item is the caller's
+    /// to change: it stays as it was when the OS refused. Whether the
+    /// orientation was shown is a fact about this installation rather than a
+    /// setting, so a reset never rewinds it.
+    fn reset_to_defaults(&self, launch_on_login: bool) -> Result<Config, SettingsError> {
+        self.state.commit_config(true, |config, undo| {
+            let previous = std::mem::take(config);
+            config.launch_on_login = launch_on_login;
+            config.orientation_shown = previous.orientation_shown;
+            undo.get_or_insert(previous);
+            Ok(())
+        })
+    }
+
+    /// What launch at login would become if the last reset were undone, or
+    /// `None` when there is nothing to undo. Lets the caller move the login
+    /// item before the undo is committed, as every other change does.
+    fn reset_undo_launch_on_login(&self) -> Option<bool> {
+        lock(&self.state.reset_undo)
+            .as_ref()
+            .map(|config| config.launch_on_login)
+    }
+
+    /// Restores the config a restore-defaults replaced, if no other change
+    /// has been made since — from this window or any other. Returns `None`
+    /// when there is nothing left to undo. `keep_login` overrides the restored
+    /// launch-at-login value when the OS refused to change the login item.
+    fn undo_reset_to_defaults(
+        &self,
+        keep_login: Option<bool>,
+    ) -> Result<Option<Config>, SettingsError> {
+        if lock(&self.state.reset_undo).is_none() {
+            return Ok(None);
+        }
+        let mut restored = false;
+        let config = self.state.commit_config(true, |config, undo| {
+            if let Some(mut previous) = undo.take() {
+                previous.orientation_shown |= config.orientation_shown;
+                if let Some(launch_on_login) = keep_login {
+                    previous.launch_on_login = launch_on_login;
+                }
+                *config = previous;
+                restored = true;
+            }
+            Ok(())
+        })?;
+        Ok(restored.then_some(config))
+    }
+}
+
+/// Puts the login item back after the preference that asked for the change
+/// could not be saved, and returns the error to report. The save failure
+/// stands only if the revert worked; otherwise the OS and the preference now
+/// disagree, and the user has to hear that instead.
+fn revert_login_item(
+    login_item: &mut LoginItem<'_>,
+    enabled: bool,
+    save_error: SettingsError,
+) -> SettingsError {
+    match login_item(enabled) {
+        Ok(()) => save_error,
+        Err(revert_error) => SettingsError::out_of_sync(format!(
+            "{save_error}; putting the login item back also failed: {revert_error}"
+        )),
     }
 }
 
@@ -2575,6 +2766,246 @@ mod tests {
             .is_err());
         assert_eq!(state.reset_undo_launch_on_login(), Some(false));
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A fake OS login item: records every value it is asked to set, and
+    /// refuses the calls whose (zero-based) index is in `refuse`.
+    fn fake_login_item<'a>(
+        calls: &'a RefCell<Vec<bool>>,
+        refuse: &'a [usize],
+    ) -> impl FnMut(bool) -> Result<(), SettingsError> + 'a {
+        move |enabled| {
+            let index = calls.borrow().len();
+            calls.borrow_mut().push(enabled);
+            if refuse.contains(&index) {
+                Err(SettingsError::login_item("refused"))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    /// The login item moves before the preference is saved, and both land.
+    #[test]
+    fn launch_on_login_moves_the_login_item_then_saves() {
+        let dir = reset_test_dir(line!());
+        let state = state_with_orientation(&dir, false);
+        let target = !state.config().launch_on_login;
+        let calls = RefCell::new(Vec::new());
+
+        let txn = state.settings_transaction();
+        let before = txn.revision();
+        let config = txn
+            .set_launch_on_login(target, &mut fake_login_item(&calls, &[]))
+            .unwrap();
+
+        assert_eq!(*calls.borrow(), vec![target]);
+        assert_eq!(config.launch_on_login, target);
+        assert_eq!(txn.revision(), before + 1);
+        drop(txn);
+        assert_eq!(
+            crate::config_store::load_from_dir(&dir)
+                .config
+                .launch_on_login,
+            target
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A login item the OS refused is never recorded as the preference.
+    #[test]
+    fn a_refused_login_item_saves_nothing() {
+        let dir = reset_test_dir(line!());
+        let state = state_with_orientation(&dir, false);
+        let before_config = state.config();
+        let calls = RefCell::new(Vec::new());
+
+        let txn = state.settings_transaction();
+        let before = txn.revision();
+        let err = txn
+            .set_launch_on_login(
+                !before_config.launch_on_login,
+                &mut fake_login_item(&calls, &[0]),
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            err.kind,
+            crate::settings_error::SettingsErrorKind::LoginItem
+        );
+        assert_eq!(txn.revision(), before, "nothing was committed");
+        assert_eq!(txn.config(), before_config);
+        drop(txn);
+        assert!(!crate::config_store::config_file_path(&dir).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A save that fails after the login item moved puts the login item back,
+    /// and reports the save failure.
+    #[test]
+    fn a_failed_save_puts_the_login_item_back() {
+        let dir = reset_test_dir(line!());
+        let blocked = dir.join("not-a-directory");
+        std::fs::write(&blocked, b"").unwrap();
+        let state = state_with_orientation(&blocked, false);
+        let previous = state.config().launch_on_login;
+        let calls = RefCell::new(Vec::new());
+
+        let txn = state.settings_transaction();
+        let err = txn
+            .set_launch_on_login(!previous, &mut fake_login_item(&calls, &[]))
+            .unwrap_err();
+
+        assert_eq!(err.kind, crate::settings_error::SettingsErrorKind::NotSaved);
+        assert_eq!(*calls.borrow(), vec![!previous, previous]);
+        assert_eq!(txn.config().launch_on_login, previous);
+        drop(txn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// When the login item cannot be put back either, the user must hear that
+    /// the OS and the preference now disagree.
+    #[test]
+    fn a_failed_revert_reports_the_login_item_out_of_sync() {
+        let dir = reset_test_dir(line!());
+        let blocked = dir.join("not-a-directory");
+        std::fs::write(&blocked, b"").unwrap();
+        let state = state_with_orientation(&blocked, false);
+        let previous = state.config().launch_on_login;
+        let calls = RefCell::new(Vec::new());
+
+        let err = state
+            .settings_transaction()
+            .set_launch_on_login(!previous, &mut fake_login_item(&calls, &[1]))
+            .unwrap_err();
+
+        assert_eq!(
+            err.kind,
+            crate::settings_error::SettingsErrorKind::OutOfSync
+        );
+        assert_eq!(*calls.borrow(), vec![!previous, previous]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A restore whose login item the OS refused still restores everything
+    /// else, keeps launch at login as it was, and counts as committed so the
+    /// other windows are told.
+    #[test]
+    fn a_restore_with_a_refused_login_item_restores_the_rest() {
+        let dir = reset_test_dir(line!());
+        let state = state_with_orientation(&dir, false);
+        state
+            .update_config(|config| {
+                *config = customised();
+                config.launch_on_login = !default_login();
+            })
+            .unwrap();
+        let calls = RefCell::new(Vec::new());
+
+        let txn = state.settings_transaction();
+        let before = txn.revision();
+        let err = txn
+            .restore_defaults(&mut fake_login_item(&calls, &[0]))
+            .unwrap_err();
+
+        assert_eq!(
+            err.kind,
+            crate::settings_error::SettingsErrorKind::LoginItem
+        );
+        assert_eq!(txn.revision(), before + 1, "the rest was committed");
+        let config = txn.config();
+        assert_eq!(config.gaps.window, Config::default().gaps.window);
+        assert_eq!(config.launch_on_login, !default_login());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Undo moves the login item back to the value it is restoring, inside the
+    /// same transaction as the restore it undoes.
+    #[test]
+    fn undoing_a_restore_moves_the_login_item_back() {
+        let dir = reset_test_dir(line!());
+        let state = state_with_orientation(&dir, false);
+        state
+            .update_config(|config| {
+                *config = customised();
+                config.launch_on_login = !default_login();
+            })
+            .unwrap();
+        let calls = RefCell::new(Vec::new());
+
+        let txn = state.settings_transaction();
+        txn.restore_defaults(&mut fake_login_item(&calls, &[]))
+            .unwrap();
+        let restored = txn
+            .undo_restore_defaults(&mut fake_login_item(&calls, &[]))
+            .unwrap()
+            .expect("nothing changed since the restore");
+
+        assert_eq!(*calls.borrow(), vec![default_login(), !default_login()]);
+        assert_eq!(restored.launch_on_login, !default_login());
+        assert_eq!(restored.gaps.window, 12.0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A second window's write waits for the first window's whole
+    /// transaction, so it can neither slip in between a read and the save
+    /// built on it nor be overwritten by it.
+    #[test]
+    fn a_write_from_another_window_waits_for_the_transaction() {
+        let dir = reset_test_dir(line!());
+        let state = Arc::new(state_with_orientation(&dir, false));
+        let finished = Arc::new(AtomicBool::new(false));
+
+        let txn = state.settings_transaction();
+        let other = {
+            let state = Arc::clone(&state);
+            let finished = Arc::clone(&finished);
+            std::thread::spawn(move || {
+                state
+                    .update_config(|config| config.gaps.window = 7.0)
+                    .unwrap();
+                finished.store(true, Ordering::SeqCst);
+            })
+        };
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(
+            !finished.load(Ordering::SeqCst),
+            "the other write must wait for the open transaction"
+        );
+        txn.update_config(|config| config.gaps.window = 3.0)
+            .unwrap();
+        assert_eq!(txn.config().gaps.window, 3.0);
+        drop(txn);
+
+        other.join().unwrap();
+        assert!(finished.load(Ordering::SeqCst));
+        assert_eq!(state.config().gaps.window, 7.0, "the later write wins");
+        assert_eq!(
+            crate::config_store::load_from_dir(&dir).config.gaps.window,
+            7.0
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Recording the orientation commits like any other write, but is not a
+    /// settings change, so it must not cost the user a pending undo.
+    #[test]
+    fn claiming_the_orientation_keeps_the_undo() {
+        let dir = reset_test_dir(line!());
+        let state = state_with_orientation(&dir, true);
+        state
+            .update_config(|config| *config = customised())
+            .unwrap();
+        state.reset_to_defaults(default_login()).unwrap();
+
+        let txn = state.settings_transaction();
+        let before = txn.revision();
+        assert!(txn.take_orientation());
+        assert_eq!(txn.revision(), before + 1);
+        drop(txn);
+
+        assert_eq!(state.reset_undo_launch_on_login(), Some(false));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
