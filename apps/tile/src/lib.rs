@@ -12,6 +12,7 @@ mod config_store;
 mod dto;
 mod feedback;
 mod logging;
+mod permission;
 mod ratelimit;
 mod settings_error;
 mod state;
@@ -22,7 +23,6 @@ mod window;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, Manager, RunEvent, Runtime};
 use tauri_plugin_autostart::MacosLauncher;
@@ -32,9 +32,6 @@ use tile_platform::PermissionStatus;
 use build_kind::BuildKind;
 use state::{ActionRequest, AppState};
 use update::UpdateManager;
-
-/// How often the startup permission poll re-checks while access is denied.
-const PERMISSION_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Runs the Tile application. Blocks until the app exits.
 pub fn run() {
@@ -83,6 +80,10 @@ pub fn run() {
             commands::get_welcome_status,
             commands::perform_action,
             commands::get_permission_status,
+            commands::get_accessibility_help,
+            commands::request_accessibility,
+            commands::open_accessibility_settings,
+            commands::reveal_app_bundle,
             commands::get_hotkey_status,
             commands::get_update_status,
             commands::open_update_window,
@@ -436,20 +437,26 @@ fn spawn_hotkey_status_worker<R: Runtime>(
 ///
 /// With permission denied the welcome waits: settings opens for its permission
 /// panel, and "hold this modifier and press an arrow" would be a lie until the
-/// user grants access. The permission poll opens the welcome the moment it
-/// stops being one.
+/// user grants access. The permission monitor (see [`permission`]) opens the
+/// welcome the moment it stops being one, and keeps watching for revocation.
+/// Platforms that need no permission never start it.
 fn begin_permission_flow<R: Runtime>(app: &AppHandle<R>, state: Arc<AppState>) {
-    match state.permission_status(false) {
-        Ok(PermissionStatus::Granted) | Ok(PermissionStatus::NotRequired) => {
+    match permission::refresh(app, false) {
+        Ok(PermissionStatus::Granted) => {
+            state.apply_hotkeys();
+            open_welcome_for_first_run(app, &state);
+            permission::spawn_monitor(app.clone());
+        }
+        Ok(PermissionStatus::NotRequired) => {
             state.apply_hotkeys();
             open_welcome_for_first_run(app, &state);
         }
         Ok(PermissionStatus::Denied) => {
-            log::info!("accessibility permission denied; opening settings and polling");
+            log::info!("opening settings and waiting for accessibility permission");
             if let Err(err) = window::open_settings(app, state.build_kind()) {
                 log::error!("failed to open settings window: {err}");
             }
-            poll_until_granted(app.clone(), state);
+            permission::spawn_monitor(app.clone());
         }
         Err(err) => {
             log::error!("could not read permission status: {err}; applying hotkeys anyway");
@@ -462,7 +469,7 @@ fn begin_permission_flow<R: Runtime>(app: &AppHandle<R>, state: Arc<AppState>) {
 /// Opens the welcome screen only when a first run is still owed. Does not claim
 /// the orientation: the welcome UI does that, so a failure to open the window
 /// leaves it owed for next time rather than losing it.
-fn open_welcome_for_first_run<R: Runtime>(app: &AppHandle<R>, state: &AppState) {
+pub(crate) fn open_welcome_for_first_run<R: Runtime>(app: &AppHandle<R>, state: &AppState) {
     if !state.orientation_pending() {
         return;
     }
@@ -470,42 +477,6 @@ fn open_welcome_for_first_run<R: Runtime>(app: &AppHandle<R>, state: &AppState) 
     if let Err(err) = window::open_welcome(app) {
         log::error!("failed to open welcome window for first run: {err}");
     }
-}
-
-/// Background poll: applies hotkeys as soon as permission is granted. Only
-/// calls the non-prompting `permission_status(false)`, so it is safe off the
-/// main thread. The apply itself is handed to the main thread, which owns the
-/// macOS Carbon event target and its wake/session-switch observers.
-fn poll_until_granted<R: Runtime>(app: AppHandle<R>, state: Arc<AppState>) {
-    thread::Builder::new()
-        .name("tile-permission-poll".into())
-        .spawn(move || loop {
-            thread::sleep(PERMISSION_POLL_INTERVAL);
-            match state.permission_status(false) {
-                Ok(PermissionStatus::Granted) | Ok(PermissionStatus::NotRequired) => {
-                    log::info!("accessibility permission granted; applying hotkeys");
-                    // The shortcuts the welcome describes only start working
-                    // once applied, so that is the first honest moment to show
-                    // it.
-                    let handle = app.clone();
-                    let state = state.clone();
-                    if let Err(err) = app.run_on_main_thread(move || {
-                        state.apply_hotkeys();
-                        open_welcome_for_first_run(&handle, &state);
-                    }) {
-                        log::error!("could not apply hotkeys on the main thread: {err}");
-                    }
-                    break;
-                }
-                Ok(PermissionStatus::Denied) => continue,
-                Err(err) => {
-                    log::error!("permission poll failed: {err}");
-                    break;
-                }
-            }
-        })
-        .map(|_| ())
-        .unwrap_or_else(|err| log::error!("failed to spawn permission poll thread: {err}"));
 }
 
 #[cfg(test)]

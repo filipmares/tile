@@ -11,6 +11,7 @@ use tile_platform::{HotkeyBindingStatus, HotkeyRoute, PermissionStatus};
 
 use crate::build_kind::BuildKind;
 use crate::config_store::{ConfigRecovery, RecoveryKind};
+use crate::permission::GrantStep;
 use crate::update::{UpdateErrorKind, UpdateStatus};
 
 /// Serializable form of [`BuildKind`].
@@ -107,6 +108,34 @@ impl From<PermissionStatus> for PermissionStatusDto {
             PermissionStatus::NotRequired => PermissionStatusDto::NotRequired,
         }
     }
+}
+
+/// Serializable form of [`GrantStep`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum GrantStepDto {
+    Prompt,
+    OpenSettings,
+}
+
+impl From<GrantStep> for GrantStepDto {
+    fn from(step: GrantStep) -> Self {
+        match step {
+            GrantStep::Prompt => GrantStepDto::Prompt,
+            GrantStep::OpenSettings => GrantStepDto::OpenSettings,
+        }
+    }
+}
+
+/// What the permission panel needs to guide the user.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccessibilityHelpDto {
+    /// What the primary grant button does next.
+    pub grant_step: GrantStepDto,
+    /// The running `.app` bundle, or `None` for an unbundled development
+    /// binary (and on platforms without bundles).
+    pub app_bundle: Option<String>,
 }
 
 /// Serializable form of one binding's current native route.

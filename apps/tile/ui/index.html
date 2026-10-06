@@ -246,13 +246,29 @@
         id="permission-panel"
         class="panel panel--warning"
         hidden
+        aria-labelledby="permission-heading"
         aria-live="polite"
       >
-        <h2>Accessibility permission needed</h2>
+        <h2 id="permission-heading">Accessibility permission needed</h2>
         <p>
           Tile needs macOS Accessibility permission to move other apps'
           windows. Until it is granted, its keyboard shortcuts do nothing.
+          Tile notices the change by itself; there is no need to restart it.
         </p>
+        <ol class="panel__steps">
+          <li>
+            Open <strong>System Settings ▸ Privacy &amp; Security ▸
+            Accessibility</strong>. On macOS 12 and earlier it is
+            <strong>System Preferences ▸ Security &amp; Privacy ▸ Privacy ▸
+            Accessibility</strong>. This is not the separate Accessibility
+            section for display and pointer options.
+          </li>
+          <li>Switch on <strong>Tile</strong>.</li>
+          <li id="permission-add-step">
+            If Tile is not in the list, click <strong>+</strong> and choose
+            Tile, or drag it into the list from Finder.
+          </li>
+        </ol>
         <div class="panel__actions">
           <button id="grant-permission" type="button" class="button button--primary">
             Grant permission…
@@ -260,10 +276,29 @@
           <button id="open-accessibility" type="button" class="button">
             Open Accessibility settings
           </button>
+          <button id="reveal-app" type="button" class="button" hidden>
+            Show Tile in Finder
+          </button>
         </div>
-        <p class="panel__hint">
-          System Settings ▸ Privacy &amp; Security ▸ Accessibility
+        <p class="panel__hint" id="permission-prompted" hidden>
+          macOS shows its own permission prompt only once, so the button now
+          goes straight to the Accessibility list.
         </p>
+        <p class="panel__hint" id="permission-unbundled" hidden>
+          This development build is not running from an app bundle, so macOS
+          may list the app that started it, such as Terminal, instead of Tile.
+          Grant that app, or run a bundled build to test the permission flow.
+        </p>
+        <p class="panel__hint">
+          If Tile is already listed and switched on but its shortcuts still do
+          nothing, which can happen after an update or a rebuild, select Tile,
+          remove it with <strong>−</strong>, and add it again.
+        </p>
+        <p class="panel__hint">
+          On a Mac managed by your organization this setting may be locked. If
+          you cannot change it, ask your administrator.
+        </p>
+        <p class="panel__hint" id="permission-status" role="status"></p>
       </section>
 
       <section class="section" aria-labelledby="behaviour-heading">

@@ -404,7 +404,7 @@ impl UpdateManager {
                 inner.available = Some(update);
                 inner.status = status.clone();
                 drop(inner);
-                crate::tray::sync_update_state(app, &status);
+                crate::tray::sync_update_state(app);
                 status
             }
             Ok(None) => {
@@ -412,7 +412,7 @@ impl UpdateManager {
                 inner.available = None;
                 inner.status = UpdateStatus::Current;
                 drop(inner);
-                crate::tray::sync_update_state(app, &UpdateStatus::Current);
+                crate::tray::sync_update_state(app);
                 UpdateStatus::Current
             }
             Err(err) => {
@@ -422,7 +422,7 @@ impl UpdateManager {
                 inner.available = None;
                 inner.status = status.clone();
                 drop(inner);
-                crate::tray::sync_update_state(app, &status);
+                crate::tray::sync_update_state(app);
                 status
             }
         };
@@ -530,7 +530,7 @@ impl UpdateManager {
 
     fn publish_status<R: Runtime>(&self, app: &AppHandle<R>, status: UpdateStatus) {
         self.set_status(status.clone());
-        crate::tray::sync_update_state(app, &status);
+        crate::tray::sync_update_state(app);
     }
 }
 
