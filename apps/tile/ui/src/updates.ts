@@ -34,6 +34,12 @@ const STRINGS = {
 };
 
 const RELEASE_NOTE_URL = /https?:\/\/[^\s<>"']+/g;
+const TRAILING_URL_PUNCTUATION = /[.,!?;:]+$/;
+const CLOSING_DELIMITERS = new Map([
+  [")", "("],
+  ["]", "["],
+  ["}", "{"],
+]);
 
 const updateIntent = window.sessionStorage.getItem("tile-update-intent");
 window.sessionStorage.removeItem("tile-update-intent");
@@ -121,7 +127,7 @@ function renderUpdateNotes(notes: string | null): void {
 
   let cursor = 0;
   for (const match of notes.matchAll(RELEASE_NOTE_URL)) {
-    const url = match[0];
+    const url = trimReleaseNoteUrl(match[0]);
     const index = match.index;
     dom.updateNotes.append(document.createTextNode(notes.slice(cursor, index)));
 
@@ -140,6 +146,23 @@ function renderUpdateNotes(notes: string | null): void {
   }
 
   dom.updateNotes.append(document.createTextNode(notes.slice(cursor)));
+}
+
+function trimReleaseNoteUrl(candidate: string): string {
+  let url = candidate.replace(TRAILING_URL_PUNCTUATION, "");
+
+  while (url.length > 0) {
+    const closing = url.at(-1);
+    const opening = closing ? CLOSING_DELIMITERS.get(closing) : undefined;
+    if (!closing || !opening) break;
+
+    const openingCount = url.split(opening).length - 1;
+    const closingCount = url.split(closing).length - 1;
+    if (closingCount <= openingCount) break;
+    url = url.slice(0, -1).replace(TRAILING_URL_PUNCTUATION, "");
+  }
+
+  return url;
 }
 
 function setUpdateAnnouncement(text: string): void {
