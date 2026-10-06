@@ -36,7 +36,7 @@ fn sync_autostart<R: Runtime>(
 /// Puts the login item back after the preference that asked for the change
 /// could not be saved, and returns the error to report. The save failure
 /// stands only if the revert worked; otherwise the OS and the preference now
-/// disagree, which is a login-item problem the user has to hear about.
+/// disagree, and the user has to hear that instead.
 fn revert_autostart<R: Runtime>(
     app: &AppHandle<R>,
     state: &AppState,
@@ -45,7 +45,7 @@ fn revert_autostart<R: Runtime>(
 ) -> SettingsError {
     match sync_autostart(app, state, enabled) {
         Ok(()) => save_error,
-        Err(revert_error) => SettingsError::login_item(format!(
+        Err(revert_error) => SettingsError::out_of_sync(format!(
             "{save_error}; putting the login item back also failed: {revert_error}"
         )),
     }

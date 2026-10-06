@@ -17,6 +17,10 @@ pub enum SettingsErrorKind {
     /// The OS login item could not be changed to match the request. The
     /// launch-at-login preference was left as it was.
     LoginItem,
+    /// The config could not be saved and was rolled back, but the OS login
+    /// item had already changed and could not be put back, so it may no
+    /// longer match the launch-at-login preference.
+    OutOfSync,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -34,6 +38,10 @@ impl SettingsError {
 
     pub fn login_item(detail: impl std::fmt::Display) -> Self {
         Self::new(SettingsErrorKind::LoginItem, detail)
+    }
+
+    pub fn out_of_sync(detail: impl std::fmt::Display) -> Self {
+        Self::new(SettingsErrorKind::OutOfSync, detail)
     }
 
     fn new(kind: SettingsErrorKind, detail: impl std::fmt::Display) -> Self {
@@ -64,5 +72,7 @@ mod tests {
         );
         let login = serde_json::to_value(SettingsError::login_item("denied")).unwrap();
         assert_eq!(login["kind"], "loginItem");
+        let out_of_sync = serde_json::to_value(SettingsError::out_of_sync("both")).unwrap();
+        assert_eq!(out_of_sync["kind"], "outOfSync");
     }
 }
