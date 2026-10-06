@@ -34,10 +34,20 @@ fn sync_autostart<R: Runtime>(
 }
 
 /// Puts the login item back after the preference that asked for the change
-/// could not be saved. Best effort: the save failure is what gets reported.
-fn revert_autostart<R: Runtime>(app: &AppHandle<R>, state: &AppState, enabled: bool) {
-    if let Err(err) = sync_autostart(app, state, enabled) {
-        log::error!("could not put the OS login item back after a failed save: {err}");
+/// could not be saved, and returns the error to report. The save failure
+/// stands only if the revert worked; otherwise the OS and the preference now
+/// disagree, which is a login-item problem the user has to hear about.
+fn revert_autostart<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    enabled: bool,
+    save_error: SettingsError,
+) -> SettingsError {
+    match sync_autostart(app, state, enabled) {
+        Ok(()) => save_error,
+        Err(revert_error) => SettingsError::login_item(format!(
+            "{save_error}; putting the login item back also failed: {revert_error}"
+        )),
     }
 }
 
@@ -158,7 +168,7 @@ pub fn set_launch_on_login<R: Runtime>(
     sync_autostart(&app, &state, enabled)?;
     state
         .update_config(|config| config.launch_on_login = enabled)
-        .inspect_err(|_| revert_autostart(&app, &state, previous))
+        .map_err(|err| revert_autostart(&app, &state, previous, err))
 }
 
 /// Claims the one-time first-run orientation. Returns `true` at most once per
@@ -253,9 +263,11 @@ pub fn reset_to_defaults<R: Runtime>(
                 config.launch_on_login = launch_on_login;
             }
         })
-        .inspect_err(|_| {
+        .map_err(|err| {
             if login.is_ok() {
-                revert_autostart(&app, &state, previous_login);
+                revert_autostart(&app, &state, previous_login, err)
+            } else {
+                err
             }
         })?;
     crate::tray::sync_bindings(&app);

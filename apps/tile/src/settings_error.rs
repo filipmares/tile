@@ -54,7 +54,7 @@ mod tests {
     use super::*;
 
     /// The UI switches on these exact strings (see `settingsErrorMessage` in
-    /// `ui/src/main.ts`), so renaming a variant must be a deliberate change.
+    /// `ui/src/errors.ts`), so renaming a variant must be a deliberate change.
     #[test]
     fn kinds_serialize_to_the_strings_the_ui_maps() {
         let saved = serde_json::to_value(SettingsError::not_saved("disk full")).unwrap();
