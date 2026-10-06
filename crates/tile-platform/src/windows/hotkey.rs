@@ -1197,6 +1197,8 @@ impl OwnerState {
     fn install_hook(&mut self) -> Result<()> {
         let hook = Self::set_hook(self.module)?;
         self.hook = Some(hook);
+        self.watchdog
+            .restart(now_tick(), HOOK_LAST_EVENT.load(Ordering::Relaxed));
         Ok(())
     }
 
@@ -1309,7 +1311,7 @@ impl OwnerState {
                 Ok(()) => summary.kept += 1,
                 Err(err) => {
                     self.registered.retain(|owned| owned.id != binding.id);
-                    if Self::classify_failure(binding.binding, &err) {
+                    if Self::classify_failure(binding.binding, &err, false) {
                         fallback.push(to_hook_binding(binding.binding));
                     } else {
                         still_pending.push(binding.binding);
@@ -1317,26 +1319,7 @@ impl OwnerState {
                 }
             }
         }
-        for binding in std::mem::take(&mut self.pending) {
-            let id = self.allocate_id();
-            match register_binding(id, binding) {
-                Ok(()) => {
-                    self.registered.push(RegisteredBinding {
-                        id,
-                        binding,
-                        enabled: true,
-                    });
-                    summary.restored += 1;
-                }
-                Err(err) => {
-                    if Self::classify_failure(binding, &err) {
-                        fallback.push(to_hook_binding(binding));
-                    } else {
-                        still_pending.push(binding);
-                    }
-                }
-            }
-        }
+        summary.restored = self.retry_pending(&mut fallback, &mut still_pending);
         summary.moved_to_hook = fallback.len();
         summary.pending = still_pending.len();
         self.pending = still_pending;
@@ -1350,9 +1333,69 @@ impl OwnerState {
         summary
     }
 
+    /// Retries every pending binding with a fresh id. Returns how many were
+    /// restored; the rest land in `fallback` or `still_pending`.
+    fn retry_pending(
+        &mut self,
+        fallback: &mut Vec<HookBinding>,
+        still_pending: &mut Vec<HotkeyBinding>,
+    ) -> usize {
+        let mut restored = 0;
+        for binding in std::mem::take(&mut self.pending) {
+            let id = self.allocate_id();
+            match register_binding(id, binding) {
+                Ok(()) => {
+                    self.registered.push(RegisteredBinding {
+                        id,
+                        binding,
+                        enabled: true,
+                    });
+                    restored += 1;
+                }
+                Err(err) => {
+                    if Self::classify_failure(binding, &err, true) {
+                        fallback.push(to_hook_binding(binding));
+                    } else {
+                        still_pending.push(binding);
+                    }
+                }
+            }
+        }
+        restored
+    }
+
+    /// Watchdog-driven retry so a transient failure does not wait for the next
+    /// sleep or unlock.
+    fn retry_pending_from_watchdog(&mut self) {
+        let mut fallback = Vec::new();
+        let mut still_pending = Vec::new();
+        let restored = self.retry_pending(&mut fallback, &mut still_pending);
+        self.pending = still_pending;
+        let moved = fallback.len();
+        if !fallback.is_empty() {
+            let mut table = current_hook_bindings();
+            table.extend(fallback);
+            if let Err(err) = set_hook_bindings(table) {
+                log::warn!("Windows hotkeys: could not publish hook fallback: {err}");
+            } else if self.hook.is_none() {
+                if let Err(err) = self.install_hook() {
+                    log::warn!("Windows hotkeys: could not install hook for fallback: {err}");
+                }
+            }
+        }
+        if restored + moved > 0 {
+            log::info!(
+                "Windows hotkeys: retried pending registrations (restored={restored}, \
+                 moved_to_hook={moved}, still_pending={})",
+                self.pending.len()
+            );
+        }
+    }
+
     /// Logs a failed re-registration and returns whether it should fall back
-    /// to the hook (`true`) rather than be retried later.
-    fn classify_failure(binding: HotkeyBinding, err: &windows::core::Error) -> bool {
+    /// to the hook (`true`) rather than be retried later. Repeated retries log
+    /// quietly so a persistent failure cannot flood the log.
+    fn classify_failure(binding: HotkeyBinding, err: &windows::core::Error, retry: bool) -> bool {
         if is_already_registered(err) {
             log::warn!(
                 "Windows hotkey {} was taken by another application; intercepting it instead",
@@ -1360,8 +1403,14 @@ impl OwnerState {
             );
             true
         } else {
-            log::warn!(
-                "Windows hotkey {} could not be re-registered ({}); will retry on next recovery",
+            let level = if retry {
+                log::Level::Debug
+            } else {
+                log::Level::Warn
+            };
+            log::log!(
+                level,
+                "Windows hotkey {} could not be re-registered ({}); will retry",
                 binding.hotkey,
                 err.message()
             );
@@ -1373,9 +1422,11 @@ impl OwnerState {
         self.hook.is_some() || !current_hook_bindings().is_empty()
     }
 
-    /// Runs the watchdog timer only while a hook exists, or should exist.
+    /// Runs the watchdog timer only while there is a hook to watch, a hook that
+    /// should exist, or a registration still to retry.
     fn sync_watchdog(&mut self) {
-        match (self.hook_wanted(), self.watchdog_timer) {
+        let wanted = self.hook_wanted() || !self.pending.is_empty();
+        match (wanted, self.watchdog_timer) {
             (true, 0) => {
                 self.watchdog_timer = unsafe { SetTimer(None, 0, WATCHDOG_INTERVAL_MS, None) };
                 if self.watchdog_timer == 0 {
@@ -1394,11 +1445,15 @@ impl OwnerState {
 
     fn watchdog_tick(&mut self) {
         let now = now_tick();
+        if !self.pending.is_empty() {
+            self.retry_pending_from_watchdog();
+        }
         if self.hook.is_none() {
             // Bindings still need a hook that could not be installed earlier.
             if self.hook_wanted() && self.watchdog.allow_latency_rearm(now) {
                 self.recover(RecoveryReason::HookMissing);
             }
+            self.sync_watchdog();
             return;
         }
         let mut info = LASTINPUTINFO {
