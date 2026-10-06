@@ -22,6 +22,7 @@ import {
 import { dom } from "./dom";
 import { resetErrorMessage, settingsErrorMessage } from "./errors";
 import {
+  listenForHotkeyStatus,
   refreshHotkeyStatus,
   renderBindings,
   setRecordingStatus,
@@ -582,6 +583,12 @@ export async function bootSettings(): Promise<void> {
     console.error("could not read build info", err);
   }
   await bootConfigRecovery();
+  // Subscribed before the first fetch, so a change in between is not lost.
+  try {
+    await listenForHotkeyStatus();
+  } catch (err) {
+    console.error("could not follow hotkey status changes", err);
+  }
   try {
     setConfig(await getConfig());
     await refreshHotkeyStatus();

@@ -104,6 +104,9 @@ pub enum HotkeyRouteDto {
 pub struct HotkeyStatusDto {
     pub bindings: Vec<HotkeyBindingStatusDto>,
     pub hook_installed: bool,
+    /// The keyboard hook keeps failing, so intercepted shortcuts do nothing
+    /// until it recovers.
+    pub hook_unavailable: bool,
     pub apply_error: Option<String>,
 }
 

@@ -416,6 +416,8 @@ export interface HotkeyBindingStatus {
 export interface HotkeyStatus {
   bindings: HotkeyBindingStatus[];
   hookInstalled: boolean;
+  /** The keyboard hook keeps failing; intercepted shortcuts do nothing. */
+  hookUnavailable: boolean;
   applyError: string | null;
 }
 

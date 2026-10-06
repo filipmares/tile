@@ -1,6 +1,7 @@
 // The shortcut list: every action, its binding, the filter over the list,
 // and the recorder that captures a new chord.
 
+import { listen } from "@tauri-apps/api/event";
 import { getHotkeyStatus, setBinding } from "./api";
 import { dom } from "./dom";
 import {
@@ -31,6 +32,8 @@ const STRINGS = {
   noMatch: (filter: string) => `No shortcuts match \u201c${filter}\u201d.`,
   applyError: (error: string) =>
     `Windows could not apply the latest shortcut change. A previously active shortcut may still be in effect. ${error}`,
+  hookUnavailable:
+    "Some shortcuts aren't working right now. Tile will keep retrying.",
   pressKeys: "Press keys…",
   unbound: "Unbound",
   clearLabel: (label: string) => `Clear shortcut for ${label}`,
@@ -53,6 +56,7 @@ const STRINGS = {
 let hotkeyStatus: HotkeyStatus = {
   bindings: [],
   hookInstalled: false,
+  hookUnavailable: false,
   applyError: null,
 };
 let recording: WindowAction | null = null;
@@ -98,8 +102,34 @@ export async function refreshHotkeyStatus(): Promise<void> {
   hotkeyStatus = await getHotkeyStatus();
 }
 
+function renderHotkeyHealth(): void {
+  dom.hotkeyHookWarning.hidden = !hotkeyStatus.hookUnavailable;
+  dom.hotkeyHookWarning.textContent = hotkeyStatus.hookUnavailable
+    ? STRINGS.hookUnavailable
+    : "";
+}
+
+/**
+ * Follows the status the app pushes after every apply and every recovery.
+ * The list itself is only rebuilt when a route changed and nothing is being
+ * recorded, so a recovery in the background never steals focus or ends a
+ * recording.
+ */
+export async function listenForHotkeyStatus(): Promise<void> {
+  await listen<HotkeyStatus>("hotkey-status-changed", ({ payload }) => {
+    const routesChanged =
+      JSON.stringify(payload.bindings) !==
+        JSON.stringify(hotkeyStatus.bindings) ||
+      payload.applyError !== hotkeyStatus.applyError;
+    hotkeyStatus = payload;
+    renderHotkeyHealth();
+    if (routesChanged && config && recording === null) renderBindings();
+  });
+}
+
 export function renderBindings(): void {
   if (!config) return;
+  renderHotkeyHealth();
   renderHotkeyApplyError();
   const cfg = config;
   const conflicts = conflictingActions(cfg);

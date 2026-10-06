@@ -80,6 +80,8 @@ pub struct AppState {
     build_kind: BuildKind,
     config_dir: Option<PathBuf>,
     hotkey_status: Mutex<HotkeyStatus>,
+    /// Told after every apply so the app can push the new status out.
+    hotkey_status_notifier: Mutex<Option<Box<dyn Fn() + Send>>>,
     permission_dialog_limiter: Mutex<RateLimiter>,
     menu_notice_limiter: Mutex<RateLimiter>,
     /// Whether the one-time first-run orientation is still owed to the user.
@@ -113,6 +115,7 @@ impl AppState {
             build_kind,
             config_dir,
             hotkey_status: Mutex::new(HotkeyStatus::default()),
+            hotkey_status_notifier: Mutex::new(None),
             permission_dialog_limiter: Mutex::new(RateLimiter::new(PERMISSION_DIALOG_COOLDOWN)),
             menu_notice_limiter: Mutex::new(RateLimiter::new(MENU_NOTICE_COOLDOWN)),
             orientation_pending: AtomicBool::new(orientation_pending),
@@ -347,24 +350,62 @@ impl AppState {
             })
             .collect();
         let result = lock(&self.hotkeys).apply(&bindings);
+        let snapshot = {
+            let mut status = lock(&self.hotkey_status);
+            match result {
+                Ok(report) => {
+                    if let Some(warning) = &report.warning {
+                        log::warn!("hotkeys applied with a cleanup warning: {warning}");
+                    }
+                    status.apply_error = None;
+                    // Recovery may already have published something newer
+                    // between the backend replying and this line.
+                    if status
+                        .report
+                        .as_ref()
+                        .map_or(true, |current| report.revision >= current.revision)
+                    {
+                        status.report = Some(report);
+                    }
+                }
+                Err(err) => {
+                    log::error!("failed to apply hotkeys: {err}");
+                    if matches!(err, PlatformError::HotkeyStateUnknown(_)) {
+                        status.report = None;
+                    }
+                    status.apply_error = Some(err.to_string());
+                }
+            }
+            status.clone()
+        };
+        self.notify_hotkey_status();
+        snapshot
+    }
+
+    /// Adopts a report the hotkey backend published on its own, after a
+    /// recovery or a change in the keyboard hook's health. Returns whether it
+    /// was newer than what is held; an older one lost a race with an apply.
+    pub fn record_published_hotkeys(&self, report: HotkeyApplyReport) -> bool {
         let mut status = lock(&self.hotkey_status);
-        match result {
-            Ok(report) => {
-                if let Some(warning) = &report.warning {
-                    log::warn!("hotkeys applied with a cleanup warning: {warning}");
-                }
-                status.apply_error = None;
-                status.report = Some(report);
-            }
-            Err(err) => {
-                log::error!("failed to apply hotkeys: {err}");
-                if matches!(err, PlatformError::HotkeyStateUnknown(_)) {
-                    status.report = None;
-                }
-                status.apply_error = Some(err.to_string());
-            }
+        let newer = status
+            .report
+            .as_ref()
+            .map_or(true, |current| report.revision > current.revision);
+        if newer {
+            status.report = Some(report);
         }
-        status.clone()
+        newer
+    }
+
+    /// Installs the callback told after every apply. It must not block.
+    pub fn set_hotkey_status_notifier(&self, notifier: Box<dyn Fn() + Send>) {
+        *lock(&self.hotkey_status_notifier) = Some(notifier);
+    }
+
+    fn notify_hotkey_status(&self) {
+        if let Some(notifier) = lock(&self.hotkey_status_notifier).as_ref() {
+            notifier();
+        }
     }
 
     /// Persists the current config atomically, logging (never panicking) on
@@ -2437,7 +2478,9 @@ mod tests {
                 reason: None,
             }],
             hook_installed: false,
+            hook_unavailable: false,
             warning: None,
+            revision: 1,
         };
         let state = AppState::new(
             Box::new(InertWindowBackend),
@@ -2477,5 +2520,62 @@ mod tests {
             .apply_error
             .as_deref()
             .is_some_and(|error| error.contains("uncertain ownership")));
+    }
+
+    fn report(revision: u64, hook_unavailable: bool) -> HotkeyApplyReport {
+        HotkeyApplyReport {
+            bindings: Vec::new(),
+            hook_installed: true,
+            hook_unavailable,
+            warning: None,
+            revision,
+        }
+    }
+
+    fn sequenced_state(results: Vec<tile_platform::Result<HotkeyApplyReport>>) -> AppState {
+        AppState::new(
+            Box::new(InertWindowBackend),
+            Box::new(SequencedHotkeyBackend {
+                results: results.into(),
+            }),
+            Config::default(),
+            BuildKind::Development,
+            None,
+            false,
+        )
+    }
+
+    #[test]
+    fn published_hotkey_status_replaces_an_older_report_and_notifies() {
+        let state = sequenced_state(vec![Ok(report(1, false))]);
+        let notified = std::sync::Arc::new(AtomicUsize::new(0));
+        let counter = std::sync::Arc::clone(&notified);
+        state.set_hotkey_status_notifier(Box::new(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        state.apply_hotkeys();
+        assert_eq!(notified.load(Ordering::SeqCst), 1);
+
+        assert!(state.record_published_hotkeys(report(2, true)));
+        assert_eq!(state.hotkey_status().report, Some(report(2, true)));
+
+        assert!(state.record_published_hotkeys(report(3, false)));
+        assert_eq!(state.hotkey_status().report, Some(report(3, false)));
+    }
+
+    #[test]
+    fn a_stale_report_never_replaces_a_newer_one() {
+        // Recovery published revision 3 before the reply to the apply that
+        // produced revision 2 was recorded.
+        let state = sequenced_state(vec![Ok(report(2, false))]);
+        assert!(state.record_published_hotkeys(report(3, true)));
+
+        let applied = state.apply_hotkeys();
+        assert_eq!(applied.report, Some(report(3, true)));
+        assert_eq!(applied.apply_error, None);
+
+        assert!(!state.record_published_hotkeys(report(1, false)));
+        assert_eq!(state.hotkey_status().report, Some(report(3, true)));
     }
 }

@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use tauri::{AppHandle, Manager, RunEvent, Runtime};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, Runtime};
 use tauri_plugin_autostart::MacosLauncher;
 use tile_core::Config;
 use tile_platform::PermissionStatus;
@@ -239,7 +239,17 @@ fn setup_app<R: Runtime>(app: &AppHandle<R>) -> Result<(), Box<dyn std::error::E
     let (requests, rx) = mpsc::channel::<ActionRequest>();
 
     let window_backend = tile_platform::window_backend()?;
-    let hotkey_backend = tile_platform::hotkey_backend(requests.clone())?;
+    let mut hotkey_backend = tile_platform::hotkey_backend(requests.clone())?;
+
+    // Every hotkey status change — after an apply, or published by the backend
+    // after a recovery — funnels through one thread that records it, tells the
+    // settings UI and refreshes the tray. The backend's listener runs on its
+    // own thread and must never block, so it only queues.
+    let (status_signals, status_rx) = mpsc::channel::<HotkeyStatusSignal>();
+    let published = status_signals.clone();
+    hotkey_backend.set_status_listener(Box::new(move |report| {
+        let _ = published.send(HotkeyStatusSignal::Published(report));
+    }));
 
     // Everything that must differ between a checkout and an installed copy
     // hangs off this one value: which config directory is used, whether the OS
@@ -303,6 +313,11 @@ fn setup_app<R: Runtime>(app: &AppHandle<R>) -> Result<(), Box<dyn std::error::E
     app.manage(tray::MenuActions::new(requests));
     tray::build_tray(app, build_kind)?;
 
+    state.set_hotkey_status_notifier(Box::new(move || {
+        let _ = status_signals.send(HotkeyStatusSignal::Applied);
+    }));
+    spawn_hotkey_status_worker(app.clone(), state.clone(), status_rx)?;
+
     // Worker thread: drains hotkey presses and menu clicks and performs them.
     // It only touches the window backend (safe off the main thread); hotkey
     // registration stays with the backend's own loop.
@@ -363,6 +378,50 @@ fn setup_app<R: Runtime>(app: &AppHandle<R>) -> Result<(), Box<dyn std::error::E
 
     log::info!("Tile is running");
     Ok(())
+}
+
+/// Event the settings UI listens on for a fresh `HotkeyStatusDto`.
+const HOTKEY_STATUS_EVENT: &str = "hotkey-status-changed";
+
+enum HotkeyStatusSignal {
+    /// `AppState::apply_hotkeys` has recorded a new status.
+    Applied,
+    /// The backend changed status on its own, e.g. during recovery.
+    Published(tile_platform::HotkeyApplyReport),
+}
+
+fn spawn_hotkey_status_worker<R: Runtime>(
+    app: AppHandle<R>,
+    state: Arc<AppState>,
+    signals: mpsc::Receiver<HotkeyStatusSignal>,
+) -> std::io::Result<()> {
+    thread::Builder::new()
+        .name("tile-hotkey-status".into())
+        .spawn(move || {
+            let mut tray_degraded = false;
+            for signal in signals {
+                if let HotkeyStatusSignal::Published(report) = signal {
+                    if !state.record_published_hotkeys(report) {
+                        continue;
+                    }
+                }
+                let status = state.hotkey_status();
+                let degraded = status
+                    .report
+                    .as_ref()
+                    .is_some_and(|report| report.hook_unavailable);
+                if let Err(err) = app.emit(HOTKEY_STATUS_EVENT, commands::hotkey_status_dto(status))
+                {
+                    log::warn!("could not send hotkey status to the settings UI: {err}");
+                }
+                if degraded != tray_degraded {
+                    tray_degraded = degraded;
+                    tray::sync_bindings(&app);
+                }
+            }
+            log::debug!("hotkey status thread exiting");
+        })
+        .map(|_| ())
 }
 
 /// Checks permission and applies hotkeys, or waits for the user to grant
