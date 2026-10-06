@@ -219,6 +219,10 @@ Windows may still deny Tile permission to manipulate that app unless Tile is
 also elevated. Some corporate security software may flag or block the hook when
 interception is active.
 
+Windows can silently drop a keyboard hook across sleep, lock or a long stall.
+Tile re-installs its hook after resume, unlock and display wake, and
+re-checks its registered shortcuts, so they keep working without a restart.
+
 ### macOS: Accessibility permission
 
 macOS requires you to grant Tile the **Accessibility** permission before it can
@@ -295,6 +299,27 @@ remove the login item; current installers restore it.
 **Custom title bars on Windows:** Tile supports resizable windows without a
 native title bar, including the Copilot app. Child windows, tool windows, and
 hidden or cloaked windows are excluded from tiling.
+
+### Uninstall
+
+- **Windows:** quit Tile from the tray, then uninstall it from **Settings ▸
+  Apps ▸ Installed apps**. The uninstaller also removes the sign-in login item
+  (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Tile`).
+- **macOS:** turn off **Launch Tile at login** in Settings first, then quit Tile
+  and move it from Applications to the Trash. If Tile is already gone, delete the
+  login item it left behind:
+
+  ```sh
+  rm ~/Library/LaunchAgents/Tile.plist
+  ```
+
+Settings and logs are left in place so a reinstall keeps your shortcuts.
+Delete them to remove every trace:
+
+- **Windows:** `%APPDATA%\Tile\Tile` (`config\config.json` and `data\logs`)
+- **macOS:** `~/Library/Application Support/dev.Tile.Tile`
+
+Development builds use `Tile-Development` in place of the last `Tile`.
 
 ## Build from source
 

@@ -45,7 +45,8 @@ spreading sizes back across separate keys.
 ## Operating Context
 
 - **No main window.** Tile lives in the menu bar (macOS) or system tray
-  (Windows). Its menu opens Settings; windows exist only when asked for.
+  (Windows). Its menu offers the common layouts with their current shortcuts
+  and opens Settings; windows exist only when asked for.
 - **Three windows exist:** Settings, About, and the first-run Welcome window
   (reopenable from the bottom of Settings). Tile skips its own windows when
   moving things, so a shortcut pressed while one is focused moves the window
@@ -58,13 +59,20 @@ spreading sizes back across separate keys.
   elevated processes.
 - Settings is the only place bindings are edited; `config.json` still owns a few
   knobs (step sizes, minimum window fractions, animation fps) with no UI yet.
+  Each Settings control saves on its own and reports a failed save beside
+  itself; **Restore defaults** asks first and offers Undo. A `config.json` that
+  cannot be read is kept as `config.corrupt-<timestamp>.json` and Tile starts
+  from defaults.
+- On Windows, Tile re-arms its keyboard hook after resume, unlock and
+  display wake, so shortcuts keep working without a restart.
 
 ## Capabilities and Constraints
 
 - 76 window actions — halves, thirds, two-thirds, fourths, sixths, ninths,
   corners, corner thirds, maximize, maximize-height, almost-maximize, center,
   restore, display throws, and incremental move/resize/halve-double. **Six ship
-  bound to keys**; the rest are reachable only by binding them yourself.
+  bound to keys**; the rest are reachable by binding them yourself, and the
+  common layouts also from the tray/menu-bar menu.
 - Default keymap: `Control`+`Option` (macOS) or `Win` (Windows) plus the arrows;
   display throws add `Command` (macOS) or `Alt` (Windows).
 - Repeat cycles size for the horizontal arrows and corners; the cycle set is
@@ -74,8 +82,9 @@ spreading sizes back across separate keys.
 - Architecture forbids shortcuts: `tile-core` is pure and platform-independent,
   `tile-platform` hides every OS API behind traits, `apps/tile` is a thin shell.
   UI work talks to the core through Tauri commands and events only.
-- **Not built yet:** per-app rules, drag-snapping, and a tray menu that offers
-  actions directly.
+- The tray/menu-bar menu offers the common layouts directly; a menu item lands
+  exactly where its label says rather than cycling.
+- **Not built yet:** per-app rules and drag-snapping.
 - Development builds are deliberately quarantined from an installed Tile: a
   separate config directory, the login item left alone, and every surface
   labelled *(Development)*.
@@ -94,7 +103,10 @@ spreading sizes back across separate keys.
 - `README.md` — the accurate, current description of behaviour; the shortcut
   table is generated from `crates/tile-core/src/config.rs` (`default_bindings`),
   the single source of truth for defaults.
-- GitHub Releases carry signed/notarized macOS `.dmg` and Windows NSIS builds.
+- GitHub Releases carry a signed and notarized macOS `.dmg` and an **unsigned**
+  per-user Windows NSIS installer, so SmartScreen warns on first run. Windows
+  signing (Azure Artifact Signing) is wired into the release workflow but stays
+  off until its secrets are provisioned; see `docs/RELEASING.md`.
 - `CONTRIBUTING.md`, `docs/RELEASING.md`, and a thorough CI workflow.
 - **No** testimonials, user counts, benchmarks, press, pricing or case studies
   exist. Future work must not invent them.
