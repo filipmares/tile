@@ -482,7 +482,20 @@ export type UpdateStatus =
       totalBytes: number | null;
     }
   | { status: "ready-to-relaunch"; version: string }
-  | { status: "error"; message: string };
+  | { status: "error"; kind: UpdateErrorKind };
+
+/**
+ * `UpdateErrorKind` — why an update failed. The raw updater text stays in
+ * the log; `updateErrorMessage` in `errors.ts` turns this into a sentence.
+ */
+export type UpdateErrorKind =
+  | "offline"
+  | "server"
+  | "signature"
+  | "interrupted"
+  | "disk"
+  | "installer"
+  | "unknown";
 
 /** `WelcomeStatusDto` — what the welcome walkthrough may honestly ask for. */
 export interface WelcomeStatus {

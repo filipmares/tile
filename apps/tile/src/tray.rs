@@ -493,6 +493,12 @@ fn tray_tooltip(kind: BuildKind, status: &UpdateStatus) -> String {
         format!("Tile — {version} available")
     } else if let Some(version) = ready_version(status) {
         format!("Tile — relaunch to finish {version}")
+    } else if let UpdateStatus::Error { kind: cause } = status {
+        format!(
+            "{} — update failed ({})",
+            kind.tray_tooltip(),
+            cause.short_cause()
+        )
     } else {
         kind.tray_tooltip().to_string()
     }
@@ -540,7 +546,10 @@ fn update_menu_state(status: &UpdateStatus) -> (String, bool) {
         }
         #[cfg(target_os = "macos")]
         UpdateStatus::ReadyToRelaunch { .. } => unreachable!("handled before match"),
-        UpdateStatus::Error { .. } => ("Retry Update Check…".into(), true),
+        UpdateStatus::Error { kind } => (
+            format!("Update Failed ({}) — Retry…", kind.short_cause()),
+            true,
+        ),
     }
 }
 
@@ -632,6 +641,7 @@ pub fn sync_bindings<R: Runtime>(app: &AppHandle<R>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::update::UpdateErrorKind;
 
     #[test]
     fn accelerators_use_the_menu_library_tokens() {
@@ -709,6 +719,24 @@ mod tests {
             ("Update Tile to 1.2.3…".into(), true)
         );
         assert!(!update_menu_state(&UpdateStatus::Unavailable).1);
+    }
+
+    #[test]
+    fn failed_updates_name_the_cause_and_stay_retryable() {
+        let failed = UpdateStatus::Error {
+            kind: UpdateErrorKind::Offline,
+        };
+        assert_eq!(
+            update_menu_state(&failed),
+            ("Update Failed (offline) — Retry…".into(), true)
+        );
+        assert_eq!(
+            tray_tooltip(BuildKind::Installed, &failed),
+            format!(
+                "{} — update failed (offline)",
+                BuildKind::Installed.tray_tooltip()
+            )
+        );
     }
 
     #[test]
