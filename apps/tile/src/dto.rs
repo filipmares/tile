@@ -10,7 +10,7 @@ use tile_core::{Hotkey, WindowAction};
 use tile_platform::{HotkeyBindingStatus, HotkeyRoute, PermissionStatus};
 
 use crate::build_kind::BuildKind;
-use crate::config_store::ConfigRecovery;
+use crate::config_store::{ConfigRecovery, RecoveryKind};
 use crate::update::UpdateStatus;
 
 /// Serializable form of [`BuildKind`].
@@ -41,19 +41,47 @@ pub struct BuildInfoDto {
     pub config_dir: Option<String>,
 }
 
-/// Tells the settings UI that this launch could not read the saved settings
-/// and started from defaults.
+/// Tells the settings UI that this launch could not load the saved settings
+/// as-is: the file was unreadable and Tile started from defaults, some
+/// settings were reset or cleared while the rest were kept, or the file came
+/// from a newer Tile and only what this version understands was loaded.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigRecoveryDto {
-    /// Where the unreadable file was kept, or `None` when it could not be
+    /// Why the saved file could not be loaded as-is.
+    pub kind: ConfigRecoveryKindDto,
+    /// Whether any setting was reset to its default or, for an unreadable
+    /// shortcut, cleared. A `newer-version` file may have had these too.
+    pub some_fields_reset: bool,
+    /// Where the original file was kept, or `None` when it could not be
     /// moved aside and settings are therefore not being saved this session.
     pub backup_path: Option<String>,
+}
+
+/// Serializable form of [`RecoveryKind`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ConfigRecoveryKindDto {
+    Corrupt,
+    PartialReset,
+    NewerVersion,
+}
+
+impl From<RecoveryKind> for ConfigRecoveryKindDto {
+    fn from(kind: RecoveryKind) -> Self {
+        match kind {
+            RecoveryKind::Corrupt => Self::Corrupt,
+            RecoveryKind::PartialReset => Self::PartialReset,
+            RecoveryKind::NewerVersion => Self::NewerVersion,
+        }
+    }
 }
 
 impl From<&ConfigRecovery> for ConfigRecoveryDto {
     fn from(recovery: &ConfigRecovery) -> Self {
         ConfigRecoveryDto {
+            kind: recovery.kind.into(),
+            some_fields_reset: recovery.some_fields_reset,
             backup_path: recovery
                 .backup_path
                 .as_ref()

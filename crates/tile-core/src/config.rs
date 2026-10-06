@@ -666,17 +666,129 @@ impl Default for Config {
     }
 }
 
+/// The config file format this build reads and writes. Bump it only when the
+/// on-disk shape changes in a way older builds would misread.
+pub const CONFIG_SCHEMA_VERSION: u32 = 1;
+
+/// The version assumed for a config written before `schemaVersion` existed.
+const LEGACY_SCHEMA_VERSION: u32 = 1;
+
+const SCHEMA_VERSION_KEY: &str = "schemaVersion";
+const BINDINGS_KEY: &str = "bindings";
+
+/// The result of [`Config::from_json_lenient`]: the best config that could be
+/// recovered from a file, and what had to be given up to get it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LenientConfig {
+    pub config: Config,
+    /// The `schemaVersion` the file declared, or the legacy version when it
+    /// declared none.
+    pub schema_version: u32,
+    /// JSON keys that could not be read and fell back to their defaults.
+    /// A dropped binding is reported as `bindings.<action>`.
+    pub reset_fields: Vec<String>,
+}
+
+impl LenientConfig {
+    /// Whether the file came from a newer build than this one.
+    pub fn is_newer_schema(&self) -> bool {
+        self.schema_version > CONFIG_SCHEMA_VERSION
+    }
+}
+
+/// Serializes a [`Config`] with the schema version leading the object.
+#[derive(Serialize)]
+struct VersionedConfig<'a> {
+    #[serde(rename = "schemaVersion")]
+    schema_version: u32,
+    #[serde(flatten)]
+    config: &'a Config,
+}
+
+/// Whether `value` alone deserializes as the `key` field of a [`Config`].
+fn field_parses(key: &str, value: &serde_json::Value) -> bool {
+    let mut single = serde_json::Map::new();
+    single.insert(key.to_owned(), value.clone());
+    serde_json::from_value::<Config>(serde_json::Value::Object(single)).is_ok()
+}
+
 impl Config {
     /// Parses configuration from JSON, filling in defaults for missing fields.
     pub fn from_json(json: &str) -> Result<Self, ConfigError> {
         let mut config: Config = serde_json::from_str(json)?;
-        config.normalize();
-        config.migrate_directional_displays();
+        config.finish_load();
         Ok(config)
     }
 
+    /// Parses configuration from JSON one field at a time, so a single
+    /// wrong-typed value resets only that value instead of the whole file.
+    ///
+    /// Within `bindings`, only the entries that cannot be read are dropped.
+    /// Unknown keys are ignored. Fails only when the text is not JSON or not
+    /// a JSON object.
+    pub fn from_json_lenient(json: &str) -> Result<LenientConfig, ConfigError> {
+        let value: serde_json::Value = serde_json::from_str(json)?;
+        let serde_json::Value::Object(mut map) = value else {
+            return Err(ConfigError::Invalid(
+                "configuration is not a JSON object".into(),
+            ));
+        };
+        let mut reset_fields = Vec::new();
+
+        let schema_version = match map.remove(SCHEMA_VERSION_KEY) {
+            None => LEGACY_SCHEMA_VERSION,
+            Some(raw) => match raw.as_u64().and_then(|v| u32::try_from(v).ok()) {
+                Some(version) => version,
+                None => {
+                    reset_fields.push(SCHEMA_VERSION_KEY.to_owned());
+                    LEGACY_SCHEMA_VERSION
+                }
+            },
+        };
+
+        let keys: Vec<String> = map.keys().cloned().collect();
+        for key in keys {
+            if field_parses(&key, &map[&key]) {
+                continue;
+            }
+            if key == BINDINGS_KEY {
+                if let Some(serde_json::Value::Object(entries)) = map.get_mut(&key) {
+                    entries.retain(|action, hotkey| {
+                        let mut entry = serde_json::Map::new();
+                        entry.insert(action.clone(), hotkey.clone());
+                        let ok = field_parses(BINDINGS_KEY, &serde_json::Value::Object(entry));
+                        if !ok {
+                            reset_fields.push(format!("{BINDINGS_KEY}.{action}"));
+                        }
+                        ok
+                    });
+                    continue;
+                }
+            }
+            map.remove(&key);
+            reset_fields.push(key);
+        }
+
+        let mut config: Config = serde_json::from_value(serde_json::Value::Object(map))?;
+        config.finish_load();
+        Ok(LenientConfig {
+            config,
+            schema_version,
+            reset_fields,
+        })
+    }
+
+    fn finish_load(&mut self) {
+        self.normalize();
+        self.migrate_directional_displays();
+    }
+
+    /// Serializes the config, always stamped with [`CONFIG_SCHEMA_VERSION`].
     pub fn to_json(&self) -> Result<String, ConfigError> {
-        Ok(serde_json::to_string_pretty(self)?)
+        Ok(serde_json::to_string_pretty(&VersionedConfig {
+            schema_version: CONFIG_SCHEMA_VERSION,
+            config: self,
+        })?)
     }
 
     /// Drops invalid bindings and clamps out-of-range values so a hand-edited
@@ -1995,6 +2107,97 @@ mod tests {
         let config = Config::from_json(r#"{"cycleSizes": []}"#).unwrap();
         assert!(config.cycle_sizes().is_empty());
         assert!(!config.cycles_sizes());
+    }
+
+    fn saved_value(config: &Config) -> serde_json::Value {
+        serde_json::from_str(&config.to_json().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn to_json_writes_the_current_schema_version() {
+        let value = saved_value(&Config::default());
+        assert_eq!(value["schemaVersion"], CONFIG_SCHEMA_VERSION);
+        let loaded = Config::from_json_lenient(&value.to_string()).unwrap();
+        assert_eq!(loaded.schema_version, CONFIG_SCHEMA_VERSION);
+        assert!(loaded.reset_fields.is_empty());
+        assert_eq!(loaded.config, Config::default());
+    }
+
+    #[test]
+    fn a_config_without_a_schema_version_is_legacy() {
+        let loaded = Config::from_json_lenient(r#"{"gap": 8, "launchOnLogin": false}"#).unwrap();
+        assert_eq!(loaded.schema_version, LEGACY_SCHEMA_VERSION);
+        assert!(!loaded.is_newer_schema());
+        assert!(loaded.reset_fields.is_empty());
+        assert!(!loaded.config.launch_on_login);
+    }
+
+    #[test]
+    fn one_wrong_typed_field_resets_only_that_field() {
+        let mut value = saved_value(&Config {
+            launch_on_login: false,
+            gaps: Gaps::uniform(17.0),
+            ..Config::default()
+        });
+        value["sizeStep"] = serde_json::json!("not a number");
+        let loaded = Config::from_json_lenient(&value.to_string()).unwrap();
+        assert_eq!(loaded.reset_fields, vec!["sizeStep".to_owned()]);
+        assert_eq!(loaded.config.size_step, Config::default().size_step);
+        assert!(!loaded.config.launch_on_login);
+        assert_eq!(loaded.config.gaps, Gaps::uniform(17.0));
+        // The strict parser still rejects the same file outright.
+        assert!(Config::from_json(&value.to_string()).is_err());
+    }
+
+    #[test]
+    fn a_bad_binding_entry_drops_only_that_entry() {
+        let mut value = saved_value(&Config::default());
+        let bindings = value["bindings"].as_object_mut().unwrap();
+        bindings.insert("not-an-action".into(), serde_json::json!(null));
+        bindings.insert("maximize".into(), serde_json::json!(42));
+        let loaded = Config::from_json_lenient(&value.to_string()).unwrap();
+        let mut reset = loaded.reset_fields.clone();
+        reset.sort();
+        assert_eq!(reset, vec!["bindings.maximize", "bindings.not-an-action"]);
+        assert_eq!(loaded.config.binding(WindowAction::Maximize), None);
+        assert_eq!(
+            loaded.config.binding(WindowAction::LeftHalf),
+            Config::default().binding(WindowAction::LeftHalf)
+        );
+    }
+
+    #[test]
+    fn a_non_object_bindings_value_resets_to_defaults() {
+        let loaded = Config::from_json_lenient(r#"{"bindings": [1, 2]}"#).unwrap();
+        assert_eq!(loaded.reset_fields, vec!["bindings".to_owned()]);
+        assert_eq!(loaded.config.bindings, Config::default().bindings);
+    }
+
+    #[test]
+    fn a_newer_schema_version_still_loads_what_it_can() {
+        let mut value = saved_value(&Config {
+            launch_on_login: false,
+            ..Config::default()
+        });
+        value["schemaVersion"] = serde_json::json!(CONFIG_SCHEMA_VERSION + 1);
+        value["somethingFromTheFuture"] = serde_json::json!({"x": 1});
+        let loaded = Config::from_json_lenient(&value.to_string()).unwrap();
+        assert!(loaded.is_newer_schema());
+        assert!(loaded.reset_fields.is_empty());
+        assert!(!loaded.config.launch_on_login);
+    }
+
+    #[test]
+    fn a_wrong_typed_schema_version_is_reported_and_treated_as_legacy() {
+        let loaded = Config::from_json_lenient(r#"{"schemaVersion": "two"}"#).unwrap();
+        assert_eq!(loaded.schema_version, LEGACY_SCHEMA_VERSION);
+        assert_eq!(loaded.reset_fields, vec!["schemaVersion".to_owned()]);
+    }
+
+    #[test]
+    fn lenient_parsing_rejects_non_objects_and_bad_json() {
+        assert!(Config::from_json_lenient("[1, 2]").is_err());
+        assert!(Config::from_json_lenient("{ nope").is_err());
     }
 
     #[test]

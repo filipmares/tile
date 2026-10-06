@@ -146,9 +146,13 @@ The step sizes (`sizeStep`, `widthStep` and `moveStep`, each defaulting to 30)
 and the floor (`minimumWindowWidth`, `minimumWindowHeight`, defaulting to 0.25)
 live in `config.json`; there is no settings UI for them yet.
 
-If `config.json` cannot be read — say, after a hand edit leaves it invalid —
-Tile starts from defaults, keeps the old file next to it as
-`config.corrupt-<timestamp>.json`, and opens Settings once to say so.
+`config.json` carries a `schemaVersion` (currently `1`; a file without one is
+treated as version 1). Settings are read one at a time, so a hand edit that
+leaves one value with the wrong type resets only that value. If `config.json`
+cannot be read at all — say, after a hand edit leaves it invalid JSON — Tile
+starts from defaults. Either way, and also when the file comes from a newer
+Tile, the original is kept next to it as `config.corrupt-<timestamp>.json`
+(the newest five are kept) and Settings opens once to say so.
 
 ### Animated snapping
 
