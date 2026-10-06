@@ -217,6 +217,15 @@ pub trait HotkeyBackend: Send {
     /// hotkeys.
     fn apply(&mut self, bindings: &[HotkeyBinding]) -> Result<HotkeyApplyReport>;
 
+    /// Installs the callback that hears about status changes the backend
+    /// makes on its own, such as routes moving during recovery after sleep or
+    /// unlock, or the keyboard hook becoming unavailable. Reports returned by
+    /// [`HotkeyBackend::apply`] are not repeated here.
+    ///
+    /// The listener may run on the backend's own thread and must not block.
+    /// Backends that never change status by themselves ignore it.
+    fn set_status_listener(&mut self, _listener: HotkeyStatusListener) {}
+
     /// Releases every hotkey and stops any background thread.
     fn shutdown(&mut self);
 }
@@ -250,10 +259,21 @@ pub struct HotkeyBindingStatus {
 pub struct HotkeyApplyReport {
     pub bindings: Vec<HotkeyBindingStatus>,
     pub hook_installed: bool,
+    /// The keyboard hook that intercepted shortcuts depend on could not be
+    /// installed several times in a row. Those shortcuts do nothing until it
+    /// recovers; the backend keeps retrying.
+    pub hook_unavailable: bool,
     /// A non-fatal cleanup problem. The binding routes are current, but the
     /// backend could not fully release obsolete native state.
     pub warning: Option<String>,
+    /// Increases with every report a backend produces, so a report published
+    /// by recovery and one returned by `apply` can be put in order. Backends
+    /// that never publish on their own leave it at zero.
+    pub revision: u64,
 }
+
+/// Receives reports a [`HotkeyBackend`] publishes on its own.
+pub type HotkeyStatusListener = Box<dyn Fn(HotkeyApplyReport) + Send + 'static>;
 
 impl HotkeyApplyReport {
     pub fn unavailable(&self) -> impl Iterator<Item = &HotkeyBindingStatus> {

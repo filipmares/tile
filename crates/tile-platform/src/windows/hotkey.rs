@@ -71,7 +71,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::{
     HotkeyApplyReport, HotkeyBackend, HotkeyBinding, HotkeyBindingStatus, HotkeyRoute,
-    PlatformError, Result,
+    HotkeyStatusListener, PlatformError, Result,
 };
 
 const COMMAND_MESSAGE: u32 = WM_APP + 0x544;
@@ -104,6 +104,10 @@ const SILENT_REARM_MAX_BACKOFF_MS: u32 = 30 * 60_000;
 const LATENCY_REARM_MIN_GAP_MS: u32 = 10_000;
 /// Lifecycle notifications often arrive in bursts (resume, display on, unlock).
 const LIFECYCLE_COALESCE_MS: u32 = 2_000;
+/// Consecutive `SetWindowsHookExW` failures after which the hook is reported
+/// unavailable. One failure is usually transient and fixed by the next retry;
+/// several in a row mean intercepted shortcuts are dead until it recovers.
+const HOOK_FAILURE_THRESHOLD: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct HookBinding {
@@ -442,6 +446,72 @@ impl HookWatchdog {
     }
 }
 
+/// Counts consecutive keyboard-hook installation failures.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct HookHealth {
+    consecutive_failures: u32,
+}
+
+impl HookHealth {
+    /// Returns whether this failure is the one that crosses the threshold.
+    fn record_failure(&mut self) -> bool {
+        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        self.consecutive_failures == HOOK_FAILURE_THRESHOLD
+    }
+
+    /// Returns whether the hook was unavailable before this success.
+    fn record_success(&mut self) -> bool {
+        let was_failing = self.consecutive_failures >= HOOK_FAILURE_THRESHOLD;
+        self.consecutive_failures = 0;
+        was_failing
+    }
+
+    /// Only matters while some binding actually depends on the hook.
+    fn unavailable(&self, hook_needed: bool) -> bool {
+        hook_needed && self.consecutive_failures >= HOOK_FAILURE_THRESHOLD
+    }
+}
+
+/// Where a binding from the last apply is served now that recovery may have
+/// moved it. A binding nothing owns keeps its applied status: it was never
+/// live, or apply already reported why.
+fn recovered_status(
+    applied: &HotkeyBindingStatus,
+    registered: bool,
+    intercepted: bool,
+    pending: bool,
+) -> HotkeyBindingStatus {
+    let (route, reason) = if registered {
+        (HotkeyRoute::Registered, None)
+    } else if intercepted {
+        let reason = if applied.route == HotkeyRoute::Intercepted {
+            applied.reason.clone()
+        } else {
+            Some("already owned by Windows or another application".to_string())
+        };
+        (HotkeyRoute::Intercepted, reason)
+    } else if pending {
+        (
+            HotkeyRoute::Unavailable,
+            Some(
+                "Windows did not accept it again after sleep or unlock; Tile will keep retrying"
+                    .to_string(),
+            ),
+        )
+    } else {
+        return applied.clone();
+    };
+    status(applied.binding, route, reason)
+}
+
+/// Whether two reports describe the same status, ignoring their revisions.
+fn same_status(left: &HotkeyApplyReport, right: &HotkeyApplyReport) -> bool {
+    left.bindings == right.bindings
+        && left.hook_installed == right.hook_installed
+        && left.hook_unavailable == right.hook_unavailable
+        && left.warning == right.warning
+}
+
 enum Command {
     Start,
     Apply {
@@ -519,7 +589,14 @@ struct OwnerState {
     /// recovery. Kept apart from `registered` so `apply` never treats them as
     /// live registrations it could reuse; retried on every lifecycle recovery.
     pending: Vec<HotkeyBinding>,
+    hook_health: HookHealth,
+    /// The status the app last heard, from an apply reply or a publish.
+    published: Option<HotkeyApplyReport>,
+    revision: u64,
+    listener: SharedListener,
 }
+
+type SharedListener = std::sync::Arc<std::sync::Mutex<Option<HotkeyStatusListener>>>;
 
 const NOTIFICATION_CLASS: PCWSTR = w!("TileHotkeyNotifications");
 
@@ -662,6 +739,7 @@ pub struct WindowsHotkeyBackend {
     thread: Option<JoinHandle<()>>,
     thread_id: u32,
     shutdown_done: bool,
+    listener: SharedListener,
 }
 
 impl WindowsHotkeyBackend {
@@ -670,9 +748,19 @@ impl WindowsHotkeyBackend {
         let (ready_tx, ready_rx) = mpsc::channel();
         let startup_cancelled = std::sync::Arc::new(AtomicBool::new(false));
         let thread_cancelled = std::sync::Arc::clone(&startup_cancelled);
+        let listener = SharedListener::default();
+        let thread_listener = std::sync::Arc::clone(&listener);
         let handle = thread::Builder::new()
             .name("tile-hotkey-owner".to_string())
-            .spawn(move || owner_thread_main(events, command_rx, ready_tx, thread_cancelled))
+            .spawn(move || {
+                owner_thread_main(
+                    events,
+                    command_rx,
+                    ready_tx,
+                    thread_cancelled,
+                    thread_listener,
+                )
+            })
             .map_err(|e| PlatformError::os("spawn hotkey thread", e.to_string()))?;
 
         let thread_id = match ready_rx.recv_timeout(COMMAND_TIMEOUT) {
@@ -705,6 +793,7 @@ impl WindowsHotkeyBackend {
             thread: Some(handle),
             thread_id,
             shutdown_done: false,
+            listener,
         })
     }
 
@@ -755,6 +844,13 @@ impl HotkeyBackend for WindowsHotkeyBackend {
         }
     }
 
+    fn set_status_listener(&mut self, listener: HotkeyStatusListener) {
+        *self
+            .listener
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(listener);
+    }
+
     fn shutdown(&mut self) {
         if self.shutdown_done {
             return;
@@ -781,6 +877,7 @@ fn owner_thread_main(
     commands: Receiver<Command>,
     ready: Sender<Result<u32>>,
     startup_cancelled: std::sync::Arc<AtomicBool>,
+    listener: SharedListener,
 ) {
     unsafe {
         let module = match GetModuleHandleW(PCWSTR::null()) {
@@ -810,6 +907,10 @@ fn owner_thread_main(
             watchdog_timer: 0,
             last_lifecycle_recovery: None,
             pending: Vec::new(),
+            hook_health: HookHealth::default(),
+            published: None,
+            revision: 0,
+            listener,
         };
         HOOK_DISPATCH.with(|dispatch| {
             *dispatch.borrow_mut() = Some(HookDispatch {
@@ -911,7 +1012,13 @@ fn drain_commands(commands: &Receiver<Command>, owner: &mut OwnerState) -> bool 
                     owner.apply(&bindings, deadline, &control)
                 };
                 owner.sync_watchdog();
+                let failed = result.is_err();
                 let _ = reply.send(result);
+                // A failed apply leaves the previous set live, but may have
+                // changed the hook's health along the way.
+                if failed {
+                    owner.publish_status();
+                }
             }
             Command::Shutdown => return false,
         }
@@ -1125,9 +1232,14 @@ impl OwnerState {
         let report = HotkeyApplyReport {
             bindings: statuses,
             hook_installed: self.hook.is_some(),
+            hook_unavailable: self
+                .hook_health
+                .unavailable(!current_hook_bindings().is_empty()),
             warning,
+            revision: self.next_revision(),
         };
         Self::log_apply_report(&report);
+        self.published = Some(report.clone());
         Ok(report)
     }
 
@@ -1198,23 +1310,38 @@ impl OwnerState {
     }
 
     fn install_hook(&mut self) -> Result<()> {
-        let hook = Self::set_hook(self.module)?;
+        let hook = self.set_hook()?;
         self.hook = Some(hook);
         self.watchdog
             .restart(now_tick(), HOOK_LAST_EVENT.load(Ordering::Relaxed));
         Ok(())
     }
 
-    fn set_hook(module: HINSTANCE) -> Result<HHOOK> {
-        let hook = unsafe {
+    fn set_hook(&mut self) -> Result<HHOOK> {
+        let result = unsafe {
             SetWindowsHookExW(
                 WH_KEYBOARD_LL,
                 Some(low_level_keyboard_proc),
-                Some(module),
+                Some(self.module),
                 0,
             )
-            .map_err(|e| PlatformError::os("SetWindowsHookExW", e.message()))?
         };
+        let hook = match result {
+            Ok(hook) => hook,
+            Err(err) => {
+                if self.hook_health.record_failure() {
+                    log::error!(
+                        "Windows keyboard hook failed {HOOK_FAILURE_THRESHOLD} times in a row; \
+                         intercepted shortcuts are unavailable until it recovers: {}",
+                        err.message()
+                    );
+                }
+                return Err(PlatformError::os("SetWindowsHookExW", err.message()));
+            }
+        };
+        if self.hook_health.record_success() {
+            log::info!("Windows keyboard hook is available again");
+        }
         // Silence is measured from (re)installation, not from the last event
         // a previous, possibly dead, hook saw.
         HOOK_LAST_EVENT.store(now_tick(), Ordering::Relaxed);
@@ -1232,7 +1359,7 @@ impl OwnerState {
             HookArm::Installed => self.install_hook()?,
             HookArm::Rearmed => {
                 let old = self.hook.take().expect("hook_arm saw a hook");
-                match Self::set_hook(self.module) {
+                match self.set_hook() {
                     Ok(new) => self.hook = Some(new),
                     Err(err) => {
                         self.hook = Some(old);
@@ -1292,6 +1419,65 @@ impl OwnerState {
         // Any late callback observed so far is covered by this recovery.
         HOOK_LATE.store(0, Ordering::Relaxed);
         self.sync_watchdog();
+        self.publish_status();
+    }
+
+    fn next_revision(&mut self) -> u64 {
+        self.revision += 1;
+        self.revision
+    }
+
+    /// The last applied report with each binding's route brought up to date.
+    fn current_report(&self, applied: &HotkeyApplyReport) -> HotkeyApplyReport {
+        let hook_table = current_hook_bindings();
+        let bindings = applied
+            .bindings
+            .iter()
+            .map(|status| {
+                let binding = status.binding;
+                recovered_status(
+                    status,
+                    self.registered
+                        .iter()
+                        .any(|owned| owned.enabled && owned.binding == binding),
+                    hook_table.contains(&to_hook_binding(binding)),
+                    self.pending.contains(&binding),
+                )
+            })
+            .collect();
+        HotkeyApplyReport {
+            bindings,
+            hook_installed: self.hook.is_some(),
+            hook_unavailable: self.hook_health.unavailable(!hook_table.is_empty()),
+            warning: applied.warning.clone(),
+            revision: applied.revision,
+        }
+    }
+
+    /// Tells the listener when recovery or the hook's health changed what the
+    /// app last heard. Before the first apply there is nothing to compare.
+    fn publish_status(&mut self) {
+        let Some(previous) = self.published.as_ref() else {
+            return;
+        };
+        let mut report = self.current_report(previous);
+        if same_status(&report, previous) {
+            return;
+        }
+        report.revision = self.next_revision();
+        log::info!(
+            "Windows hotkey status changed (hook_installed={}, hook_unavailable={})",
+            report.hook_installed,
+            report.hook_unavailable
+        );
+        self.published = Some(report.clone());
+        let listener = self
+            .listener
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(listener) = listener.as_ref() {
+            listener(report);
+        }
     }
 
     /// Re-registers every active native hotkey and retries the ones a previous
@@ -1449,6 +1635,7 @@ impl OwnerState {
     fn watchdog_tick(&mut self) {
         if !self.pending.is_empty() {
             self.retry_pending_from_watchdog();
+            self.publish_status();
         }
         // Sampled after the retry: installing a fallback hook restarts the
         // watchdog with a newer tick, and an older `now` would wrap into a
@@ -2747,6 +2934,109 @@ mod tests {
         let mut dog = HookWatchdog::new(0, 0);
         dog.restart(10_000, 0);
         assert_eq!(dog.on_tick(sample(9_990, 0, 0)), None);
+    }
+
+    #[test]
+    fn hook_is_unavailable_only_after_repeated_failures_and_recovers_on_success() {
+        let mut health = HookHealth::default();
+        for attempt in 1..HOOK_FAILURE_THRESHOLD {
+            assert!(
+                !health.record_failure(),
+                "failure {attempt} is not yet the threshold"
+            );
+            assert!(!health.unavailable(true));
+        }
+        assert!(
+            health.record_failure(),
+            "the threshold is crossed exactly once"
+        );
+        assert!(health.unavailable(true));
+        assert!(
+            !health.record_failure(),
+            "later failures do not re-announce it"
+        );
+        assert!(health.unavailable(true));
+        assert!(
+            !health.unavailable(false),
+            "a hook no binding needs is never reported"
+        );
+
+        assert!(health.record_success(), "success reports the recovery");
+        assert!(!health.unavailable(true));
+        assert!(
+            !health.record_success(),
+            "a healthy hook has nothing to recover from"
+        );
+    }
+
+    #[test]
+    fn a_success_between_failures_restarts_the_count() {
+        let mut health = HookHealth::default();
+        health.record_failure();
+        health.record_failure();
+        assert!(!health.record_success());
+        health.record_failure();
+        assert!(!health.unavailable(true));
+    }
+
+    fn left_half() -> HotkeyBinding {
+        HotkeyBinding {
+            hotkey: Hotkey::new(Modifiers::META | Modifiers::ALT, KeyCode::Left),
+            action: WindowAction::LeftHalf,
+            repeat: false,
+        }
+    }
+
+    #[test]
+    fn recovery_moves_routes_and_keeps_apply_time_reasons() {
+        let registered = status(left_half(), HotkeyRoute::Registered, None);
+        let moved = recovered_status(&registered, false, true, false);
+        assert_eq!(moved.route, HotkeyRoute::Intercepted);
+        assert!(moved.reason.is_some());
+
+        let waiting = recovered_status(&registered, false, false, true);
+        assert_eq!(waiting.route, HotkeyRoute::Unavailable);
+        assert!(waiting
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("keep retrying")));
+
+        let restored = recovered_status(&waiting, true, false, false);
+        assert_eq!(restored, registered);
+
+        let enter = status(
+            left_half(),
+            HotkeyRoute::Intercepted,
+            Some("uses the hook to preserve Enter key identity".into()),
+        );
+        assert_eq!(recovered_status(&enter, false, true, false), enter);
+
+        let impossible = unavailable(left_half(), "reserved");
+        assert_eq!(
+            recovered_status(&impossible, false, false, false),
+            impossible
+        );
+    }
+
+    #[test]
+    fn status_comparison_ignores_the_revision() {
+        let report = HotkeyApplyReport {
+            bindings: vec![status(left_half(), HotkeyRoute::Registered, None)],
+            hook_installed: true,
+            hook_unavailable: false,
+            warning: None,
+            revision: 1,
+        };
+        let later = HotkeyApplyReport {
+            revision: 7,
+            ..report.clone()
+        };
+        assert!(same_status(&report, &later));
+        let degraded = HotkeyApplyReport {
+            hook_unavailable: true,
+            ..report.clone()
+        };
+        assert!(!same_status(&report, &degraded));
     }
 
     #[test]

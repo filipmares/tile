@@ -2139,7 +2139,9 @@ impl HotkeyBackend for MacHotkeyBackend {
         Ok(HotkeyApplyReport {
             bindings: statuses,
             hook_installed: false,
+            hook_unavailable: false,
             warning: None,
+            revision: 0,
         })
     }
 

@@ -19,6 +19,7 @@ export const dom = {
   assignedBindings: el<HTMLUListElement>("#assigned-bindings"),
   allShortcutsCount: el<HTMLSpanElement>("#all-shortcuts-count"),
   shortcutFilter: el<HTMLInputElement>("#shortcut-filter"),
+  hotkeyHookWarning: el<HTMLParagraphElement>("#hotkey-hook-warning"),
   hotkeyApplyError: el<HTMLParagraphElement>("#hotkey-apply-error"),
   recordingStatus: el<HTMLParagraphElement>("#recording-status"),
   bindingError: el<HTMLParagraphElement>("#binding-error"),

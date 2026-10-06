@@ -42,6 +42,10 @@ const ID_UPDATE: &str = "update";
 /// Menu item id for the disabled development-build header. It is never
 /// clickable, so it deliberately matches nothing in the event handler.
 const ID_DEV_HEADER: &str = "development-header";
+/// Menu item id for the disabled warning shown while shortcuts are degraded.
+/// Like the header, it is never clickable.
+const ID_HOTKEY_WARNING: &str = "hotkey-warning";
+const HOTKEY_WARNING_LABEL: &str = "Some shortcuts aren't working right now";
 /// Prefix for menu item ids that perform a window action.
 const ACTION_ID_PREFIX: &str = "action:";
 
@@ -283,7 +287,10 @@ pub fn build_tray<R: Runtime>(app: &AppHandle<R>, kind: BuildKind) -> tauri::Res
     let menu = build_menu(app, kind, &status)?;
 
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
-        .tooltip(tray_tooltip(kind, &status))
+        .tooltip(with_hotkey_note(
+            tray_tooltip(kind, &status),
+            hotkeys_degraded(app),
+        ))
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(move |app, event| handle_menu_event(app, event.id.as_ref(), kind));
@@ -315,6 +322,21 @@ fn build_menu<R: Runtime>(
         )),
         None => None,
     };
+    // Disabled, so it explains rather than offers: Tile is already retrying.
+    let hotkey_warning = if hotkeys_degraded(app) {
+        Some((
+            MenuItem::with_id(
+                app,
+                ID_HOTKEY_WARNING,
+                HOTKEY_WARNING_LABEL,
+                false,
+                None::<&str>,
+            )?,
+            PredefinedMenuItem::separator(app)?,
+        ))
+    } else {
+        None
+    };
 
     let settings = MenuItem::with_id(app, ID_SETTINGS, "Settings…", true, None::<&str>)?;
     let (update_label, update_enabled) = update_menu_state(update_status);
@@ -330,6 +352,10 @@ fn build_menu<R: Runtime>(
     if let Some((header, dev_separator)) = &dev_header {
         items.push(header);
         items.push(dev_separator);
+    }
+    if let Some((warning, warning_separator)) = &hotkey_warning {
+        items.push(warning);
+        items.push(warning_separator);
     }
     items.extend(actions.iter().map(|item| item.as_ref()));
     items.push(&actions_separator);
@@ -472,6 +498,22 @@ fn tray_tooltip(kind: BuildKind, status: &UpdateStatus) -> String {
     }
 }
 
+/// Whether the hotkey backend reports shortcuts it cannot serve right now.
+fn hotkeys_degraded<R: Runtime>(app: &AppHandle<R>) -> bool {
+    app.state::<Arc<AppState>>()
+        .hotkey_status()
+        .report
+        .is_some_and(|report| report.hook_unavailable)
+}
+
+fn with_hotkey_note(tooltip: String, degraded: bool) -> String {
+    if degraded {
+        format!("{tooltip} — some shortcuts aren't working")
+    } else {
+        tooltip
+    }
+}
+
 fn ready_version(status: &UpdateStatus) -> Option<&str> {
     #[cfg(target_os = "macos")]
     if let UpdateStatus::ReadyToRelaunch { version } = status {
@@ -515,7 +557,10 @@ pub fn sync_update_state<R: Runtime>(app: &AppHandle<R>, status: &UpdateStatus) 
         }
         Err(err) => log::warn!("could not rebuild tray menu: {err}"),
     }
-    if let Err(err) = tray.set_tooltip(Some(tray_tooltip(kind, status))) {
+    if let Err(err) = tray.set_tooltip(Some(with_hotkey_note(
+        tray_tooltip(kind, status),
+        hotkeys_degraded(app),
+    ))) {
         log::warn!("could not update tray tooltip: {err}");
     }
     if let Some(icon) = tray_icon(app, kind, status) {
@@ -679,6 +724,15 @@ mod tests {
             ),
             "Tile — 1.2.3 available"
         );
+    }
+
+    #[test]
+    fn degraded_shortcuts_add_a_note_to_the_tooltip_until_they_recover() {
+        assert_eq!(
+            with_hotkey_note("Tile".into(), true),
+            "Tile — some shortcuts aren't working"
+        );
+        assert_eq!(with_hotkey_note("Tile".into(), false), "Tile");
     }
 
     #[cfg(target_os = "macos")]

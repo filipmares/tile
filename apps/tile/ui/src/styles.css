@@ -252,6 +252,16 @@ body {
   color: var(--danger);
 }
 
+/* Something is wrong but Tile is already handling it: say so plainly, without
+   the alarm of --danger. */
+.section__hint--warning {
+  padding: 6px 10px;
+  border: 1px solid var(--warning-border);
+  border-radius: 6px;
+  background: var(--warning-bg);
+  color: var(--text);
+}
+
 /* A failed settings change, explained beside the control it belongs to. */
 .field__error {
   margin: 4px 0 0;

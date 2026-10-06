@@ -343,11 +343,15 @@ pub fn get_permission_status(
 
 #[tauri::command]
 pub fn get_hotkey_status(state: State<'_, Shared>) -> HotkeyStatusDto {
-    let status = state.hotkey_status();
+    hotkey_status_dto(state.hotkey_status())
+}
+
+/// The status as the settings UI reads it, both on request and from the
+/// `hotkey-status-changed` event.
+pub fn hotkey_status_dto(status: crate::state::HotkeyStatus) -> HotkeyStatusDto {
+    let report = status.report.as_ref();
     HotkeyStatusDto {
-        bindings: status
-            .report
-            .as_ref()
+        bindings: report
             .map(|report| {
                 report
                     .bindings
@@ -356,10 +360,8 @@ pub fn get_hotkey_status(state: State<'_, Shared>) -> HotkeyStatusDto {
                     .collect()
             })
             .unwrap_or_default(),
-        hook_installed: status
-            .report
-            .as_ref()
-            .is_some_and(|report| report.hook_installed),
+        hook_installed: report.is_some_and(|report| report.hook_installed),
+        hook_unavailable: report.is_some_and(|report| report.hook_unavailable),
         apply_error: status.apply_error,
     }
 }
