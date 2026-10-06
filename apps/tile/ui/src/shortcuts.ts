@@ -3,14 +3,15 @@
 
 import { listen } from "@tauri-apps/api/event";
 import { getHotkeyStatus, setBinding } from "./api";
+import { confirmDialog } from "./confirm";
 import { dom } from "./dom";
 import {
+  actionsUsing,
   formatHotkey,
-  hasAltGrRisk,
+  hotkeyProblem,
+  hotkeyWarnings,
   interpret,
   isMac,
-  knownWindowsShortcutWarning,
-  windowsHotkeyProblem,
 } from "./hotkey";
 import { renderWholeConfig, saveSetting } from "./settings";
 import { config } from "./state";
@@ -38,7 +39,7 @@ const STRINGS = {
   unbound: "Unbound",
   clearLabel: (label: string) => `Clear shortcut for ${label}`,
   clearGlyph: "✕",
-  conflict: "This shortcut is used by more than one action.",
+  conflict: (others: string) => `This shortcut is also used by ${others}.`,
   unavailable: (reason: string | null | undefined) =>
     `This shortcut is unavailable: ${reason ?? "Windows rejected it."}`,
   unconfirmed:
@@ -47,11 +48,29 @@ const STRINGS = {
     `Recording ${label}. Press a shortcut, Esc to cancel, Backspace to clear.`,
   cancelled: "Recording cancelled.",
   cleared: "Shortcut cleared.",
-  altGrConfirm:
-    "Windows treats Ctrl+Alt as AltGr on many keyboard layouts. This shortcut may prevent typing characters such as @, €, {, or }. Save it anyway?",
-  warningConfirm: (warning: string) => `${warning}\n\nSave it anyway?`,
+  warningTitle: (chord: string) => `Use ${chord} anyway?`,
+  saveAnyway: "Use it anyway",
+  takenTitle: (chord: string, others: string) =>
+    `${chord} is already used by ${others}.`,
+  takenMessage: (label: string, others: string) =>
+    `Replace moves it to ${label}, and ${others} will have no shortcut.`,
+  replace: "Replace",
   notSaved: "Shortcut was not saved.",
 };
+
+/** Joins action labels for a sentence: "A", "A and B", "A, B and C". */
+function listLabels(labels: string[]): string {
+  if (labels.length <= 1) return labels.join("");
+  return `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
+}
+
+function labelFor(action: WindowAction): string {
+  return ACTIONS.find((a) => a.id === action)?.label ?? action;
+}
+
+const ACTION_ORDER: readonly WindowAction[] = ACTIONS.map(({ id }) => id);
+
+type Scope = "assigned" | "all";
 
 let hotkeyStatus: HotkeyStatus = {
   bindings: [],
@@ -60,27 +79,62 @@ let hotkeyStatus: HotkeyStatus = {
   applyError: null,
 };
 let recording: WindowAction | null = null;
+/** Which list the row being recorded is in, so focus can go back to it. */
+let recordingScope: Scope = "all";
 /** Current text in the shortcut filter. Empty means "show everything". */
 let shortcutFilter = "";
 /** The user's family open/closed state, stashed while a filter is active. */
 let openBeforeFilter: Set<string> | null = null;
 
-/** Actions sharing a hotkey (only possible from a hand-edited config). */
-function conflictingActions(cfg: Config): Set<WindowAction> {
-  const seen = new Map<string, WindowAction[]>();
+/**
+ * For each action sharing its hotkey with others (only possible from a
+ * hand-edited config), the other actions it shares it with.
+ */
+function conflictingActions(cfg: Config): Map<WindowAction, WindowAction[]> {
+  const clashing = new Map<WindowAction, WindowAction[]>();
   for (const { id } of ACTIONS) {
     const hk = cfg.bindings[id];
     if (!hk) continue;
-    const key = `${hk.modifiers}:${hk.key}`;
-    const list = seen.get(key) ?? [];
-    list.push(id);
-    seen.set(key, list);
-  }
-  const clashing = new Set<WindowAction>();
-  for (const list of seen.values()) {
-    if (list.length > 1) list.forEach((a) => clashing.add(a));
+    const others = actionsUsing(cfg.bindings, hk, id, ACTION_ORDER);
+    if (others.length > 0) clashing.set(id, others);
   }
   return clashing;
+}
+
+/**
+ * The shortcut button for `action` in `scope`, or in the full list if that
+ * row is gone. A row in the full list may sit in a closed family, where it
+ * cannot take focus, so its disclosures are opened on the way.
+ */
+function bindingButton(
+  action: WindowAction,
+  scope: Scope,
+): HTMLButtonElement | null {
+  const button =
+    document.querySelector<HTMLButtonElement>(`#key-${scope}-${action}`) ??
+    document.querySelector<HTMLButtonElement>(`#key-all-${action}`);
+  for (
+    let details = button?.closest("details") ?? null;
+    details !== null;
+    details = details.parentElement?.closest("details") ?? null
+  ) {
+    details.open = true;
+  }
+  return button;
+}
+
+/**
+ * Puts focus back on the row that had it before a re-render replaced it. A
+ * clear button that no longer exists hands focus to its row's shortcut
+ * button, and a row that left the assigned list to the same row in the full
+ * list.
+ */
+function restoreBindingFocus(id: string): void {
+  const match = /^(?:key|clear)-(assigned|all)-(.+)$/.exec(id);
+  const target =
+    document.getElementById(id) ??
+    (match ? bindingButton(match[2] as WindowAction, match[1] as Scope) : null);
+  target?.focus();
 }
 
 function sameHotkey(left: Hotkey, right: Hotkey): boolean {
@@ -130,8 +184,19 @@ export async function listenForHotkeyStatus(): Promise<void> {
 export function renderBindings(): void {
   if (!config) return;
   renderHotkeyHealth();
+  const active = document.activeElement;
+  const focusedId =
+    active instanceof HTMLElement &&
+    active.id &&
+    (dom.bindings.contains(active) || dom.assignedBindings.contains(active))
+      ? active.id
+      : null;
+  renderBindingLists(config);
+  if (focusedId) restoreBindingFocus(focusedId);
+}
+
+function renderBindingLists(cfg: Config): void {
   renderHotkeyApplyError();
-  const cfg = config;
   const conflicts = conflictingActions(cfg);
   const assignedActions = ACTIONS.filter(({ id }) => cfg.bindings[id]);
   dom.assignedBindings.replaceChildren();
@@ -252,10 +317,10 @@ export function renderBindings(): void {
 
 function renderBinding(
   cfg: Config,
-  conflicts: Set<WindowAction>,
+  conflicts: Map<WindowAction, WindowAction[]>,
   id: WindowAction,
   label: string,
-  scope: "assigned" | "all",
+  scope: Scope,
 ): HTMLLIElement {
   const hk = cfg.bindings[id] ?? null;
 
@@ -282,13 +347,14 @@ function renderBinding(
     record.textContent = hk ? formatHotkey(hk) : STRINGS.unbound;
     if (!hk) record.classList.add("binding__key--empty");
   }
-  record.addEventListener("click", () => startRecording(id));
+  record.addEventListener("click", () => startRecording(id, scope));
   controls.append(record);
 
   if (hk && recording !== id) {
     const clear = document.createElement("button");
     clear.type = "button";
     clear.className = "binding__clear";
+    clear.id = `clear-${scope}-${id}`;
     clear.setAttribute("aria-label", STRINGS.clearLabel(label));
     clear.textContent = STRINGS.clearGlyph;
     clear.addEventListener("click", () => void applyBinding(id, null));
@@ -297,24 +363,34 @@ function renderBinding(
 
   li.append(name, controls);
 
+  // Each note describes the shortcut button it sits under, so a screen reader
+  // hears it on reaching the button rather than only by reading on.
   const route = statusFor(id, hk);
-  if (conflicts.has(id)) {
-    li.append(note(STRINGS.conflict, "error"));
+  const others = conflicts.get(id);
+  let text: string | null = null;
+  let invalid = false;
+  if (others) {
+    text = STRINGS.conflict(listLabels(others.map(labelFor)));
+    invalid = true;
   } else if (route?.route === "unavailable") {
-    li.append(
-      note(STRINGS.unavailable(route.reason), "error"),
-    );
+    text = STRINGS.unavailable(route.reason);
+    invalid = true;
   } else if (hk && hotkeyStatus.applyError) {
-    li.append(
-      note(STRINGS.unconfirmed, "error"),
-    );
+    text = STRINGS.unconfirmed;
+  }
+  if (text !== null) {
+    const noteId = `note-${scope}-${id}`;
+    li.append(note(noteId, text, "error"));
+    record.setAttribute("aria-describedby", noteId);
+    if (invalid) record.setAttribute("aria-invalid", "true");
   }
 
   return li;
 }
 
-function note(text: string, kind: "error" | "info"): HTMLElement {
+function note(id: string, text: string, kind: "error" | "info"): HTMLElement {
   const p = document.createElement("p");
+  p.id = id;
   p.className = `binding__note binding__note--${kind}`;
   p.textContent = text;
   return p;
@@ -324,18 +400,21 @@ export function setRecordingStatus(text: string): void {
   dom.recordingStatus.textContent = text;
 }
 
-function startRecording(action: WindowAction): void {
+function startRecording(action: WindowAction, scope: Scope): void {
   recording = action;
-  const label = ACTIONS.find((a) => a.id === action)?.label ?? action;
-  setRecordingStatus(STRINGS.recording(label));
+  recordingScope = scope;
+  setRecordingStatus(STRINGS.recording(labelFor(action)));
   renderBindings();
   window.addEventListener("keydown", onRecordKey, { capture: true });
 }
 
+/** Ends recording and hands focus back to the row that was recorded. */
 function stopRecording(): void {
+  const action = recording;
   recording = null;
   window.removeEventListener("keydown", onRecordKey, { capture: true });
   renderBindings();
+  if (action !== null) bindingButton(action, recordingScope)?.focus();
 }
 
 function onRecordKey(e: KeyboardEvent): void {
@@ -362,40 +441,79 @@ function onRecordKey(e: KeyboardEvent): void {
       return;
     }
     case "bound": {
-      const action = recording;
-      if (!isMac()) {
-        const problem = windowsHotkeyProblem(outcome.hotkey);
-        if (problem) {
-          setRecordingStatus(problem);
-          return;
-        }
-        if (
-          hasAltGrRisk(outcome.hotkey) &&
-          !window.confirm(STRINGS.altGrConfirm)
-        ) {
-          setRecordingStatus(STRINGS.notSaved);
-          return;
-        }
-        const warning = knownWindowsShortcutWarning(outcome.hotkey);
-        if (warning && !window.confirm(STRINGS.warningConfirm(warning))) {
-          setRecordingStatus(STRINGS.notSaved);
-          return;
-        }
+      const problem = hotkeyProblem(outcome.hotkey, isMac());
+      if (problem) {
+        setRecordingStatus(problem);
+        return;
       }
+      const action = recording;
+      const scope = recordingScope;
       stopRecording();
       setRecordingStatus("");
-      void applyBinding(action, outcome.hotkey);
+      void confirmAndApply(action, scope, outcome.hotkey);
       return;
     }
   }
 }
 
+/**
+ * Asks about anything the recorded chord would interfere with, then saves
+ * it. Nothing is written until every question has been answered yes; any
+ * Cancel leaves every binding as it was and focus on the recorded row.
+ */
+async function confirmAndApply(
+  action: WindowAction,
+  scope: Scope,
+  hotkey: Hotkey,
+): Promise<void> {
+  const chord = formatHotkey(hotkey);
+  const returnFocus = () => bindingButton(action, scope);
+
+  for (const warning of hotkeyWarnings(hotkey, isMac())) {
+    const ok = await confirmDialog({
+      title: STRINGS.warningTitle(chord),
+      message: warning,
+      confirmLabel: STRINGS.saveAnyway,
+      returnFocus,
+    });
+    if (!ok) {
+      setRecordingStatus(STRINGS.notSaved);
+      return;
+    }
+  }
+
+  const holders = config
+    ? actionsUsing(config.bindings, hotkey, action, ACTION_ORDER)
+    : [];
+  if (holders.length > 0) {
+    const others = listLabels(holders.map(labelFor));
+    const ok = await confirmDialog({
+      title: STRINGS.takenTitle(chord, others),
+      message: STRINGS.takenMessage(labelFor(action), others),
+      confirmLabel: STRINGS.replace,
+      returnFocus,
+    });
+    if (!ok) {
+      setRecordingStatus(STRINGS.notSaved);
+      return;
+    }
+  }
+
+  await applyBinding(action, hotkey, holders);
+}
+
+/**
+ * Saves one binding. `replace` names the actions the user agreed to take the
+ * chord from; the backend unbinds them in the same write, and refuses rather
+ * than silently moving a chord any other action picked up meanwhile.
+ */
 async function applyBinding(
   action: WindowAction,
   hotkey: Hotkey | null,
+  replace: WindowAction[] = [],
 ): Promise<void> {
   const saved = await saveSetting(dom.bindingError, () =>
-    setBinding(action, hotkey),
+    setBinding(action, hotkey, replace),
   );
   // A failed save has already re-rendered from the settings Tile kept.
   if (saved === false) return;

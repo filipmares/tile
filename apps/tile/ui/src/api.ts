@@ -32,10 +32,16 @@ export const dismissConfigRecovery = (): Promise<void> =>
 export const revealConfigBackup = (): Promise<void> =>
   invoke("reveal_config_backup");
 
+/**
+ * Binds `hotkey` to `action`. Rejects with `shortcutTaken` if another action
+ * uses it, unless that action is in `replace` (the holders the user agreed
+ * to replace), which unbinds it in the same write.
+ */
 export const setBinding = (
   action: WindowAction,
   hotkey: Hotkey | null,
-): Promise<Config> => invoke("set_binding", { action, hotkey });
+  replace: WindowAction[] = [],
+): Promise<Config> => invoke("set_binding", { action, hotkey, replace });
 
 export const setGaps = (gaps: Gaps): Promise<Config> =>
   invoke("set_gaps", { gaps });

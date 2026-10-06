@@ -1267,7 +1267,8 @@ select {
 }
 
 .confirm-dialog__title {
-  margin-bottom: 6px;
+  margin: 0 0 6px;
+  font-size: inherit;
   font-weight: 650;
 }
 

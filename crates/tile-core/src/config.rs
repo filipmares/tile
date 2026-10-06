@@ -919,17 +919,20 @@ impl Config {
         self.bindings.get(&action).copied().flatten()
     }
 
+    /// Every action other than `action` that `hotkey` is bound to, in
+    /// catalogue order. Binding `hotkey` to `action` would unbind these.
+    pub fn actions_using(&self, hotkey: Hotkey, action: WindowAction) -> Vec<WindowAction> {
+        WindowAction::ALL
+            .into_iter()
+            .filter(|a| *a != action && self.binding(*a) == Some(hotkey))
+            .collect()
+    }
+
     /// Binds `hotkey` to `action`, unbinding any other action that already
     /// used it so the configuration can never contain a duplicate.
     pub fn set_binding(&mut self, action: WindowAction, hotkey: Option<Hotkey>) {
         if let Some(hk) = hotkey {
-            let clashing: Vec<_> = self
-                .bindings
-                .iter()
-                .filter(|(a, h)| **a != action && **h == Some(hk))
-                .map(|(a, _)| *a)
-                .collect();
-            for a in clashing {
+            for a in self.actions_using(hk, action) {
                 self.bindings.insert(a, None);
             }
         }
@@ -1596,6 +1599,21 @@ mod tests {
         let conflicts = config.conflicts();
         assert_eq!(conflicts.len(), 1);
         assert_eq!(conflicts[0].actions.len(), 2);
+    }
+
+    #[test]
+    fn actions_using_names_every_other_holder_of_a_hotkey() {
+        let mut config = Config::default();
+        let hk = config.binding(WindowAction::LeftHalf).unwrap();
+        assert_eq!(
+            config.actions_using(hk, WindowAction::Center),
+            vec![WindowAction::LeftHalf]
+        );
+        assert!(config.actions_using(hk, WindowAction::LeftHalf).is_empty());
+
+        config.set_binding(WindowAction::Center, Some(hk));
+        assert_eq!(config.binding(WindowAction::LeftHalf), None);
+        assert!(config.actions_using(hk, WindowAction::Center).is_empty());
     }
 
     #[test]

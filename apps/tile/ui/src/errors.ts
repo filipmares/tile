@@ -5,13 +5,20 @@
 // is never shown, because "Access is denied. (os error 5)" next to a checkbox
 // explains nothing.
 
-export type SettingsErrorKind = "notSaved" | "loginItem" | "outOfSync";
+export type SettingsErrorKind =
+  | "notSaved"
+  | "loginItem"
+  | "outOfSync"
+  | "shortcutTaken";
 
 /** The `kind` of a settings command rejection, or `null` for anything else. */
 export function settingsErrorKind(err: unknown): SettingsErrorKind | null {
   if (typeof err !== "object" || err === null || !("kind" in err)) return null;
   const kind = (err as { kind: unknown }).kind;
-  return kind === "notSaved" || kind === "loginItem" || kind === "outOfSync"
+  return kind === "notSaved" ||
+    kind === "loginItem" ||
+    kind === "outOfSync" ||
+    kind === "shortcutTaken"
     ? kind
     : null;
 }
@@ -25,6 +32,8 @@ export function settingsErrorMessage(err: unknown): string {
       return "Tile could not change whether it opens at login. Your system may be blocking it. Try again, or check the login items in your system settings.";
     case "outOfSync":
       return "Tile could not save this change, so it was undone, but whether Tile opens at login may no longer match this setting. Turn Launch Tile at login off and on again to fix it.";
+    case "shortcutTaken":
+      return "Another action started using this shortcut before it was saved, so nothing changed. Record it again to choose whether to replace it.";
     default:
       return "Tile could not apply this change. Try again.";
   }

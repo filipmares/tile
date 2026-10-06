@@ -19,6 +19,7 @@ import {
   setLaunchOnLogin,
   undoResetToDefaults,
 } from "./api";
+import { confirmDialog } from "./confirm";
 import { dom } from "./dom";
 import { resetErrorMessage, settingsErrorMessage } from "./errors";
 import {
@@ -41,6 +42,10 @@ import {
 
 /** User-facing copy for the settings screen. */
 const STRINGS = {
+  resetTitle: "Restore defaults?",
+  resetMessage:
+    "Every shortcut, the window gaps, animation, repeat-press behaviour, and launch at login go back to their defaults. You can undo this for a few seconds afterwards.",
+  resetConfirm: "Restore defaults",
   defaultsRestored: "Defaults restored.",
   undoOffered: "Defaults restored. Undo is available for a few seconds.",
   undoExpired:
@@ -210,7 +215,6 @@ export async function renderWholeConfig(latest: boolean): Promise<void> {
 }
 
 async function restoreDefaults(): Promise<void> {
-  dom.resetConfirmation.close();
   // Every reset supersedes earlier feedback, including the half-success
   // where only launch at login stays put; `reset-error` reports the outcome.
   setRecordingStatus("");
@@ -553,16 +557,16 @@ function wireEvents(): void {
   wireShortcutEvents();
 
   dom.reset.addEventListener("click", () => {
-    dom.resetConfirmation.showModal();
-    dom.confirmReset.focus();
+    void confirmDialog({
+      title: STRINGS.resetTitle,
+      message: STRINGS.resetMessage,
+      confirmLabel: STRINGS.resetConfirm,
+      danger: true,
+      returnFocus: () => dom.reset,
+    }).then((ok) => {
+      if (ok) void restoreDefaults();
+    });
   });
-  dom.cancelReset.addEventListener("click", () => {
-    dom.resetConfirmation.close();
-  });
-  // Esc, Cancel, and Restore all close the dialog, and focus goes back to the
-  // button that opened it.
-  dom.resetConfirmation.addEventListener("close", () => dom.reset.focus());
-  dom.confirmReset.addEventListener("click", () => void restoreDefaults());
   dom.undoReset.addEventListener("click", () => void undoRestoreDefaults());
 
   dom.grant.addEventListener("click", () => void refreshPermission(true));
