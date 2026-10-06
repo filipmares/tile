@@ -24,12 +24,16 @@ where
 
 /// Applies `enabled` to the OS login item unconditionally — what the settings
 /// commands do, since the user just asked for exactly this state.
-pub fn apply<R: Runtime>(app: &AppHandle<R>, kind: BuildKind, enabled: bool) {
+///
+/// Returns an error when the OS refused the change or still reports the old
+/// state afterwards, so the caller can keep the preference truthful. A
+/// development build always succeeds without touching anything.
+pub fn apply<R: Runtime>(app: &AppHandle<R>, kind: BuildKind, enabled: bool) -> Result<(), String> {
     if skip_for_development(kind, enabled) {
-        return;
+        return Ok(());
     }
     log::info!("launch-on-login changed in settings; setting the OS login item to {enabled}");
-    set(app, enabled);
+    set(app, enabled)
 }
 
 /// Aligns the OS login item with the persisted preference at startup.
@@ -62,7 +66,9 @@ pub fn reconcile_on_launch<R: Runtime>(app: &AppHandle<R>, kind: BuildKind, desi
             "could not read the OS login item ({err}); setting it to {desired} regardless"
         ),
     }
-    set(app, desired);
+    if let Err(err) = set(app, desired) {
+        log::error!("could not reconcile the OS login item at launch: {err}");
+    }
 }
 
 /// A development build persists the preference but never rewrites the login
@@ -75,26 +81,30 @@ fn skip_for_development(kind: BuildKind, desired: bool) -> bool {
     true
 }
 
-fn set<R: Runtime>(app: &AppHandle<R>, enabled: bool) {
+/// Writes the login item and reads it back. An unreadable result after a
+/// successful write is trusted (and logged): the write itself was accepted.
+fn set<R: Runtime>(app: &AppHandle<R>, enabled: bool) -> Result<(), String> {
     let manager = app.autolaunch();
     let result = if enabled {
         manager.enable()
     } else {
         manager.disable()
     };
-    match result {
-        Ok(()) => match manager.is_enabled() {
-            Ok(state) if state == enabled => {
-                log::debug!("OS login item is now {}", on_off(enabled))
-            }
-            Ok(state) => log::error!(
-                "set the OS login item {} but it still reads {}",
-                on_off(enabled),
-                on_off(state)
-            ),
-            Err(err) => log::warn!("could not verify the OS login item: {err}"),
-        },
-        Err(err) => log::error!("failed to update launch-on-login to {enabled}: {err}"),
+    result.map_err(|err| format!("failed to set the OS login item {}: {err}", on_off(enabled)))?;
+    match manager.is_enabled() {
+        Ok(state) if state == enabled => {
+            log::debug!("OS login item is now {}", on_off(enabled));
+            Ok(())
+        }
+        Ok(state) => Err(format!(
+            "set the OS login item {} but it still reads {}",
+            on_off(enabled),
+            on_off(state)
+        )),
+        Err(err) => {
+            log::warn!("could not verify the OS login item: {err}");
+            Ok(())
+        }
     }
 }
 

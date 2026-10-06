@@ -4265,6 +4265,7 @@ dependencies = [
  "directories",
  "env_logger",
  "log",
+ "rfd",
  "serde",
  "serde_json",
  "tauri",

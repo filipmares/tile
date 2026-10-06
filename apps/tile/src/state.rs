@@ -52,9 +52,13 @@ use crate::animate::{self, Interruption, Pacer, SleepPacer};
 use crate::build_kind::BuildKind;
 use crate::config_store;
 use crate::ratelimit::RateLimiter;
+use crate::settings_error::SettingsError;
 
 /// How long a `PermissionDenied` dialog is suppressed after being shown once.
 const PERMISSION_DIALOG_COOLDOWN: Duration = Duration::from_secs(20);
+
+/// How long a failed tray-menu action stays quiet after telling the user once.
+const MENU_NOTICE_COOLDOWN: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HotkeyStatus {
@@ -77,6 +81,7 @@ pub struct AppState {
     config_dir: Option<PathBuf>,
     hotkey_status: Mutex<HotkeyStatus>,
     permission_dialog_limiter: Mutex<RateLimiter>,
+    menu_notice_limiter: Mutex<RateLimiter>,
     /// Whether the one-time first-run orientation is still owed to the user.
     /// Set once at startup and cleared as soon as the settings UI claims it,
     /// so a reopened settings window never shows it twice in one session.
@@ -106,6 +111,7 @@ impl AppState {
             config_dir,
             hotkey_status: Mutex::new(HotkeyStatus::default()),
             permission_dialog_limiter: Mutex::new(RateLimiter::new(PERMISSION_DIALOG_COOLDOWN)),
+            menu_notice_limiter: Mutex::new(RateLimiter::new(MENU_NOTICE_COOLDOWN)),
             orientation_pending: AtomicBool::new(orientation_pending),
             config_recovery: Mutex::new(None),
             saves_blocked: false,
@@ -358,40 +364,61 @@ impl AppState {
     }
 
     /// Persists the current config atomically, logging (never panicking) on
-    /// failure.
+    /// failure. For bookkeeping writes only; settings changes go through
+    /// [`AppState::update_config`], which reports a failed save.
     pub fn save_config(&self) {
-        let Some(dir) = self.config_dir.as_deref() else {
-            log::warn!("no config directory resolved; not persisting settings");
-            return;
-        };
-        if self.saves_blocked {
-            log::warn!("not saving settings: the unreadable config could not be backed up first");
-            return;
-        }
         let config = self.config();
-        if let Err(err) = config_store::save_to_dir(dir, &config) {
+        if let Err(err) = self.persist(&config) {
             log::error!("failed to save config: {err}");
         }
     }
 
-    /// Mutates the config under lock, then persists and re-applies hotkeys.
-    /// Returns the updated config so callers (commands) can hand truth back to
-    /// the UI.
-    pub fn update_config(&self, mutate: impl FnOnce(&mut Config)) -> Config {
+    /// Writes `config` to the config directory. Without one, settings live in
+    /// memory only — already logged at startup — and that is not an error.
+    fn persist(&self, config: &Config) -> std::io::Result<()> {
+        let Some(dir) = self.config_dir.as_deref() else {
+            log::warn!("no config directory resolved; not persisting settings");
+            return Ok(());
+        };
+        // Deliberate, and already explained by the config-recovery notice.
+        if self.saves_blocked {
+            log::warn!("not saving settings: the unreadable config could not be backed up first");
+            return Ok(());
+        }
+        config_store::save_to_dir(dir, config)
+    }
+
+    /// Mutates the config, persists it, then re-applies hotkeys. Returns the
+    /// updated config so callers (commands) can hand truth back to the UI.
+    ///
+    /// A change that cannot be saved is rolled back before anything else sees
+    /// it, so the running app never disagrees with what is on disk and the UI
+    /// can simply re-read the config to show the truth.
+    pub fn update_config(&self, mutate: impl FnOnce(&mut Config)) -> Result<Config, SettingsError> {
         {
             let mut engine = lock(&self.engine);
+            let previous = engine.config.clone();
             mutate(&mut engine.config);
             engine.config.normalize();
+            if let Err(err) = self.persist(&engine.config) {
+                engine.config = previous;
+                return Err(SettingsError::not_saved(err));
+            }
         }
-        self.save_config();
         self.apply_hotkeys();
-        self.config()
+        Ok(self.config())
     }
 
     /// Decides whether a `PermissionDenied` dialog should be shown now, given
     /// the rate limit. Returns `true` at most once per cooldown window.
     pub fn should_show_permission_dialog(&self) -> bool {
         lock(&self.permission_dialog_limiter).allow()
+    }
+
+    /// As [`AppState::should_show_permission_dialog`], for the notice a failed
+    /// tray-menu action raises.
+    pub fn should_show_menu_notice(&self) -> bool {
+        lock(&self.menu_notice_limiter).allow()
     }
 
     /// Releases OS hotkeys. Called on shutdown.
@@ -1978,7 +2005,9 @@ mod tests {
         let state = state_with_orientation(&dir, false).with_config_recovery(Some(
             crate::config_store::ConfigRecovery { backup_path: None },
         ));
-        state.update_config(|config| config.launch_on_login = !config.launch_on_login);
+        state
+            .update_config(|config| config.launch_on_login = !config.launch_on_login)
+            .unwrap();
 
         assert_eq!(std::fs::read(&path).unwrap(), b"precious but broken");
         let _ = std::fs::remove_dir_all(&dir);
@@ -2097,6 +2126,55 @@ mod tests {
                 .config
                 .orientation_shown
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A change that cannot reach disk must not linger in memory: the UI
+    /// re-reads the config after an error and must see what is actually in
+    /// force, and the OS hotkeys must not be re-registered for it.
+    #[test]
+    fn an_unsaved_change_is_rolled_back() {
+        let dir =
+            std::env::temp_dir().join(format!("tile-unsaved-{}-{}", std::process::id(), line!()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // A file where the config directory should be makes every save fail.
+        let blocked = dir.join("not-a-directory");
+        std::fs::write(&blocked, b"").unwrap();
+
+        let (state, applies) = state_counting_applies(&blocked, false);
+        let before = state.config();
+
+        let err = state
+            .update_config(|config| config.animation.enabled = !config.animation.enabled)
+            .unwrap_err();
+
+        assert_eq!(err.kind, crate::settings_error::SettingsErrorKind::NotSaved);
+        assert_eq!(state.config(), before, "the change must be rolled back");
+        assert_eq!(applies.load(Ordering::Relaxed), 0);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_saved_change_is_kept_and_applied() {
+        let dir =
+            std::env::temp_dir().join(format!("tile-saved-{}-{}", std::process::id(), line!()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let (state, applies) = state_counting_applies(&dir, false);
+        let config = state
+            .update_config(|config| config.animation.enabled = false)
+            .unwrap();
+
+        assert!(!config.animation.enabled);
+        assert!(
+            !crate::config_store::load_from_dir(&dir)
+                .config
+                .animation
+                .enabled
+        );
+        assert_eq!(applies.load(Ordering::Relaxed), 1);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

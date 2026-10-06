@@ -153,10 +153,12 @@ impl MenuActions {
         Self(sender)
     }
 
-    fn enqueue(&self, action: WindowAction) {
-        if let Err(err) = self.0.send(ActionRequest::exact(action)) {
-            log::error!("could not queue {action}: the action worker is gone ({err})");
-        }
+    /// Hands `action` to the worker. Fails only once the worker has exited,
+    /// which the caller must tell the user about: the click did nothing.
+    fn enqueue(&self, action: WindowAction) -> Result<(), String> {
+        self.0
+            .send(ActionRequest::exact(action))
+            .map_err(|err| format!("could not queue {action}: the action worker is gone ({err})"))
     }
 }
 
@@ -565,7 +567,12 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str, kind: BuildKind) 
             .strip_prefix(ACTION_ID_PREFIX)
             .map(WindowAction::from_str)
         {
-            Some(Ok(action)) => app.state::<MenuActions>().enqueue(action),
+            Some(Ok(action)) => {
+                if let Err(err) = app.state::<MenuActions>().enqueue(action) {
+                    log::error!("{err}");
+                    crate::feedback::show_menu_notice(app, crate::feedback::WORKER_GONE_MESSAGE);
+                }
+            }
             _ => log::warn!("unknown tray menu id: {other}"),
         },
     }

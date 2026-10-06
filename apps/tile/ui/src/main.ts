@@ -28,6 +28,7 @@ import {
   setLaunchOnLogin,
   takeOrientation,
 } from "./api";
+import { resetErrorMessage, settingsErrorMessage } from "./errors";
 import {
   formatHotkey,
   hasAltGrRisk,
@@ -88,6 +89,12 @@ const dom = {
   shortcutFilter: el<HTMLInputElement>("#shortcut-filter"),
   hotkeyApplyError: el<HTMLParagraphElement>("#hotkey-apply-error"),
   recordingStatus: el<HTMLParagraphElement>("#recording-status"),
+  bindingError: el<HTMLParagraphElement>("#binding-error"),
+  cyclingError: el<HTMLParagraphElement>("#cycling-error"),
+  gapsError: el<HTMLParagraphElement>("#gaps-error"),
+  motionError: el<HTMLParagraphElement>("#motion-error"),
+  launchError: el<HTMLParagraphElement>("#launch-error"),
+  resetError: el<HTMLParagraphElement>("#reset-error"),
   gapWindow: el<HTMLInputElement>("#gap-window"),
   gapWindowNumber: el<HTMLInputElement>("#gap-window-number"),
   gapEdgeTop: el<HTMLInputElement>("#gap-edge-top"),
@@ -1186,6 +1193,41 @@ function setRecordingStatus(text: string): void {
   dom.recordingStatus.textContent = text;
 }
 
+/** Shows (or, with `null`, clears) the error line beside a control. */
+function setSettingsError(target: HTMLElement, text: string | null): void {
+  target.textContent = text ?? "";
+  target.hidden = text === null;
+}
+
+/**
+ * Runs a settings command and re-renders from what it returns. On failure the
+ * backend has already left the app on its previous settings, so the controls
+ * are re-read from it and the reason is shown beside them — never a control
+ * showing a value Tile is not actually using.
+ */
+async function saveSetting(
+  errorTarget: HTMLElement,
+  save: () => Promise<Config>,
+  message: (err: unknown) => string = settingsErrorMessage,
+): Promise<boolean> {
+  try {
+    config = await save();
+    setSettingsError(errorTarget, null);
+    return true;
+  } catch (err) {
+    console.error("settings change failed", err);
+    setSettingsError(errorTarget, message(err));
+    try {
+      config = await getConfig();
+    } catch (reloadErr) {
+      console.error("could not reload settings", reloadErr);
+    }
+    renderBehaviour();
+    renderBindings();
+    return false;
+  }
+}
+
 function startRecording(action: WindowAction): void {
   recording = action;
   const label = ACTIONS.find((a) => a.id === action)?.label ?? action;
@@ -1260,14 +1302,12 @@ async function applyBinding(
   action: WindowAction,
   hotkey: Hotkey | null,
 ): Promise<void> {
-  try {
-    config = await setBinding(action, hotkey);
-    await refreshHotkeyStatus();
-    renderBindings();
-    renderBehaviour();
-  } catch (err) {
-    setRecordingStatus(`Could not save shortcut: ${String(err)}`);
+  if (!(await saveSetting(dom.bindingError, () => setBinding(action, hotkey)))) {
+    return;
   }
+  await refreshHotkeyStatus();
+  renderBindings();
+  renderBehaviour();
 }
 
 function renderBehaviour(): void {
@@ -1550,11 +1590,8 @@ async function commitCycling(): Promise<void> {
   const sizes = cycleSizeInputs()
     .filter((input) => input.checked)
     .map((input) => input.dataset.size as CycleSize);
-  try {
-    config = await setCycling(mode, sizes);
+  if (await saveSetting(dom.cyclingError, () => setCycling(mode, sizes))) {
     renderBehaviour();
-  } catch (err) {
-    setRecordingStatus(`Could not save cycling settings: ${String(err)}`);
   }
 }
 
@@ -1578,11 +1615,8 @@ function readGaps(): Gaps {
 
 async function commitGaps(): Promise<void> {
   const gaps = readGaps();
-  try {
-    config = await setGaps(gaps);
+  if (await saveSetting(dom.gapsError, () => setGaps(gaps))) {
     renderBehaviour();
-  } catch (err) {
-    setRecordingStatus(`Could not save gaps: ${String(err)}`);
   }
 }
 
@@ -1625,11 +1659,8 @@ function setAnimationDurationEnabled(enabled: boolean): void {
 }
 
 async function commitAnimationDuration(): Promise<void> {
-  try {
-    config = await setAnimationDuration(Number(dom.animationDuration.value));
-    mirrorAnimationDuration(String(config.animation.durationMs));
-  } catch (err) {
-    setRecordingStatus(`Could not update animation duration: ${String(err)}`);
+  const durationMs = Number(dom.animationDuration.value);
+  if (await saveSetting(dom.motionError, () => setAnimationDuration(durationMs))) {
     if (config) mirrorAnimationDuration(String(config.animation.durationMs));
   }
 }
@@ -1700,14 +1731,9 @@ function wireEvents(): void {
   dom.gapMainOnly.addEventListener("change", () => void commitGaps());
   dom.subsequentMode.addEventListener("change", () => void commitCycling());
   dom.animate.addEventListener("change", async () => {
-    try {
-      config = await setAnimation(dom.animate.checked);
-      setAnimationDurationEnabled(config.animation.enabled);
-    } catch (err) {
-      setRecordingStatus(`Could not update animation: ${String(err)}`);
-      // Put the checkbox back where the saved config says it is, so it never
-      // shows a state the app is not actually in.
-      dom.animate.checked = config?.animation.enabled ?? true;
+    const enabled = dom.animate.checked;
+    if (await saveSetting(dom.motionError, () => setAnimation(enabled))) {
+      if (config) setAnimationDurationEnabled(config.animation.enabled);
     }
   });
 
@@ -1735,13 +1761,9 @@ function wireEvents(): void {
     void commitAnimationDuration();
   });
 
-  dom.launch.addEventListener("change", async () => {
-    try {
-      config = await setLaunchOnLogin(dom.launch.checked);
-    } catch (err) {
-      setRecordingStatus(`Could not update launch-on-login: ${String(err)}`);
-      dom.launch.checked = config?.launchOnLogin ?? false;
-    }
+  dom.launch.addEventListener("change", () => {
+    const enabled = dom.launch.checked;
+    void saveSetting(dom.launchError, () => setLaunchOnLogin(enabled));
   });
 
   dom.shortcutFilter.addEventListener("input", () => {
@@ -1750,15 +1772,27 @@ function wireEvents(): void {
   });
 
   dom.reset.addEventListener("click", async () => {
-    try {
-      config = await resetToDefaults();
-      await refreshHotkeyStatus();
-      renderBindings();
-      renderBehaviour();
-      setRecordingStatus("Defaults restored.");
-    } catch (err) {
-      setRecordingStatus(`Could not restore defaults: ${String(err)}`);
+    // Every reset supersedes earlier feedback, including the half-success
+    // where only launch at login stays put; `reset-error` reports the outcome.
+    setRecordingStatus("");
+    for (const target of [
+      dom.bindingError,
+      dom.cyclingError,
+      dom.gapsError,
+      dom.motionError,
+      dom.launchError,
+    ]) {
+      setSettingsError(target, null);
     }
+    const restored = await saveSetting(
+      dom.resetError,
+      resetToDefaults,
+      resetErrorMessage,
+    );
+    await refreshHotkeyStatus();
+    renderBindings();
+    renderBehaviour();
+    if (restored) setRecordingStatus("Defaults restored.");
   });
 
   dom.grant.addEventListener("click", () => void refreshPermission(true));
@@ -1843,8 +1877,9 @@ async function bootWelcome(): Promise<void> {
       dom.welcomeLaunch.checked = cfg.launchOnLogin;
       setWalkNote(null);
     } catch (err) {
+      console.error("could not update launch at login", err);
       dom.welcomeLaunch.checked = cfg?.launchOnLogin ?? true;
-      setWalkNote(`Could not update launch-at-login: ${String(err)}`);
+      setWalkNote(settingsErrorMessage(err));
     } finally {
       dom.welcomeLaunch.disabled = false;
       dom.welcomeDismiss.disabled = false;
