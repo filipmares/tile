@@ -81,6 +81,7 @@ export const dom = {
   welcomeNote: el<HTMLParagraphElement>("#welcome-note"),
   welcomeDismiss: el<HTMLButtonElement>("#welcome-dismiss"),
   welcomeLaunch: el<HTMLInputElement>("#welcome-launch-on-login"),
+  welcomeLaunchError: el<HTMLParagraphElement>("#welcome-launch-error"),
   grant: el<HTMLButtonElement>("#grant-permission"),
   openAccessibility: el<HTMLButtonElement>("#open-accessibility"),
   developmentPanel: el<HTMLElement>("#development-panel"),

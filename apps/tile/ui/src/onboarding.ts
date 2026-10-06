@@ -11,8 +11,8 @@ import {
   takeOrientation,
 } from "./api";
 import { dom } from "./dom";
-import { settingsErrorMessage } from "./errors";
 import { formatHotkey, isMac } from "./hotkey";
+import { config as sharedConfig, setConfig } from "./state";
 import {
   ActionPerformed,
   Config,
@@ -20,6 +20,12 @@ import {
   WelcomeStatus,
   WindowAction,
 } from "./types";
+import {
+  configureWrites,
+  followChangesElsewhere,
+  hasPendingWrites,
+  saveSetting,
+} from "./writes";
 
 /** User-facing copy for the welcome deck. */
 const STRINGS = {
@@ -898,25 +904,30 @@ export async function bootWelcome(): Promise<void> {
   let cfg: Config | null = null;
   try {
     cfg = await getConfig();
+    setConfig(cfg);
   } catch (err) {
     console.error("could not load settings for the welcome screen", err);
   }
+  // The toggle goes through the same queue as the settings window, so a
+  // change made there while this window is open shows up here too.
+  configureWrites({
+    render: () => {
+      if (sharedConfig) dom.welcomeLaunch.checked = sharedConfig.launchOnLogin;
+    },
+  });
+  void followChangesElsewhere();
   dom.welcomeLaunch.checked = cfg?.launchOnLogin ?? true;
   dom.welcomeLaunch.addEventListener("change", async () => {
     const desired = dom.welcomeLaunch.checked;
-    dom.welcomeLaunch.disabled = true;
+    // Closing mid-write would leave the user not knowing whether it stuck.
     dom.welcomeDismiss.disabled = true;
     try {
-      cfg = await setLaunchOnLogin(desired);
-      dom.welcomeLaunch.checked = cfg.launchOnLogin;
-      setWalkNote(null);
-    } catch (err) {
-      console.error("could not update launch at login", err);
-      dom.welcomeLaunch.checked = cfg?.launchOnLogin ?? true;
-      setWalkNote(settingsErrorMessage(err));
+      const saved = await saveSetting(dom.welcomeLaunchError, () =>
+        setLaunchOnLogin(desired),
+      );
+      if (saved) dom.welcomeLaunch.checked = saved.launchOnLogin;
     } finally {
-      dom.welcomeLaunch.disabled = false;
-      dom.welcomeDismiss.disabled = false;
+      dom.welcomeDismiss.disabled = hasPendingWrites();
     }
   });
   dom.welcomeLaunch.disabled = false;

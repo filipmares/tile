@@ -1,6 +1,7 @@
-// The settings screen: behaviour, motion, startup and advanced controls, the
-// write queue every change goes through, restore defaults and its undo, the
-// permission panel, and the notice shown when saved settings were unreadable.
+// The settings screen: behaviour, motion, startup and advanced controls,
+// restore defaults and its undo, the permission panel, and the notice shown
+// when saved settings were unreadable. Every change goes through the write
+// queue in `writes.ts`.
 
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
@@ -42,6 +43,14 @@ import {
   Gaps,
   SubsequentExecutionMode,
 } from "./types";
+import {
+  configureWrites,
+  followChangesElsewhere,
+  saveSetting,
+  setFieldError as setSettingsError,
+} from "./writes";
+
+export { saveSetting };
 
 /** User-facing copy for the settings screen. */
 const STRINGS = {
@@ -76,69 +85,6 @@ const ACCESSIBILITY_URL =
   "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
 
 /**
- * Every settings write runs through here, one at a time and in the order the
- * user made them. Each command replies with the whole saved config, so if two
- * ran at once a slow earlier reply could land after a newer one and put a
- * stale config back on screen. Chaining them means replies arrive in order and
- * the last write is the one `config` ends up holding.
- *
- * Resolves to the saved config, or to `null` when a newer write was queued in
- * the meantime: the caller should then leave the controls alone, because they
- * already show the user's newer choices. Rejects if this write failed;
- * `saveSetting` then reports it and calls `reconcileWhenIdle`.
- *
- * Every write also hides Undo for a restore-defaults: the backend drops the
- * snapshot on any change, since undoing past it would throw the change away.
- */
-let writeQueue: Promise<unknown> = Promise.resolve();
-let latestWrite = 0;
-let pendingWrites = 0;
-
-/** Runs `op` after everything already queued, keeping the queue alive if it fails. */
-function enqueue<T>(op: () => Promise<T>): Promise<T> {
-  const run = writeQueue.then(op);
-  writeQueue = run.catch(() => undefined);
-  return run;
-}
-
-function saveConfig(write: () => Promise<Config>): Promise<Config | null> {
-  const ticket = ++latestWrite;
-  pendingWrites += 1;
-  clearUndo();
-  return enqueue(async () => {
-    try {
-      const saved = await write();
-      setConfig(saved);
-      return ticket === latestWrite ? saved : null;
-    } finally {
-      pendingWrites -= 1;
-    }
-  });
-}
-
-/**
- * Re-reads the settings Tile is actually using and renders them, once no
- * write is left in the queue. A failed write calls this rather than putting
- * its control back on the spot: a newer queued write may not re-render that
- * control on success, and reverting now would trample a choice still on its
- * way. The read is queued too, so it can never land before a write made
- * earlier and hand back an older config.
- */
-async function reconcileWhenIdle(): Promise<void> {
-  do {
-    await enqueue(async () => {
-      try {
-        setConfig(await getConfig());
-      } catch (err) {
-        console.error("could not reload settings", err);
-      }
-    });
-  } while (pendingWrites > 0);
-  renderBehaviour();
-  renderBindings();
-}
-
-/**
  * Whether Undo is on offer after a restore-defaults. The backend keeps the
  * snapshot and drops it on any other change from any window, so this only
  * decides whether to show the button.
@@ -148,38 +94,6 @@ let undoTimer: number | null = null;
 const UNDO_WINDOW_MS = 10_000;
 
 let permissionTimer: number | null = null;
-
-/** Shows (or, with `null`, clears) the error line beside a control. */
-function setSettingsError(target: HTMLElement, text: string | null): void {
-  target.textContent = text ?? "";
-  target.hidden = text === null;
-}
-
-/**
- * Runs a settings command through the write queue and reports a failure
- * beside its control. Resolves to the saved config when it is the latest
- * write, `null` when a newer one was queued meanwhile (the controls already
- * show that newer choice, so leave them), or `false` when it failed. On
- * failure the backend has already left the app on its previous settings, so
- * the controls are re-read from it once the queue drains — never a control
- * showing a value Tile is not actually using.
- */
-export async function saveSetting(
-  errorTarget: HTMLElement,
-  save: () => Promise<Config>,
-  message: (err: unknown) => string = settingsErrorMessage,
-): Promise<Config | null | false> {
-  try {
-    const saved = await saveConfig(save);
-    setSettingsError(errorTarget, null);
-    return saved;
-  } catch (err) {
-    console.error("settings change failed", err);
-    setSettingsError(errorTarget, message(err));
-    await reconcileWhenIdle();
-    return false;
-  }
-}
 
 function setResetStatus(text: string): void {
   dom.resetStatus.textContent = text;
@@ -720,7 +634,18 @@ let booted = false;
 export async function bootSettings(): Promise<void> {
   if (booted) return;
   booted = true;
+  // Every write, from this window or another, ends the backend's undo
+  // snapshot, so the offer goes with it.
+  configureWrites({
+    beforeWrite: clearUndo,
+    changedElsewhere: clearUndo,
+    render: () => {
+      renderBehaviour();
+      renderBindings();
+    },
+  });
   wireEvents();
+  void followChangesElsewhere();
   // Build provenance is fetched first and separately: if it fails, the rest of
   // the settings UI should still load.
   try {

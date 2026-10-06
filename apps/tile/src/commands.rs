@@ -6,10 +6,16 @@
 //! guessing (e.g. [`set_binding`] with `replace` unbinds the conflicting actions it names). When a
 //! change cannot be saved or applied they return a [`SettingsError`] instead,
 //! having left the running app on its previous settings.
+//!
+//! Every settings write runs inside one [`SettingsTransaction`], so the
+//! settings and welcome windows can never interleave their writes, and every
+//! committed write is announced as [`CONFIG_CHANGED`] so the other open window
+//! re-renders instead of showing stale values.
 
 use std::sync::Arc;
 
-use tauri::{AppHandle, Runtime, State};
+use serde::Serialize;
+use tauri::{AppHandle, Emitter, Runtime, State, Webview};
 use tile_core::{
     AdvancedSetting, Config, CycleSize, Gaps, Hotkey, SubsequentExecutionMode, WindowAction,
 };
@@ -20,10 +26,23 @@ use crate::dto::{
     UpdateStatusDto, WelcomeStatusDto,
 };
 use crate::settings_error::SettingsError;
-use crate::state::AppState;
+use crate::state::{AppState, SettingsTransaction};
 use crate::update::{UpdateError, UpdateManager};
 
 type Shared = Arc<AppState>;
+
+/// Emitted after every committed settings write.
+pub const CONFIG_CHANGED: &str = "tile://config-changed";
+
+/// The payload of [`CONFIG_CHANGED`]. `source` is the label of the webview
+/// that made the change, which already renders the reply and ignores its own
+/// announcement.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfigChanged<'a> {
+    config: &'a Config,
+    source: &'a str,
+}
 
 /// Sets the OS login item. A development build succeeds without touching it —
 /// see [`crate::autostart`].
@@ -35,22 +54,42 @@ fn sync_autostart<R: Runtime>(
     autostart::apply(app, state.build_kind(), enabled).map_err(SettingsError::login_item)
 }
 
-/// Puts the login item back after the preference that asked for the change
-/// could not be saved, and returns the error to report. The save failure
-/// stands only if the revert worked; otherwise the OS and the preference now
-/// disagree, and the user has to hear that instead.
-fn revert_autostart<R: Runtime>(
+/// Runs one settings write inside a [`SettingsTransaction`] and, if anything
+/// was committed, announces the new config before releasing it, so
+/// announcements leave in commit order and a window never sees an older
+/// change after a newer one. Emitting only queues a script for each webview
+/// and never waits on the main thread, so it is safe under the lock. The tray
+/// menu's shortcuts (when `sync_tray`) are updated after the release, since
+/// changing a menu can wait on the main thread. A write that fails half-way,
+/// like a restore whose login item could not move, is still announced.
+fn write<R: Runtime, T>(
     app: &AppHandle<R>,
+    webview: &Webview<R>,
     state: &AppState,
-    enabled: bool,
-    save_error: SettingsError,
-) -> SettingsError {
-    match sync_autostart(app, state, enabled) {
-        Ok(()) => save_error,
-        Err(revert_error) => SettingsError::out_of_sync(format!(
-            "{save_error}; putting the login item back also failed: {revert_error}"
-        )),
+    sync_tray: bool,
+    change: impl FnOnce(&SettingsTransaction<'_>) -> Result<T, SettingsError>,
+) -> Result<T, SettingsError> {
+    let (result, committed) = {
+        let txn = state.settings_transaction();
+        let before = txn.revision();
+        let result = change(&txn);
+        let committed = txn.revision() != before;
+        if committed {
+            let config = txn.config();
+            let payload = ConfigChanged {
+                config: &config,
+                source: webview.label(),
+            };
+            if let Err(err) = app.emit(CONFIG_CHANGED, payload) {
+                log::warn!("could not announce the settings change: {err}");
+            }
+        }
+        (result, committed)
+    };
+    if committed && sync_tray {
+        crate::tray::sync_bindings(app);
     }
+    result
 }
 
 #[tauri::command]
@@ -113,33 +152,45 @@ pub fn reveal_config_backup<R: Runtime>(
 #[tauri::command]
 pub fn set_binding<R: Runtime>(
     app: AppHandle<R>,
+    webview: Webview<R>,
     state: State<'_, Shared>,
     action: WindowAction,
     hotkey: Option<Hotkey>,
     replace: Option<Vec<WindowAction>>,
 ) -> Result<Config, SettingsError> {
-    let config = state.set_binding(action, hotkey, &replace.unwrap_or_default())?;
-    crate::tray::sync_bindings(&app);
-    Ok(config)
+    write(&app, &webview, &state, true, |txn| {
+        txn.set_binding(action, hotkey, &replace.unwrap_or_default())
+    })
 }
 
 #[tauri::command]
-pub fn set_gaps(state: State<'_, Shared>, gaps: Gaps) -> Result<Config, SettingsError> {
-    state.update_config(|config| config.gaps = gaps)
+pub fn set_gaps<R: Runtime>(
+    app: AppHandle<R>,
+    webview: Webview<R>,
+    state: State<'_, Shared>,
+    gaps: Gaps,
+) -> Result<Config, SettingsError> {
+    write(&app, &webview, &state, false, |txn| {
+        txn.update_config(|config| config.gaps = gaps)
+    })
 }
 
 /// Sets what a repeated press of an already-satisfied shortcut does, and which
 /// sizes it cycles through. The two travel together because a mode of
 /// "cycle sizes" with no sizes selected is indistinguishable from "do nothing".
 #[tauri::command]
-pub fn set_cycling(
+pub fn set_cycling<R: Runtime>(
+    app: AppHandle<R>,
+    webview: Webview<R>,
     state: State<'_, Shared>,
     mode: SubsequentExecutionMode,
     sizes: Vec<CycleSize>,
 ) -> Result<Config, SettingsError> {
-    state.update_config(|config| {
-        config.subsequent_execution_mode = mode;
-        config.cycle_sizes = sizes;
+    write(&app, &webview, &state, false, |txn| {
+        txn.update_config(|config| {
+            config.subsequent_execution_mode = mode;
+            config.cycle_sizes = sizes;
+        })
     })
 }
 
@@ -149,48 +200,64 @@ pub fn set_cycling(
 /// or is working over a remote-desktop session. Duration has its own control
 /// alongside it; the frame rate lives in Settings ▸ Advanced.
 #[tauri::command]
-pub fn set_animation(state: State<'_, Shared>, enabled: bool) -> Result<Config, SettingsError> {
-    state.update_config(|config| config.animation.enabled = enabled)
+pub fn set_animation<R: Runtime>(
+    app: AppHandle<R>,
+    webview: Webview<R>,
+    state: State<'_, Shared>,
+    enabled: bool,
+) -> Result<Config, SettingsError> {
+    write(&app, &webview, &state, false, |txn| {
+        txn.update_config(|config| config.animation.enabled = enabled)
+    })
 }
 
 /// Sets one of the knobs in Settings ▸ Advanced. [`Config::set_advanced`]
 /// clamps the value, so the returned config carries what was actually saved.
 #[tauri::command]
-pub fn set_advanced(
+pub fn set_advanced<R: Runtime>(
+    app: AppHandle<R>,
+    webview: Webview<R>,
     state: State<'_, Shared>,
     setting: AdvancedSetting,
 ) -> Result<Config, SettingsError> {
-    state.update_config(|config| config.set_advanced(setting))
+    write(&app, &webview, &state, false, |txn| {
+        txn.update_config(|config| config.set_advanced(setting))
+    })
 }
 
 /// Sets how long a snap takes. `update_config` normalizes afterwards, so an
 /// out-of-range value clamps exactly as a hand-edited one does.
 #[tauri::command]
-pub fn set_animation_duration(
+pub fn set_animation_duration<R: Runtime>(
+    app: AppHandle<R>,
+    webview: Webview<R>,
     state: State<'_, Shared>,
     duration_ms: u32,
 ) -> Result<Config, SettingsError> {
-    state.update_config(|config| config.animation.duration_ms = duration_ms)
+    write(&app, &webview, &state, false, |txn| {
+        txn.update_config(|config| config.animation.duration_ms = duration_ms)
+    })
 }
 
 /// Changes the OS login item first and only then records the preference, so
-/// the checkbox never claims a login item the OS refused to create.
+/// the checkbox never claims a login item the OS refused to create. Both
+/// happen in one transaction, so another window cannot write in between.
 #[tauri::command]
 pub fn set_launch_on_login<R: Runtime>(
     app: AppHandle<R>,
+    webview: Webview<R>,
     state: State<'_, Shared>,
     enabled: bool,
 ) -> Result<Config, SettingsError> {
-    let previous = state.config().launch_on_login;
-    sync_autostart(&app, &state, enabled)?;
-    state
-        .update_config(|config| config.launch_on_login = enabled)
-        .map_err(|err| revert_autostart(&app, &state, previous, err))
+    write(&app, &webview, &state, false, |txn| {
+        txn.set_launch_on_login(enabled, &mut |on| sync_autostart(&app, &state, on))
+    })
 }
 
 /// Claims the one-time first-run orientation. Returns `true` at most once per
 /// installation, and records that fact before returning, so reopening the
-/// welcome screen or relaunching never re-triggers a first run.
+/// welcome screen or relaunching never re-triggers a first run. Not announced:
+/// it is bookkeeping, not a setting either window shows.
 #[tauri::command]
 pub fn take_orientation(state: State<'_, Shared>) -> bool {
     state.take_orientation()
@@ -268,25 +335,12 @@ pub fn close_welcome<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
 #[tauri::command]
 pub fn reset_to_defaults<R: Runtime>(
     app: AppHandle<R>,
+    webview: Webview<R>,
     state: State<'_, Shared>,
 ) -> Result<Config, SettingsError> {
-    let previous_login = state.config().launch_on_login;
-    let default_login = Config::default().launch_on_login;
-    let login = sync_autostart(&app, &state, default_login);
-    let launch_on_login = if login.is_ok() {
-        default_login
-    } else {
-        previous_login
-    };
-    state.reset_to_defaults(launch_on_login).map_err(|err| {
-        if login.is_ok() {
-            revert_autostart(&app, &state, previous_login, err)
-        } else {
-            err
-        }
-    })?;
-    crate::tray::sync_bindings(&app);
-    login.map(|()| state.config())
+    write(&app, &webview, &state, true, |txn| {
+        txn.restore_defaults(&mut |on| sync_autostart(&app, &state, on))
+    })
 }
 
 /// Puts back the settings the last [`reset_to_defaults`] replaced, or returns
@@ -297,30 +351,12 @@ pub fn reset_to_defaults<R: Runtime>(
 #[tauri::command]
 pub fn undo_reset_to_defaults<R: Runtime>(
     app: AppHandle<R>,
+    webview: Webview<R>,
     state: State<'_, Shared>,
 ) -> Result<Option<Config>, SettingsError> {
-    let Some(target_login) = state.reset_undo_launch_on_login() else {
-        return Ok(None);
-    };
-    let previous_login = state.config().launch_on_login;
-    let login = sync_autostart(&app, &state, target_login);
-    let kept_login = login.is_err().then_some(previous_login);
-    let restored = state.undo_reset_to_defaults(kept_login).map_err(|err| {
-        if login.is_ok() {
-            revert_autostart(&app, &state, previous_login, err)
-        } else {
-            err
-        }
-    })?;
-    if restored.is_none() {
-        // Another change got there first; the login item follows it instead.
-        if login.is_ok() {
-            sync_autostart(&app, &state, state.config().launch_on_login)?;
-        }
-        return Ok(None);
-    }
-    crate::tray::sync_bindings(&app);
-    login.map(|()| Some(state.config()))
+    write(&app, &webview, &state, true, |txn| {
+        txn.undo_restore_defaults(&mut |on| sync_autostart(&app, &state, on))
+    })
 }
 
 #[tauri::command]
