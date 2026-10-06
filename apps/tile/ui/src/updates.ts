@@ -152,7 +152,7 @@ function trimReleaseNoteUrl(candidate: string): string {
   let url = candidate.replace(TRAILING_URL_PUNCTUATION, "");
 
   while (url.length > 0) {
-    const closing = url.at(-1);
+    const closing = url.charAt(url.length - 1);
     const opening = closing ? CLOSING_DELIMITERS.get(closing) : undefined;
     if (!closing || !opening) break;
 
