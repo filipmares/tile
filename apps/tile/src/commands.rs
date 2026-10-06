@@ -22,9 +22,10 @@ use tile_core::{
 
 use crate::autostart;
 use crate::dto::{
-    BuildInfoDto, ConfigRecoveryDto, HotkeyBindingStatusDto, HotkeyStatusDto, PermissionStatusDto,
-    UpdateStatusDto, WelcomeStatusDto,
+    AccessibilityHelpDto, BuildInfoDto, ConfigRecoveryDto, GrantStepDto, HotkeyBindingStatusDto,
+    HotkeyStatusDto, PermissionStatusDto, UpdateStatusDto, WelcomeStatusDto,
 };
+use crate::permission::GrantStep;
 use crate::settings_error::SettingsError;
 use crate::state::{AppState, SettingsTransaction};
 use crate::update::{UpdateError, UpdateManager};
@@ -384,13 +385,59 @@ pub fn get_welcome_status(state: State<'_, Shared>) -> Result<WelcomeStatusDto, 
 }
 
 #[tauri::command]
-pub fn get_permission_status(
-    state: State<'_, Shared>,
+pub fn get_permission_status<R: Runtime>(
+    app: AppHandle<R>,
     prompt: bool,
 ) -> Result<PermissionStatusDto, String> {
-    state
-        .permission_status(prompt)
+    crate::permission::refresh(&app, prompt)
         .map(PermissionStatusDto::from)
+        .map_err(|err| err.to_string())
+}
+
+/// What the settings window needs to explain how to grant Accessibility.
+#[tauri::command]
+pub fn get_accessibility_help(state: State<'_, Shared>) -> AccessibilityHelpDto {
+    AccessibilityHelpDto {
+        grant_step: state.grant_step().into(),
+        app_bundle: crate::permission::running_app_bundle().map(|path| path.display().to_string()),
+    }
+}
+
+/// The settings window's primary grant button. The first press this session
+/// asks macOS for its one-time prompt (which also lists Tile in the pane);
+/// later presses open the Privacy & Security pane, because a consumed prompt
+/// would otherwise make the button a silent no-op. Returns what was done.
+#[tauri::command]
+pub fn request_accessibility<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, Shared>,
+) -> Result<GrantStepDto, String> {
+    let step = state.grant_step();
+    match step {
+        GrantStep::Prompt => {
+            crate::permission::refresh(&app, true).map_err(|err| err.to_string())?;
+        }
+        GrantStep::OpenSettings => crate::permission::open_accessibility_settings()?,
+    }
+    Ok(step.into())
+}
+
+#[tauri::command]
+pub fn open_accessibility_settings() -> Result<(), String> {
+    crate::permission::open_accessibility_settings()
+}
+
+/// Shows the running `Tile.app` in Finder, so it can be dragged into the
+/// Accessibility list when it is missing. The path comes from the running
+/// process, never from the UI.
+#[tauri::command]
+pub fn reveal_app_bundle<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+
+    let bundle = crate::permission::running_app_bundle()
+        .ok_or("This copy of Tile is not running from an app bundle.")?;
+    app.opener()
+        .reveal_item_in_dir(bundle)
         .map_err(|err| err.to_string())
 }
 

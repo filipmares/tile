@@ -39,6 +39,8 @@ const ID_ABOUT: &str = "about";
 const ID_QUIT: &str = "quit";
 /// Menu item id for checking for or installing an update.
 const ID_UPDATE: &str = "update";
+/// Menu item id for the Accessibility recovery entry shown while Tile is blocked.
+const ID_PERMISSION: &str = "permission";
 /// Menu item id for the disabled development-build header. It is never
 /// clickable, so it deliberately matches nothing in the event handler.
 const ID_DEV_HEADER: &str = "development-header";
@@ -284,18 +286,19 @@ fn entry_items<R: Runtime>(
 /// Builds the tray icon and installs its menu handler.
 pub fn build_tray<R: Runtime>(app: &AppHandle<R>, kind: BuildKind) -> tauri::Result<()> {
     let status = app.state::<Arc<UpdateManager>>().status();
+    let blocked = app.state::<Arc<AppState>>().permission_blocked();
     let menu = build_menu(app, kind, &status)?;
 
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .tooltip(with_hotkey_note(
-            tray_tooltip(kind, &status),
+            current_tooltip(kind, &status, blocked),
             hotkeys_degraded(app),
         ))
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(move |app, event| handle_menu_event(app, event.id.as_ref(), kind));
 
-    if let Some(icon) = tray_icon(app, kind, &status) {
+    if let Some(icon) = tray_icon(app, kind, &status, blocked) {
         builder = builder.icon(icon);
     }
 
@@ -345,10 +348,31 @@ fn build_menu<R: Runtime>(
     let actions_separator = PredefinedMenuItem::separator(app)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, ID_QUIT, "Quit Tile", true, None::<&str>)?;
-    let config = app.state::<Arc<AppState>>().config();
+    let state = app.state::<Arc<AppState>>();
+    let config = state.config();
     let actions = action_items(app, &config)?;
+    // While Accessibility is missing nothing below can work, so the way out
+    // comes first.
+    let permission = if state.permission_blocked() {
+        Some((
+            MenuItem::with_id(
+                app,
+                ID_PERMISSION,
+                PERMISSION_MENU_LABEL,
+                true,
+                None::<&str>,
+            )?,
+            PredefinedMenuItem::separator(app)?,
+        ))
+    } else {
+        None
+    };
 
     let mut items: Vec<&dyn IsMenuItem<R>> = Vec::new();
+    if let Some((grant, grant_separator)) = &permission {
+        items.push(grant);
+        items.push(grant_separator);
+    }
     if let Some((header, dev_separator)) = &dev_header {
         items.push(header);
         items.push(dev_separator);
@@ -366,6 +390,18 @@ fn build_menu<R: Runtime>(
     items.push(&quit);
 
     Menu::with_items(app, &items)
+}
+
+const PERMISSION_MENU_LABEL: &str = "Grant Accessibility Permission…";
+
+/// The tooltip, with a missing permission taking precedence over update and
+/// development labelling: it is the one state in which Tile does nothing.
+fn current_tooltip(kind: BuildKind, status: &UpdateStatus, blocked: bool) -> String {
+    if blocked {
+        "Tile — Accessibility permission needed".into()
+    } else {
+        tray_tooltip(kind, status)
+    }
 }
 
 /// Whether the tray icon should carry a status badge.
@@ -453,8 +489,9 @@ fn tray_icon<R: Runtime>(
     _app: &AppHandle<R>,
     kind: BuildKind,
     status: &UpdateStatus,
+    blocked: bool,
 ) -> Option<tauri::image::Image<'static>> {
-    if needs_badge(kind, status) {
+    if blocked || needs_badge(kind, status) {
         template_badged_icon()
             .map_err(|err| log::warn!("could not create badged tray icon: {err}"))
             .ok()
@@ -470,8 +507,11 @@ fn tray_icon<R: Runtime>(
     _app: &AppHandle<R>,
     kind: BuildKind,
     status: &UpdateStatus,
+    blocked: bool,
 ) -> Option<tauri::image::Image<'static>> {
-    let badge = if !needs_badge(kind, status) {
+    let badge = if blocked {
+        Some([220, 38, 38, 255])
+    } else if !needs_badge(kind, status) {
         None
     } else if kind.is_development() {
         Some([245, 145, 35, 255])
@@ -557,7 +597,9 @@ pub fn sync_update_state<R: Runtime>(app: &AppHandle<R>, status: &UpdateStatus) 
     let Some(tray) = app.tray_by_id(TRAY_ID) else {
         return;
     };
-    let kind = app.state::<Arc<AppState>>().build_kind();
+    let state = app.state::<Arc<AppState>>();
+    let kind = state.build_kind();
+    let blocked = state.permission_blocked();
     match build_menu(app, kind, status) {
         Ok(menu) => {
             if let Err(err) = tray.set_menu(Some(menu)) {
@@ -567,12 +609,12 @@ pub fn sync_update_state<R: Runtime>(app: &AppHandle<R>, status: &UpdateStatus) 
         Err(err) => log::warn!("could not rebuild tray menu: {err}"),
     }
     if let Err(err) = tray.set_tooltip(Some(with_hotkey_note(
-        tray_tooltip(kind, status),
+        current_tooltip(kind, status, blocked),
         hotkeys_degraded(app),
     ))) {
         log::warn!("could not update tray tooltip: {err}");
     }
-    if let Some(icon) = tray_icon(app, kind, status) {
+    if let Some(icon) = tray_icon(app, kind, status, blocked) {
         if let Err(err) = tray.set_icon(Some(icon)) {
             log::warn!("could not update tray icon: {err}");
         }
@@ -590,7 +632,8 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, id: &str, kind: BuildKind) 
                 log::error!("failed to open about window: {err}");
             }
         }
-        ID_SETTINGS => {
+        // Settings hosts the permission panel with every recovery step.
+        ID_SETTINGS | ID_PERMISSION => {
             if let Err(err) = window::open_settings(app, kind) {
                 log::error!("failed to open settings window: {err}");
             }
@@ -761,6 +804,25 @@ mod tests {
             "Tile — some shortcuts aren't working"
         );
         assert_eq!(with_hotkey_note("Tile".into(), false), "Tile");
+    }
+
+    #[test]
+    fn a_missing_permission_takes_over_the_tooltip() {
+        let available = UpdateStatus::Available {
+            version: "1.2.3".into(),
+            notes: None,
+            date: None,
+        };
+        for kind in [BuildKind::Installed, BuildKind::Development] {
+            assert_eq!(
+                current_tooltip(kind, &available, true),
+                "Tile — Accessibility permission needed"
+            );
+            assert_eq!(
+                current_tooltip(kind, &available, false),
+                tray_tooltip(kind, &available)
+            );
+        }
     }
 
     #[cfg(target_os = "macos")]

@@ -150,6 +150,13 @@ pub fn show_menu_notice<R: Runtime>(app: &AppHandle<R>, message: &str) {
 }
 
 fn on_permission_denied<R: Runtime>(app: &AppHandle<R>, err: &PlatformError) {
+    // One failed call proves nothing on its own, so ask macOS again. A real
+    // revocation flips the shared state, which refreshes the tray and the
+    // settings window exactly as the monitor would have.
+    if let Err(check_err) = crate::permission::refresh(app, false) {
+        log::warn!("could not re-check permission after a denied action: {check_err}");
+    }
+
     let state = app.state::<Arc<AppState>>();
     if !state.should_show_permission_dialog() {
         return;
@@ -176,8 +183,9 @@ fn permission_message(err: &PlatformError) -> String {
         )
     } else if cfg!(target_os = "macos") {
         format!(
-            "Tile needs Accessibility permission to move windows.\n\n{err}\n\nGrant it in System \
-             Settings ▸ Privacy & Security ▸ Accessibility, then try again."
+            "Tile needs Accessibility permission to move windows.\n\n{err}\n\nIn System \
+             Settings, open Privacy & Security ▸ Accessibility and switch on Tile. Tile's \
+             settings window explains each step."
         )
     } else {
         format!("Tile does not have permission to move this window.\n\n{err}")

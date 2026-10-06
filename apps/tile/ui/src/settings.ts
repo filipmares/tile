@@ -3,15 +3,19 @@
 // when saved settings were unreadable. Every change goes through the write
 // queue in `writes.ts`.
 
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { listen } from "@tauri-apps/api/event";
 import {
   dismissConfigRecovery,
   getBuildInfo,
   getConfig,
+  getAccessibilityHelp,
   getConfigRecovery,
   getPermissionStatus,
+  openAccessibilitySettings,
   openWelcome,
+  requestAccessibility,
   resetToDefaults,
+  revealAppBundle,
   revealConfigBackup,
   setAnimation,
   setAnimationDuration,
@@ -79,10 +83,16 @@ const STRINGS = {
   openFolderFailed: (err: unknown) =>
     `Could not open the folder: ${String(err)}`,
   loadFailed: (err: unknown) => `Could not load settings: ${String(err)}`,
+  grantPrompt: "Grant permission…",
+  grantOpenSettings: "Open Accessibility settings…",
+  accessibilityOpened:
+    "System Settings is open. Switch on Tile under Privacy & Security ▸ Accessibility.",
+  accessibilityFailed: (err: unknown) => String(err),
+  revealFailed: (err: unknown) => `Could not show Tile in Finder: ${String(err)}`,
 };
 
-const ACCESSIBILITY_URL =
-  "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+/** Emitted by the Rust side whenever the shared permission state changes. */
+const PERMISSION_CHANGED_EVENT = "permission-changed";
 
 /**
  * Whether Undo is on offer after a restore-defaults. The backend keeps the
@@ -505,11 +515,53 @@ async function commitAnimationDuration(): Promise<void> {
   }
 }
 
+/**
+ * Fits the panel to where the user is: the first press of the primary button
+ * asks macOS for its prompt, which it only ever shows once, so after that the
+ * button opens the Privacy & Security pane instead and the separate "Open"
+ * button would be a duplicate. Finder can only reveal a real app bundle.
+ */
+async function renderAccessibilityHelp(): Promise<void> {
+  let help;
+  try {
+    help = await getAccessibilityHelp();
+  } catch (err) {
+    console.error("could not read accessibility help", err);
+    return;
+  }
+  const prompted = help.grantStep === "open-settings";
+  dom.grant.textContent = prompted
+    ? STRINGS.grantOpenSettings
+    : STRINGS.grantPrompt;
+  dom.openAccessibility.hidden = prompted;
+  dom.permissionPrompted.hidden = !prompted;
+  dom.revealApp.hidden = help.appBundle === null;
+  dom.permissionUnbundled.hidden = help.appBundle !== null;
+}
+
+function setPermissionStatus(text: string): void {
+  dom.permissionStatus.textContent = text;
+}
+
+async function grantPermission(): Promise<void> {
+  setPermissionStatus("");
+  try {
+    const step = await requestAccessibility();
+    if (step === "open-settings") {
+      setPermissionStatus(STRINGS.accessibilityOpened);
+    }
+  } catch (err) {
+    setPermissionStatus(STRINGS.accessibilityFailed(err));
+  }
+  await renderAccessibilityHelp();
+  await refreshPermission();
+}
+
 /** Refreshes the permission panel, polling while permission is denied. */
-async function refreshPermission(prompt: boolean): Promise<void> {
+async function refreshPermission(): Promise<void> {
   let status;
   try {
-    status = await getPermissionStatus(prompt);
+    status = await getPermissionStatus(false);
   } catch (err) {
     // An unreadable status is not a denial: the Rust side applies hotkeys
     // anyway in that case, so the panel stays quiet rather than accusing.
@@ -518,13 +570,17 @@ async function refreshPermission(prompt: boolean): Promise<void> {
   }
 
   const denied = status === "denied";
+  if (denied && dom.permissionPanel.hidden) {
+    await renderAccessibilityHelp();
+  }
   dom.permissionPanel.hidden = !denied;
 
   if (denied && permissionTimer === null) {
-    permissionTimer = window.setInterval(() => void refreshPermission(false), 2000);
+    permissionTimer = window.setInterval(() => void refreshPermission(), 2000);
   } else if (!denied && permissionTimer !== null) {
     window.clearInterval(permissionTimer);
     permissionTimer = null;
+    setPermissionStatus("");
     // Permission just became available: surface any late hotkey status.
     await refreshHotkeyStatus();
     renderBindings();
@@ -613,19 +669,34 @@ function wireEvents(): void {
   });
   dom.undoReset.addEventListener("click", () => void undoRestoreDefaults());
 
-  dom.grant.addEventListener("click", () => void refreshPermission(true));
+  dom.grant.addEventListener("click", () => void grantPermission());
   dom.showWelcome.addEventListener("click", () => {
     void openWelcome().catch((err) =>
       console.error("could not open the welcome window", err),
     );
   });
   dom.openAccessibility.addEventListener("click", async () => {
+    setPermissionStatus("");
     try {
-      await openUrl(ACCESSIBILITY_URL);
+      await openAccessibilitySettings();
+      setPermissionStatus(STRINGS.accessibilityOpened);
     } catch (err) {
-      console.error("could not open Accessibility settings", err);
+      setPermissionStatus(STRINGS.accessibilityFailed(err));
     }
   });
+  dom.revealApp.addEventListener("click", async () => {
+    setPermissionStatus("");
+    try {
+      await revealAppBundle();
+    } catch (err) {
+      setPermissionStatus(STRINGS.revealFailed(err));
+    }
+  });
+  // A grant or revocation noticed in the background (or by a failed action)
+  // shows here straight away, even while the panel is hidden and not polling.
+  void listen(PERMISSION_CHANGED_EVENT, () => void refreshPermission()).catch(
+    (err) => console.error("could not listen for permission changes", err),
+  );
 }
 
 let booted = false;
@@ -688,5 +759,5 @@ export async function bootSettings(): Promise<void> {
   }
   renderBindings();
   renderBehaviour();
-  await refreshPermission(false);
+  await refreshPermission();
 }

@@ -421,6 +421,15 @@ export interface AdvancedSetting {
 
 export type PermissionStatus = "granted" | "denied" | "not-required";
 
+/** What the permission panel's primary button does next. */
+export type GrantStep = "prompt" | "open-settings";
+
+export interface AccessibilityHelp {
+  grantStep: GrantStep;
+  /** The running Tile.app, or null for an unbundled development build. */
+  appBundle: string | null;
+}
+
 export type HotkeyRoute =
   | "registered"
   | "intercepted"

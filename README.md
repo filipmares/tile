@@ -235,9 +235,26 @@ re-checks its registered shortcuts, so they keep working without a restart.
 macOS requires you to grant Tile the **Accessibility** permission before it can
 move other applications' windows. Grant it under:
 
-**System Settings ▸ Privacy & Security ▸ Accessibility** → enable **Tile**.
+**System Settings ▸ Privacy & Security ▸ Accessibility** → enable **Tile**
+(on macOS 12 and earlier: **System Preferences ▸ Security & Privacy ▸ Privacy ▸
+Accessibility**). This is not the top-level *Accessibility* section of System
+Settings, which holds display and pointer options.
 
-You may need to toggle it off and on again after updating the app.
+Tile picks up the change by itself within a couple of seconds; there is no need
+to restart it. While the permission is missing, Tile's settings window shows the
+steps, and the menu bar menu starts with **Grant Accessibility Permission…**.
+Tile keeps checking in the background, so if the permission is switched off
+later, the same steps come back.
+
+- **Tile is not in the list:** click **+** and choose Tile, or use **Show Tile
+  in Finder** in Tile's settings and drag the app into the list. A build run
+  with `cargo run` is not an app bundle, so macOS may list the app that started
+  it (such as Terminal) instead.
+- **Tile is listed and switched on, but shortcuts do nothing** (this can happen
+  after an update or a rebuild): select Tile, remove it with **−**, and add it
+  again. Tile cannot tell this case apart reliably, so it does not try to.
+- **Managed Macs:** your organization may lock this setting. Ask your
+  administrator.
 
 Builds you compile yourself are unsigned, so Gatekeeper blocks their first
 launch. Remove the quarantine attribute:

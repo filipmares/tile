@@ -30,7 +30,7 @@
 //!
 //! The cost is bounded and invisible: the only other users of these locks are
 //! the settings commands, which are user-driven and infrequent, and the
-//! permission poll, which runs every two seconds. Rapid hotkeys are handled by
+//! permission monitor, which checks every few seconds. Rapid hotkeys are handled by
 //! preemption instead of by queueing — see
 //! [`AppState::perform_action_preemptible`].
 
@@ -51,6 +51,7 @@ use tile_platform::{
 use crate::animate::{self, Interruption, Pacer, SleepPacer};
 use crate::build_kind::BuildKind;
 use crate::config_store;
+use crate::permission::{GrantStep, PermissionTracker, Transition};
 use crate::ratelimit::RateLimiter;
 use crate::settings_error::SettingsError;
 
@@ -84,6 +85,8 @@ pub struct AppState {
     hotkey_status_notifier: Mutex<Option<Box<dyn Fn() + Send>>>,
     permission_dialog_limiter: Mutex<RateLimiter>,
     menu_notice_limiter: Mutex<RateLimiter>,
+    /// The shared Accessibility permission state. See [`crate::permission`].
+    permission: Mutex<PermissionTracker>,
     /// Whether the one-time first-run orientation is still owed to the user.
     /// Set once at startup and cleared as soon as the settings UI claims it,
     /// so a reopened settings window never shows it twice in one session.
@@ -148,6 +151,7 @@ impl AppState {
             hotkey_status_notifier: Mutex::new(None),
             permission_dialog_limiter: Mutex::new(RateLimiter::new(PERMISSION_DIALOG_COOLDOWN)),
             menu_notice_limiter: Mutex::new(RateLimiter::new(MENU_NOTICE_COOLDOWN)),
+            permission: Mutex::new(PermissionTracker::new()),
             orientation_pending: AtomicBool::new(orientation_pending),
             config_recovery: Mutex::new(None),
             saves_blocked: false,
@@ -224,6 +228,40 @@ impl AppState {
     /// prompt must only ever be requested from the main thread.
     pub fn permission_status(&self, prompt: bool) -> tile_platform::Result<PermissionStatus> {
         lock(&self.backend).permission_status(prompt)
+    }
+
+    /// Checks trust and records it in the shared tracker, returning the
+    /// transition it caused. Callers should go through
+    /// [`crate::permission::refresh`], which acts on that transition.
+    ///
+    /// The tracker stays locked across the check (tracker, then backend — the
+    /// only order these two are ever taken in), so two concurrent checks can
+    /// never record their answers out of order and invent a transition.
+    pub fn refresh_permission(
+        &self,
+        prompt: bool,
+    ) -> tile_platform::Result<(PermissionStatus, Option<Transition>)> {
+        let mut tracker = lock(&self.permission);
+        if prompt {
+            tracker.mark_prompted();
+        }
+        let status = self.permission_status(prompt)?;
+        Ok((status, tracker.observe(status)))
+    }
+
+    /// Whether Tile is known to lack the permission it needs right now.
+    pub fn permission_blocked(&self) -> bool {
+        lock(&self.permission).is_blocked()
+    }
+
+    /// What the settings window's grant button should do next.
+    pub fn grant_step(&self) -> GrantStep {
+        lock(&self.permission).grant_step()
+    }
+
+    /// How long the permission monitor should wait before checking again.
+    pub fn permission_poll_interval(&self) -> Duration {
+        lock(&self.permission).poll_interval()
     }
 
     /// How many displays are connected right now.

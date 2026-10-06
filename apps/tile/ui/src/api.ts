@@ -2,12 +2,14 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import {
+  AccessibilityHelp,
   AdvancedSetting,
   BuildInfo,
   Config,
   ConfigRecovery,
   CycleSize,
   Gaps,
+  GrantStep,
   Hotkey,
   HotkeyStatus,
   PermissionStatus,
@@ -108,6 +110,23 @@ export const performAction = (action: WindowAction): Promise<void> =>
 export const getPermissionStatus = (
   prompt: boolean,
 ): Promise<PermissionStatus> => invoke("get_permission_status", { prompt });
+
+export const getAccessibilityHelp = (): Promise<AccessibilityHelp> =>
+  invoke("get_accessibility_help");
+
+/**
+ * The primary grant button: asks macOS for its prompt the first time this
+ * session, then opens the Privacy & Security pane. Resolves to what it did.
+ */
+export const requestAccessibility = (): Promise<GrantStep> =>
+  invoke("request_accessibility");
+
+/** Opens System Settings ▸ Privacy & Security ▸ Accessibility, with fallbacks. */
+export const openAccessibilitySettings = (): Promise<void> =>
+  invoke("open_accessibility_settings");
+
+/** Shows the running Tile.app in Finder. */
+export const revealAppBundle = (): Promise<void> => invoke("reveal_app_bundle");
 
 export const getHotkeyStatus = (): Promise<HotkeyStatus> =>
   invoke("get_hotkey_status");
