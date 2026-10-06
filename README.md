@@ -140,15 +140,21 @@ Also available, all unbound by default:
 Resizing anchors to whichever screen edge the window is already flush against,
 so a window in the right half grows leftwards instead of being pushed off the
 screen; a floating window resizes around its centre. Nothing can be nudged off
-the screen, and nothing shrinks below a quarter of the work area.
+the screen, and by default nothing shrinks below a quarter of the work area.
 
 The step sizes (`sizeStep`, `widthStep` and `moveStep`, each defaulting to 30)
-and the floor (`minimumWindowWidth`, `minimumWindowHeight`, defaulting to 0.25)
-live in `config.json`; there is no settings UI for them yet.
+and the floor (`minimumWindowWidth`, `minimumWindowHeight`, defaulting to 25%
+of the work area) are in **Settings ▸ Advanced**, as is the width and height of
+Almost Maximize (90% by default). Steps range from 1 to 1000 (physical pixels
+on Windows, points on macOS), and the fractions from 1% to 100%.
 
-If `config.json` cannot be read — say, after a hand edit leaves it invalid —
-Tile starts from defaults, keeps the old file next to it as
-`config.corrupt-<timestamp>.json`, and opens Settings once to say so.
+`config.json` carries a `schemaVersion` (currently `1`; a file without one is
+treated as version 1). Settings are read one at a time, so a hand edit that
+leaves one value with the wrong type resets only that value. If `config.json`
+cannot be read at all — say, after a hand edit leaves it invalid JSON — Tile
+starts from defaults. Either way, and also when the file comes from a newer
+Tile, the original is kept next to it as `config.corrupt-<timestamp>.json`
+(the newest five are kept) and Settings opens once to say so.
 
 ### Animated snapping
 
@@ -164,7 +170,8 @@ snapping Tile used to do; that is also the setting to reach for over a remote
 desktop session, or if you would rather have no motion at all.
 
 How long a snap takes is a slider in the same place, **Settings ▸ Behaviour ▸
-Motion**, from 40 ms to 1000 ms. The frame rate remains `config.json`-only:
+Motion**, from 40 ms to 1000 ms. The frame rate is in **Settings ▸ Advanced**,
+from 15 to 240 fps:
 
 ```jsonc
 "animation": {
@@ -176,8 +183,8 @@ Motion**, from 40 ms to 1000 ms. The frame rate remains `config.json`-only:
 
 `durationMs` is the end-to-end duration of the rigid ease-out, and is the value
 behind the Motion slider. The default is 250 ms on macOS and 220 ms on Windows
-and other platforms. The frame rate is a config-file-only pacing knob; the
-platform profile supplies the native-feeling ease-out tuning.
+and other platforms. The frame rate is a pacing knob; the platform profile
+supplies the native-feeling ease-out tuning.
 
 ### Windows shortcut notes
 
@@ -219,14 +226,35 @@ Windows may still deny Tile permission to manipulate that app unless Tile is
 also elevated. Some corporate security software may flag or block the hook when
 interception is active.
 
+Windows can silently drop a keyboard hook across sleep, lock or a long stall.
+Tile re-installs its hook after resume, unlock and display wake, and
+re-checks its registered shortcuts, so they keep working without a restart.
+
 ### macOS: Accessibility permission
 
 macOS requires you to grant Tile the **Accessibility** permission before it can
 move other applications' windows. Grant it under:
 
-**System Settings ▸ Privacy & Security ▸ Accessibility** → enable **Tile**.
+**System Settings ▸ Privacy & Security ▸ Accessibility** → enable **Tile**
+(on macOS 12 and earlier: **System Preferences ▸ Security & Privacy ▸ Privacy ▸
+Accessibility**). This is not the top-level *Accessibility* section of System
+Settings, which holds display and pointer options.
 
-You may need to toggle it off and on again after updating the app.
+Tile picks up the change by itself within a couple of seconds; there is no need
+to restart it. While the permission is missing, Tile's settings window shows the
+steps, and the menu bar menu starts with **Grant Accessibility Permission…**.
+Tile keeps checking in the background, so if the permission is switched off
+later, the same steps come back.
+
+- **Tile is not in the list:** click **+** and choose Tile, or use **Show Tile
+  in Finder** in Tile's settings and drag the app into the list. A build run
+  with `cargo run` is not an app bundle, so macOS may list the app that started
+  it (such as Terminal) instead.
+- **Tile is listed and switched on, but shortcuts do nothing** (this can happen
+  after an update or a rebuild): select Tile, remove it with **−**, and add it
+  again. Tile cannot tell this case apart reliably, so it does not try to.
+- **Managed Macs:** your organization may lock this setting. Ask your
+  administrator.
 
 Builds you compile yourself are unsigned, so Gatekeeper blocks their first
 launch. Remove the quarantine attribute:
@@ -295,6 +323,27 @@ remove the login item; current installers restore it.
 **Custom title bars on Windows:** Tile supports resizable windows without a
 native title bar, including the Copilot app. Child windows, tool windows, and
 hidden or cloaked windows are excluded from tiling.
+
+### Uninstall
+
+- **Windows:** quit Tile from the tray, then uninstall it from **Settings ▸
+  Apps ▸ Installed apps**. The uninstaller also removes the sign-in login item
+  (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Tile`).
+- **macOS:** turn off **Launch Tile at login** in Settings first, then quit Tile
+  and move it from Applications to the Trash. If Tile is already gone, delete the
+  login item it left behind:
+
+  ```sh
+  rm ~/Library/LaunchAgents/Tile.plist
+  ```
+
+Settings and logs are left in place so a reinstall keeps your shortcuts.
+Delete them to remove every trace:
+
+- **Windows:** `%APPDATA%\Tile\Tile` (`config\config.json` and `data\logs`)
+- **macOS:** `~/Library/Application Support/dev.Tile.Tile`
+
+Development builds use `Tile-Development` in place of the last `Tile`.
 
 ## Build from source
 

@@ -1,9 +1,10 @@
 //! Loading and atomically persisting the user [`Config`].
 //!
 //! The store never panics: a missing or corrupt file falls back to
-//! [`Config::default`] so the tray app always starts. A corrupt file is moved
-//! aside first, so starting from defaults never costs the user their only
-//! copy. Saves are atomic — the JSON is written to a uniquely named sibling
+//! [`Config::default`] so the tray app always starts. Fields are read one at a
+//! time, so a single bad value resets only itself. A file that could not be
+//! loaded as-is is moved aside first (keeping the newest [`MAX_BACKUPS`]), so
+//! recovering never costs the user their only copy. Saves are atomic — the JSON is written to a uniquely named sibling
 //! temp file, flushed to disk, and then renamed over the real file, so a crash
 //! mid-write cannot leave an unparseable config behind.
 
@@ -14,7 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use directories::ProjectDirs;
-use tile_core::{Config, CONFIG_FILE_NAME};
+use tile_core::{Config, CONFIG_FILE_NAME, CONFIG_SCHEMA_VERSION};
 
 use crate::build_kind::BuildKind;
 
@@ -53,24 +54,46 @@ pub enum ConfigOrigin {
     Corrupt,
 }
 
-/// What happened to a config file that could not be read or parsed.
+/// Why a config file had to be moved aside on load.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecoveryKind {
+    /// The file could not be read or parsed at all; Tile started from
+    /// defaults.
+    Corrupt,
+    /// The file parsed, but some fields could not be read and were reset to
+    /// their defaults.
+    PartialReset,
+    /// The file was written by a newer Tile. What this build understands was
+    /// loaded; the rest would be lost on the next save, so the original is
+    /// kept.
+    NewerVersion,
+}
+
+/// What happened to a config file that could not be fully read.
 ///
-/// Tile starts from defaults in that case, and the next save would replace the
-/// user's only copy, so the old file is moved aside first and the user is told
-/// once where it went.
+/// The next save would replace the user's only copy, so the old file is moved
+/// aside first and the user is told once where it went.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigRecovery {
-    /// Where the unreadable file was moved. `None` when it could not be moved
+    pub kind: RecoveryKind,
+    /// Whether any field was reset to its default. Always true for
+    /// [`RecoveryKind::Corrupt`] and [`RecoveryKind::PartialReset`]; a
+    /// [`RecoveryKind::NewerVersion`] file may also have unreadable fields.
+    pub some_fields_reset: bool,
+    /// Where the original file was moved. `None` when it could not be moved
     /// aside, in which case nothing may be saved over it this session.
     pub backup_path: Option<PathBuf>,
 }
+
+/// How many `config.corrupt-*` backups are kept; older ones are deleted.
+pub const MAX_BACKUPS: usize = 5;
 
 /// A loaded [`Config`] and the [`ConfigOrigin`] it came from.
 #[derive(Debug, Clone)]
 pub struct LoadedConfig {
     pub config: Config,
     pub origin: ConfigOrigin,
-    /// Set only for [`ConfigOrigin::Corrupt`] loads of a file that exists.
+    /// Set when an existing file could not be loaded as-is and was backed up.
     pub recovery: Option<ConfigRecovery>,
 }
 
@@ -81,49 +104,90 @@ impl LoadedConfig {
     }
 }
 
-/// Loads the config from `dir`, returning [`Config::default`] when the file is
-/// absent or cannot be parsed, along with which of those happened. Never fails.
+/// Loads the config from `dir`, never failing. A missing file yields
+/// [`Config::default`].
 ///
-/// A file that exists but cannot be read or parsed is moved aside to
+/// Fields are read one at a time, so a wrong-typed value resets only itself.
+/// A file that cannot be read at all, has fields that had to be reset, or
+/// comes from a newer schema version is moved aside to
 /// `config.corrupt-<unix-seconds>.json` before this returns, so no later save
 /// can overwrite it. See [`ConfigRecovery`].
 pub fn load_from_dir(dir: &Path) -> LoadedConfig {
     let path = config_file_path(dir);
-    let (config, origin) = match fs::read_to_string(&path) {
-        Ok(contents) => match Config::from_json(&contents) {
-            Ok(config) => (config, ConfigOrigin::Loaded),
+    let (config, origin, recovery_kind) = match fs::read_to_string(&path) {
+        Ok(contents) => match Config::from_json_lenient(&contents) {
+            Ok(loaded) => {
+                if !loaded.reset_fields.is_empty() {
+                    log::warn!(
+                        "config at {} has unreadable settings ({}); reset them to defaults",
+                        path.display(),
+                        loaded.reset_fields.join(", ")
+                    );
+                }
+                let some_fields_reset = !loaded.reset_fields.is_empty();
+                let kind = if loaded.is_newer_schema() {
+                    log::warn!(
+                        "config at {} has schema version {}, newer than the supported {}; \
+                         loading what this build understands and keeping a backup",
+                        path.display(),
+                        loaded.schema_version,
+                        CONFIG_SCHEMA_VERSION
+                    );
+                    Some(RecoveryKind::NewerVersion)
+                } else if !loaded.reset_fields.is_empty() {
+                    Some(RecoveryKind::PartialReset)
+                } else {
+                    None
+                };
+                (
+                    loaded.config,
+                    ConfigOrigin::Loaded,
+                    kind.map(|kind| (kind, some_fields_reset)),
+                )
+            }
             Err(err) => {
                 log::warn!(
                     "config at {} is corrupt ({err}); falling back to defaults",
                     path.display()
                 );
-                (Config::default(), ConfigOrigin::Corrupt)
+                (
+                    Config::default(),
+                    ConfigOrigin::Corrupt,
+                    Some((RecoveryKind::Corrupt, true)),
+                )
             }
         },
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
             log::info!("no config at {}; using defaults", path.display());
-            (Config::default(), ConfigOrigin::Missing)
+            (Config::default(), ConfigOrigin::Missing, None)
         }
         Err(err) => {
             log::warn!(
                 "could not read config at {} ({err}); using defaults",
                 path.display()
             );
-            (Config::default(), ConfigOrigin::Corrupt)
+            (
+                Config::default(),
+                ConfigOrigin::Corrupt,
+                Some((RecoveryKind::Corrupt, true)),
+            )
         }
     };
-    let recovery = (origin == ConfigOrigin::Corrupt).then(|| back_up_corrupt(dir, &path));
+    let recovery = recovery_kind.map(|(kind, reset)| back_up(dir, &path, kind, reset));
     let mut config = config;
     if let Some(recovery) = &recovery {
-        // Whoever owned the broken file has used Tile before; the welcome
-        // walkthrough is not owed to them on this launch or the next.
-        config.orientation_shown = true;
+        // Whoever owned an unreadable file has used Tile before; the welcome
+        // walkthrough is not owed to them on this launch or the next. A file
+        // that was read field by field keeps its own `orientationShown`.
+        if recovery.kind == RecoveryKind::Corrupt {
+            config.orientation_shown = true;
+        }
         // With the old file safely aside, put a readable one in its place so
         // the next launch neither repeats this notice nor mistakes the user
         // for a first run.
         if recovery.backup_path.is_some() {
             if let Err(err) = save_to_dir(dir, &config) {
-                log::error!("could not write fresh defaults after backing up: {err}");
+                log::error!("could not write the recovered config after backing up: {err}");
             }
         }
     }
@@ -134,28 +198,26 @@ pub fn load_from_dir(dir: &Path) -> LoadedConfig {
     }
 }
 
-/// Moves an unreadable config out of the way so it survives the next save.
-fn back_up_corrupt(dir: &Path, path: &Path) -> ConfigRecovery {
+/// Moves a config that could not be loaded as-is out of the way so it
+/// survives the next save, then trims old backups.
+fn back_up(dir: &Path, path: &Path, kind: RecoveryKind, some_fields_reset: bool) -> ConfigRecovery {
     let backup = unused_backup_path(dir, unix_seconds());
     let backup_path = match fs::rename(path, &backup) {
         Ok(()) => {
-            log::warn!(
-                "moved the unreadable config to {}; starting from defaults",
-                backup.display()
-            );
+            log::warn!("moved the original config to {}", backup.display());
             Some(backup)
         }
         Err(rename_err) => match fs::copy(path, &backup) {
             Ok(_) => {
                 log::warn!(
-                    "could not move the unreadable config ({rename_err}); copied it to {}",
+                    "could not move the original config ({rename_err}); copied it to {}",
                     backup.display()
                 );
                 Some(backup)
             }
             Err(copy_err) => {
                 log::error!(
-                    "could not back up the unreadable config at {} (move: {rename_err}; \
+                    "could not back up the original config at {} (move: {rename_err}; \
                      copy: {copy_err}); settings will not be saved this session",
                     path.display()
                 );
@@ -163,7 +225,58 @@ fn back_up_corrupt(dir: &Path, path: &Path) -> ConfigRecovery {
             }
         },
     };
-    ConfigRecovery { backup_path }
+    if let Some(keep) = &backup_path {
+        prune_backups(dir, keep);
+    }
+    ConfigRecovery {
+        kind,
+        some_fields_reset,
+        backup_path,
+    }
+}
+
+/// Sort key for a backup file name: `(timestamp, same-second suffix)`, or
+/// `None` for anything that is not one of our backups.
+fn backup_sort_key(name: &str) -> Option<(u64, u32)> {
+    const MARKER: &str = ".corrupt-";
+    let template = backup_file_name(0);
+    let split = template.find(MARKER)? + MARKER.len();
+    let (prefix, suffix) = (&template[..split], &template[split + 1..]);
+    let rest = name.strip_prefix(prefix)?.strip_suffix(suffix)?;
+    match rest.split_once('-') {
+        Some((ts, n)) => Some((ts.parse().ok()?, n.parse().ok()?)),
+        None => Some((rest.parse().ok()?, 0)),
+    }
+}
+
+/// Keeps `keep` plus the newest `MAX_BACKUPS - 1` other backups in `dir`, so
+/// the cap holds even if the clock moved backwards since older backups.
+fn prune_backups(dir: &Path, keep: &Path) {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) => {
+            log::warn!("could not list config backups to prune: {err}");
+            return;
+        }
+    };
+    let mut backups: Vec<((u64, u32), PathBuf)> = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let key = backup_sort_key(entry.file_name().to_str()?)?;
+            Some((key, entry.path()))
+        })
+        .filter(|(_, path)| path != keep)
+        .collect();
+    backups.sort_by_key(|(key, _)| std::cmp::Reverse(*key));
+    for (_, path) in backups.into_iter().skip(MAX_BACKUPS.saturating_sub(1)) {
+        match fs::remove_file(&path) {
+            Ok(()) => log::info!("removed old config backup {}", path.display()),
+            Err(err) => log::warn!(
+                "could not remove old config backup {}: {err}",
+                path.display()
+            ),
+        }
+    }
 }
 
 /// The backup name for a corrupt config found at `timestamp`, e.g.
@@ -449,6 +562,154 @@ mod tests {
         };
         save_to_dir(&dir.0, &config).unwrap();
         assert_eq!(load_from_dir(&dir.0).config, config);
+        let written: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(config_file_path(&dir.0)).unwrap()).unwrap();
+        assert_eq!(written["schemaVersion"], CONFIG_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn a_legacy_config_without_a_schema_version_loads_without_recovery() {
+        let dir = TempDir::new();
+        fs::write(
+            config_file_path(&dir.0),
+            br#"{"gap":8,"launchOnLogin":false,"orientationShown":true}"#,
+        )
+        .unwrap();
+        let loaded = load_from_dir(&dir.0);
+        assert_eq!(loaded.origin, ConfigOrigin::Loaded);
+        assert!(loaded.recovery.is_none());
+        assert!(!loaded.config.launch_on_login);
+        assert!(backups_in(&dir.0).is_empty());
+    }
+
+    #[test]
+    fn a_wrong_typed_field_resets_only_that_field_and_keeps_a_backup() {
+        let dir = TempDir::new();
+        let original = br#"{"schemaVersion":1,"launchOnLogin":false,"sizeStep":"big"}"#;
+        fs::write(config_file_path(&dir.0), original).unwrap();
+
+        let loaded = load_from_dir(&dir.0);
+
+        assert_eq!(loaded.origin, ConfigOrigin::Loaded);
+        assert!(!loaded.is_first_run());
+        assert!(!loaded.config.launch_on_login);
+        assert_eq!(loaded.config.size_step, Config::default().size_step);
+        let recovery = loaded.recovery.expect("a partial reset is reported");
+        assert_eq!(recovery.kind, RecoveryKind::PartialReset);
+        let backup = recovery.backup_path.expect("the original is kept");
+        assert_eq!(fs::read(&backup).unwrap(), original);
+        // The recovered config replaces the file, so the next launch is quiet.
+        let next = load_from_dir(&dir.0);
+        assert!(next.recovery.is_none());
+        assert!(!next.config.launch_on_login);
+    }
+
+    #[test]
+    fn a_partial_reset_keeps_a_readable_orientation_marker() {
+        let dir = TempDir::new();
+        fs::write(
+            config_file_path(&dir.0),
+            br#"{"orientationShown":false,"sizeStep":"big"}"#,
+        )
+        .unwrap();
+        let loaded = load_from_dir(&dir.0);
+        assert!(loaded.recovery.is_some());
+        assert!(!loaded.config.orientation_shown);
+    }
+
+    #[test]
+    fn a_newer_schema_version_is_loaded_and_backed_up() {
+        let dir = TempDir::new();
+        let original = format!(
+            r#"{{"schemaVersion":{},"launchOnLogin":false,"futureThing":[1]}}"#,
+            CONFIG_SCHEMA_VERSION + 1
+        );
+        fs::write(config_file_path(&dir.0), &original).unwrap();
+
+        let loaded = load_from_dir(&dir.0);
+
+        assert!(!loaded.config.launch_on_login);
+        let recovery = loaded.recovery.expect("a newer file is reported");
+        assert_eq!(recovery.kind, RecoveryKind::NewerVersion);
+        assert!(!recovery.some_fields_reset);
+        let backup = recovery.backup_path.expect("the original is kept");
+        assert_eq!(fs::read_to_string(&backup).unwrap(), original);
+    }
+
+    #[test]
+    fn a_newer_schema_version_with_a_bad_field_reports_both() {
+        let dir = TempDir::new();
+        let original = format!(
+            r#"{{"schemaVersion":{},"launchOnLogin":"maybe"}}"#,
+            CONFIG_SCHEMA_VERSION + 1
+        );
+        fs::write(config_file_path(&dir.0), &original).unwrap();
+
+        let recovery = load_from_dir(&dir.0).recovery.unwrap();
+
+        assert_eq!(recovery.kind, RecoveryKind::NewerVersion);
+        assert!(recovery.some_fields_reset);
+    }
+
+    #[test]
+    fn only_the_newest_backups_are_kept() {
+        let dir = TempDir::new();
+        let old: Vec<PathBuf> = (1..=MAX_BACKUPS as u64 + 2)
+            .map(|ts| {
+                let path = dir.0.join(backup_file_name(ts));
+                fs::write(&path, b"old").unwrap();
+                path
+            })
+            .collect();
+        let unrelated = dir.0.join("config.corrupt-notes.txt");
+        fs::write(&unrelated, b"keep me").unwrap();
+        fs::write(config_file_path(&dir.0), b"{ broken").unwrap();
+
+        let backup = load_from_dir(&dir.0)
+            .recovery
+            .and_then(|r| r.backup_path)
+            .unwrap();
+
+        let remaining: Vec<PathBuf> = backups_in(&dir.0)
+            .into_iter()
+            .filter(|path| *path != unrelated)
+            .collect();
+        assert_eq!(remaining.len(), MAX_BACKUPS);
+        assert!(remaining.contains(&backup));
+        // The oldest three went; the newest four survived alongside the new one.
+        for path in &old[..3] {
+            assert!(!path.exists(), "{} should be pruned", path.display());
+        }
+        for path in &old[3..] {
+            assert!(path.exists(), "{} should be kept", path.display());
+        }
+        assert!(unrelated.exists());
+    }
+
+    #[test]
+    fn the_cap_holds_when_older_backups_look_newer() {
+        let dir = TempDir::new();
+        let future = u64::MAX / 2;
+        for n in 0..MAX_BACKUPS as u64 {
+            fs::write(dir.0.join(backup_file_name(future + n)), b"old").unwrap();
+        }
+        let keep = dir.0.join(backup_file_name(1));
+        fs::write(&keep, b"new").unwrap();
+
+        prune_backups(&dir.0, &keep);
+
+        let remaining = backups_in(&dir.0);
+        assert_eq!(remaining.len(), MAX_BACKUPS);
+        assert!(remaining.contains(&keep));
+        assert!(!dir.0.join(backup_file_name(future)).exists());
+    }
+
+    #[test]
+    fn backup_sort_keys_order_same_second_suffixes() {
+        assert_eq!(backup_sort_key("config.corrupt-42.json"), Some((42, 0)));
+        assert_eq!(backup_sort_key("config.corrupt-42-3.json"), Some((42, 3)));
+        assert_eq!(backup_sort_key("config.json"), None);
+        assert_eq!(backup_sort_key("config.corrupt-x.json"), None);
     }
 
     #[test]

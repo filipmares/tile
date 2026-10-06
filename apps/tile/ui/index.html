@@ -70,7 +70,7 @@
         </div>
 
         <!-- One shortcut per slide. The deck advances when the shortcut is
-             actually pressed, so the slides are built in main.ts from the
+             actually pressed, so the slides are built in onboarding.ts from the
              bindings that exist on this machine. -->
         <div class="deck">
           <div class="deck__track" id="welcome-track">
@@ -94,6 +94,12 @@
                 />
                 Launch Tile when I log in
               </label>
+              <p
+                class="field__error"
+                id="welcome-launch-error"
+                role="alert"
+                hidden
+              ></p>
               <div class="slide__actions">
                 <!-- The deck taught four shortcuts with keycaps; the fifth step
                      is not going to be the one that goes silent about its key.
@@ -120,7 +126,7 @@
           <div class="dots" id="welcome-dots" aria-hidden="true"></div>
           <p class="sr-only" id="welcome-progress" aria-live="polite"></p>
           <button id="welcome-skip" type="button" class="welcome__skip">
-            Skip
+            Skip guide
             <!-- Silent until the deck actually hands over the keyboard: an Esc
                  hint on a window that cannot receive Esc is a lie. -->
             <span class="button__key" id="welcome-skip-key" aria-hidden="true" hidden
@@ -129,6 +135,20 @@
           </button>
         </footer>
       </section>
+
+      <div class="settings-search" role="search">
+        <label class="sr-only" for="settings-search">Search settings</label>
+        <input
+          type="search"
+          id="settings-search"
+          class="settings-search__input"
+          placeholder="Search settings"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <p class="settings-search__empty" id="settings-search-empty" hidden></p>
+        <p class="sr-only" id="settings-search-status" aria-live="polite"></p>
+      </div>
 
       <section
         id="development-panel"
@@ -197,16 +217,18 @@
         </dialog>
       </section>
 
-      <!-- Shown once, after a launch that could not read the saved settings.
-           Tile carries on from defaults either way; this says so, and says
-           where the old file went, rather than looking as if it forgot. -->
+      <!-- Shown once, after a launch that could not load the saved settings
+           as-is (unreadable, partly reset, or from a newer Tile). It says so,
+           and says where the old file went, rather than looking as if Tile
+           forgot. -->
       <section
         id="recovery-panel"
         class="panel panel--warning"
+        role="status"
         hidden
         aria-labelledby="recovery-heading"
       >
-        <h2 id="recovery-heading">Settings were reset</h2>
+        <h2 id="recovery-heading">Settings recovered</h2>
         <p id="recovery-message"></p>
         <p class="panel__hint" id="recovery-path" hidden></p>
         <div class="panel__actions">
@@ -224,13 +246,29 @@
         id="permission-panel"
         class="panel panel--warning"
         hidden
+        aria-labelledby="permission-heading"
         aria-live="polite"
       >
-        <h2>Accessibility permission needed</h2>
+        <h2 id="permission-heading">Accessibility permission needed</h2>
         <p>
           Tile needs macOS Accessibility permission to move other apps'
           windows. Until it is granted, its keyboard shortcuts do nothing.
+          Tile notices the change by itself; there is no need to restart it.
         </p>
+        <ol class="panel__steps">
+          <li>
+            Open <strong>System Settings ▸ Privacy &amp; Security ▸
+            Accessibility</strong>. On macOS 12 and earlier it is
+            <strong>System Preferences ▸ Security &amp; Privacy ▸ Privacy ▸
+            Accessibility</strong>. This is not the separate Accessibility
+            section for display and pointer options.
+          </li>
+          <li>Switch on <strong>Tile</strong>.</li>
+          <li id="permission-add-step">
+            If Tile is not in the list, click <strong>+</strong> and choose
+            Tile, or drag it into the list from Finder.
+          </li>
+        </ol>
         <div class="panel__actions">
           <button id="grant-permission" type="button" class="button button--primary">
             Grant permission…
@@ -238,16 +276,35 @@
           <button id="open-accessibility" type="button" class="button">
             Open Accessibility settings
           </button>
+          <button id="reveal-app" type="button" class="button" hidden>
+            Show Tile in Finder
+          </button>
         </div>
-        <p class="panel__hint">
-          System Settings ▸ Privacy &amp; Security ▸ Accessibility
+        <p class="panel__hint" id="permission-prompted" hidden>
+          macOS shows its own permission prompt only once, so the button now
+          goes straight to the Accessibility list.
         </p>
+        <p class="panel__hint" id="permission-unbundled" hidden>
+          This development build is not running from an app bundle, so macOS
+          may list the app that started it, such as Terminal, instead of Tile.
+          Grant that app, or run a bundled build to test the permission flow.
+        </p>
+        <p class="panel__hint">
+          If Tile is already listed and switched on but its shortcuts still do
+          nothing, which can happen after an update or a rebuild, select Tile,
+          remove it with <strong>−</strong>, and add it again.
+        </p>
+        <p class="panel__hint">
+          On a Mac managed by your organization this setting may be locked. If
+          you cannot change it, ask your administrator.
+        </p>
+        <p class="panel__hint" id="permission-status" role="status"></p>
       </section>
 
       <section class="section" aria-labelledby="behaviour-heading">
         <div class="section__header">
           <div>
-            <h2 id="behaviour-heading">Behaviour</h2>
+            <h2 id="behaviour-heading" data-search-heading>Behaviour</h2>
             <p class="section__description">
               Fine-tune spacing and what happens when you repeat a shortcut.
             </p>
@@ -356,7 +413,7 @@
         </details>
 
         <div class="settings-group settings-group--last">
-          <h3 class="settings-group__title">Motion</h3>
+          <h3 class="settings-group__title" data-search-heading>Motion</h3>
           <label class="field field--inline">
             <input type="checkbox" id="animate-moves" name="animate-moves" />
             <span class="field__label">Animate window movement</span>
@@ -388,9 +445,9 @@
         </div>
 
         <div class="settings-group settings-group--last">
-          <h3 class="settings-group__title">Startup</h3>
+          <h3 class="settings-group__title" data-search-heading>Startup</h3>
           <label class="field field--inline">
-            <input type="checkbox" id="launch-on-login" name="launch-on-login" />
+                      <input type="checkbox" id="launch-on-login" name="launch-on-login" />
             <span class="field__label">Launch Tile at login</span>
           </label>
           <p class="field__error" id="launch-error" role="alert" hidden></p>
@@ -404,12 +461,18 @@
       <section class="section" aria-labelledby="bindings-heading">
         <div class="section__header">
           <div>
-            <h2 id="bindings-heading">Shortcuts</h2>
+            <h2 id="bindings-heading" data-search-heading>Shortcuts</h2>
             <p class="section__description">
               Customize the keys Tile uses to move and resize windows.
             </p>
           </div>
         </div>
+        <p
+          class="section__hint section__hint--warning"
+          id="hotkey-hook-warning"
+          role="status"
+          hidden
+        ></p>
         <p
           class="section__hint section__hint--error"
           id="hotkey-apply-error"
@@ -419,32 +482,215 @@
         <p class="section__hint" id="recording-status" aria-live="assertive"></p>
         <p class="field__error" id="binding-error" role="alert" hidden></p>
 
-        <div class="shortcut-subsection">
-          <h3 class="shortcut-subsection__title">Active shortcuts</h3>
+        <div class="shortcut-subsection" data-search-group>
+          <h3 class="shortcut-subsection__title" data-search-heading>
+            Active shortcuts
+          </h3>
           <p class="shortcut-subsection__description">
             Your currently assigned shortcuts.
           </p>
           <ul class="bindings bindings--active" id="assigned-bindings"></ul>
         </div>
 
-        <details class="all-shortcuts" id="all-shortcuts">
+        <details class="all-shortcuts" id="all-shortcuts" data-search-group>
           <summary class="all-shortcuts__summary">
-            <span>All available shortcuts</span>
+            <span data-search-heading>All available shortcuts</span>
             <span class="all-shortcuts__count" id="all-shortcuts-count"></span>
           </summary>
-          <div class="all-shortcuts__filter">
-            <label class="field__label" for="shortcut-filter">
-              Find a shortcut
-            </label>
-            <input
-              type="search"
-              id="shortcut-filter"
-              placeholder="Search by name…"
-              autocomplete="off"
-              spellcheck="false"
-            />
-          </div>
           <ul class="bindings" id="bindings"></ul>
+        </details>
+      </section>
+
+      <section class="section" aria-label="Advanced">
+        <details class="settings-group" id="advanced">
+          <summary class="settings-group__summary">Advanced</summary>
+          <div class="settings-group__content">
+          <p class="panel__hint">
+            Fine-tuning for the sizing and nudging shortcuts. Restore defaults
+            resets these too.
+          </p>
+
+          <div class="field">
+            <div class="field__text">
+              <label class="field__label" for="advanced-almost-maximize-width">
+                Almost Maximize width
+              </label>
+              <p class="field__help" id="advanced-almost-maximize-width-help">
+                Share of the usable screen width Almost Maximize fills. 1–100%.
+              </p>
+            </div>
+            <div class="field__control">
+              <input
+                type="number"
+                id="advanced-almost-maximize-width"
+                min="1"
+                max="100"
+                step="1"
+                aria-describedby="advanced-almost-maximize-width-help"
+              />
+              <span class="field__unit">%</span>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field__text">
+              <label class="field__label" for="advanced-almost-maximize-height">
+                Almost Maximize height
+              </label>
+              <p class="field__help" id="advanced-almost-maximize-height-help">
+                Share of the usable screen height Almost Maximize fills. 1–100%.
+              </p>
+            </div>
+            <div class="field__control">
+              <input
+                type="number"
+                id="advanced-almost-maximize-height"
+                min="1"
+                max="100"
+                step="1"
+                aria-describedby="advanced-almost-maximize-height-help"
+              />
+              <span class="field__unit">%</span>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field__text">
+              <label class="field__label" for="advanced-size-step">
+                Resize step
+              </label>
+              <p class="field__help" id="advanced-size-step-help">
+                How much Larger, Smaller, Larger Height and Smaller Height
+                change a window per press. 1–1000 <span data-step-unit>px</span>.
+              </p>
+            </div>
+            <div class="field__control">
+              <input
+                type="number"
+                id="advanced-size-step"
+                min="1"
+                max="1000"
+                step="1"
+                aria-describedby="advanced-size-step-help"
+              />
+              <span class="field__unit" data-step-unit>px</span>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field__text">
+              <label class="field__label" for="advanced-width-step">
+                Width step
+              </label>
+              <p class="field__help" id="advanced-width-step-help">
+                How much Larger Width and Smaller Width change a window per
+                press. 1–1000 <span data-step-unit>px</span>.
+              </p>
+            </div>
+            <div class="field__control">
+              <input
+                type="number"
+                id="advanced-width-step"
+                min="1"
+                max="1000"
+                step="1"
+                aria-describedby="advanced-width-step-help"
+              />
+              <span class="field__unit" data-step-unit>px</span>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field__text">
+              <label class="field__label" for="advanced-move-step">
+                Move step
+              </label>
+              <p class="field__help" id="advanced-move-step-help">
+                How far Move Left, Right, Up and Down slide a window per press.
+                1–1000 <span data-step-unit>px</span>.
+              </p>
+            </div>
+            <div class="field__control">
+              <input
+                type="number"
+                id="advanced-move-step"
+                min="1"
+                max="1000"
+                step="1"
+                aria-describedby="advanced-move-step-help"
+              />
+              <span class="field__unit" data-step-unit>px</span>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field__text">
+              <label class="field__label" for="advanced-minimum-width">
+                Minimum window width
+              </label>
+              <p class="field__help" id="advanced-minimum-width-help">
+                Smaller stops at this share of the usable screen width. 1–100%.
+              </p>
+            </div>
+            <div class="field__control">
+              <input
+                type="number"
+                id="advanced-minimum-width"
+                min="1"
+                max="100"
+                step="1"
+                aria-describedby="advanced-minimum-width-help"
+              />
+              <span class="field__unit">%</span>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field__text">
+              <label class="field__label" for="advanced-minimum-height">
+                Minimum window height
+              </label>
+              <p class="field__help" id="advanced-minimum-height-help">
+                Smaller stops at this share of the usable screen height. 1–100%.
+              </p>
+            </div>
+            <div class="field__control">
+              <input
+                type="number"
+                id="advanced-minimum-height"
+                min="1"
+                max="100"
+                step="1"
+                aria-describedby="advanced-minimum-height-help"
+              />
+              <span class="field__unit">%</span>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field__text">
+              <label class="field__label" for="advanced-animation-fps">
+                Animation frame rate
+              </label>
+              <p class="field__help" id="advanced-animation-fps-help">
+                Frames per second for animated snaps. Higher is smoother but
+                busier. 15–240 fps; macOS may cap it lower.
+              </p>
+            </div>
+            <div class="field__control">
+              <input
+                type="number"
+                id="advanced-animation-fps"
+                min="15"
+                max="240"
+                step="1"
+                aria-describedby="advanced-animation-fps-help"
+              />
+              <span class="field__unit">fps</span>
+            </div>
+          </div>
+          <p class="field__error" id="advanced-error" role="alert" hidden></p>
+          </div>
         </details>
       </section>
 
@@ -462,31 +708,6 @@
             Restore defaults
           </button>
         </div>
-        <dialog
-          id="reset-confirmation"
-          class="confirm-dialog"
-          aria-labelledby="reset-confirmation-title"
-          aria-describedby="reset-confirmation-message"
-        >
-          <p id="reset-confirmation-title" class="confirm-dialog__title">
-            Restore defaults?
-          </p>
-          <p id="reset-confirmation-message" class="panel__hint">
-            Every shortcut, the window gaps, animation, repeat-press
-            behaviour, and launch at login go back to their defaults. You can
-            undo this for a few seconds afterwards.
-          </p>
-          <div class="panel__actions">
-            <button
-              id="confirm-reset"
-              type="button"
-              class="button button--danger"
-            >
-              Restore defaults
-            </button>
-            <button id="cancel-reset" type="button" class="button">Cancel</button>
-          </div>
-        </dialog>
       </footer>
     </main>
     <script type="module" src="/src/main.ts"></script>

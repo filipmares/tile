@@ -10,8 +10,9 @@ use tile_core::{Hotkey, WindowAction};
 use tile_platform::{HotkeyBindingStatus, HotkeyRoute, PermissionStatus};
 
 use crate::build_kind::BuildKind;
-use crate::config_store::ConfigRecovery;
-use crate::update::UpdateStatus;
+use crate::config_store::{ConfigRecovery, RecoveryKind};
+use crate::permission::GrantStep;
+use crate::update::{UpdateErrorKind, UpdateStatus};
 
 /// Serializable form of [`BuildKind`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,19 +42,47 @@ pub struct BuildInfoDto {
     pub config_dir: Option<String>,
 }
 
-/// Tells the settings UI that this launch could not read the saved settings
-/// and started from defaults.
+/// Tells the settings UI that this launch could not load the saved settings
+/// as-is: the file was unreadable and Tile started from defaults, some
+/// settings were reset or cleared while the rest were kept, or the file came
+/// from a newer Tile and only what this version understands was loaded.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigRecoveryDto {
-    /// Where the unreadable file was kept, or `None` when it could not be
+    /// Why the saved file could not be loaded as-is.
+    pub kind: ConfigRecoveryKindDto,
+    /// Whether any setting was reset to its default or, for an unreadable
+    /// shortcut, cleared. A `newer-version` file may have had these too.
+    pub some_fields_reset: bool,
+    /// Where the original file was kept, or `None` when it could not be
     /// moved aside and settings are therefore not being saved this session.
     pub backup_path: Option<String>,
+}
+
+/// Serializable form of [`RecoveryKind`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ConfigRecoveryKindDto {
+    Corrupt,
+    PartialReset,
+    NewerVersion,
+}
+
+impl From<RecoveryKind> for ConfigRecoveryKindDto {
+    fn from(kind: RecoveryKind) -> Self {
+        match kind {
+            RecoveryKind::Corrupt => Self::Corrupt,
+            RecoveryKind::PartialReset => Self::PartialReset,
+            RecoveryKind::NewerVersion => Self::NewerVersion,
+        }
+    }
 }
 
 impl From<&ConfigRecovery> for ConfigRecoveryDto {
     fn from(recovery: &ConfigRecovery) -> Self {
         ConfigRecoveryDto {
+            kind: recovery.kind.into(),
+            some_fields_reset: recovery.some_fields_reset,
             backup_path: recovery
                 .backup_path
                 .as_ref()
@@ -81,6 +110,34 @@ impl From<PermissionStatus> for PermissionStatusDto {
     }
 }
 
+/// Serializable form of [`GrantStep`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum GrantStepDto {
+    Prompt,
+    OpenSettings,
+}
+
+impl From<GrantStep> for GrantStepDto {
+    fn from(step: GrantStep) -> Self {
+        match step {
+            GrantStep::Prompt => GrantStepDto::Prompt,
+            GrantStep::OpenSettings => GrantStepDto::OpenSettings,
+        }
+    }
+}
+
+/// What the permission panel needs to guide the user.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccessibilityHelpDto {
+    /// What the primary grant button does next.
+    pub grant_step: GrantStepDto,
+    /// The running `.app` bundle, or `None` for an unbundled development
+    /// binary (and on platforms without bundles).
+    pub app_bundle: Option<String>,
+}
+
 /// Serializable form of one binding's current native route.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -104,6 +161,9 @@ pub enum HotkeyRouteDto {
 pub struct HotkeyStatusDto {
     pub bindings: Vec<HotkeyBindingStatusDto>,
     pub hook_installed: bool,
+    /// The keyboard hook keeps failing, so intercepted shortcuts do nothing
+    /// until it recovers.
+    pub hook_unavailable: bool,
     pub apply_error: Option<String>,
 }
 
@@ -132,8 +192,9 @@ pub enum UpdateStatusDto {
     ReadyToRelaunch {
         version: String,
     },
+    /// Only the cause crosses to the UI; the raw updater text stays in the log.
     Error {
-        message: String,
+        kind: UpdateErrorKind,
     },
 }
 
@@ -164,7 +225,7 @@ impl From<UpdateStatus> for UpdateStatusDto {
             },
             #[cfg(target_os = "macos")]
             UpdateStatus::ReadyToRelaunch { version } => Self::ReadyToRelaunch { version },
-            UpdateStatus::Error { message } => Self::Error { message },
+            UpdateStatus::Error { kind } => Self::Error { kind },
         }
     }
 }
@@ -275,6 +336,14 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&progress).unwrap(),
             r#"{"status":"downloading","version":"1.2.3","downloadedBytes":512,"totalBytes":1024}"#
+        );
+
+        let failed = UpdateStatusDto::from(UpdateStatus::Error {
+            kind: crate::update::UpdateErrorKind::Signature,
+        });
+        assert_eq!(
+            serde_json::to_string(&failed).unwrap(),
+            r#"{"status":"error","kind":"signature"}"#
         );
     }
 }

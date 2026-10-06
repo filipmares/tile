@@ -273,6 +273,50 @@ fn normalize_minimum_fraction(value: f64) -> f64 {
     }
 }
 
+/// Smallest size fraction the Advanced settings accept: 1% of the work area.
+/// Hand-edited configs may go lower — [`normalize_fraction`] only rejects
+/// zero and below — but a whole-percent control cannot express that.
+pub const MIN_SIZE_FRACTION: f64 = 0.01;
+
+/// One of the knobs the Settings ▸ Advanced group edits, with its new value.
+///
+/// Each change names a single field so a write from one window never puts
+/// back another field that a different window changed meanwhile. Serialized
+/// as `{ "field": "moveStep", "value": 32 }`; fractions travel as fractions,
+/// not percentages.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "field", content = "value", rename_all = "camelCase")]
+pub enum AdvancedSetting {
+    AlmostMaximizeWidth(f64),
+    AlmostMaximizeHeight(f64),
+    SizeStep(f64),
+    WidthStep(f64),
+    MoveStep(f64),
+    MinimumWindowWidth(f64),
+    MinimumWindowHeight(f64),
+    AnimationFps(u32),
+}
+
+/// Clamps a fraction from the Advanced settings into
+/// `[MIN_SIZE_FRACTION, 1]`, keeping `current` for a non-finite value.
+fn clamp_fraction(value: f64, current: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(MIN_SIZE_FRACTION, 1.0)
+    } else {
+        current
+    }
+}
+
+/// Clamps a step from the Advanced settings into `[1, MAX_STEP]`, keeping
+/// `current` for a non-finite value.
+fn clamp_step(value: f64, current: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(1.0, MAX_STEP)
+    } else {
+        current
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Animation
 // ---------------------------------------------------------------------------
@@ -308,11 +352,9 @@ pub const MAX_ANIMATION_FPS: u32 = 240;
 
 /// How a window travels to its new frame.
 ///
-/// Only [`AnimationConfig::enabled`] is exposed in the settings UI: it is the
-/// choice that matters, and it is what someone who finds motion distracting
-/// (or who is running over a remote desktop session) needs to reach. The
-/// duration and frame rate are deliberately config-file-only tuning knobs, the
-/// same treatment the step sizes get.
+/// [`AnimationConfig::enabled`] and the duration sit under Settings ▸
+/// Behaviour ▸ Motion; the frame rate is a pacing knob in Settings ▸ Advanced,
+/// alongside the step sizes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AnimationConfig {
@@ -666,17 +708,129 @@ impl Default for Config {
     }
 }
 
+/// The config file format this build reads and writes. Bump it only when the
+/// on-disk shape changes in a way older builds would misread.
+pub const CONFIG_SCHEMA_VERSION: u32 = 1;
+
+/// The version assumed for a config written before `schemaVersion` existed.
+const LEGACY_SCHEMA_VERSION: u32 = 1;
+
+const SCHEMA_VERSION_KEY: &str = "schemaVersion";
+const BINDINGS_KEY: &str = "bindings";
+
+/// The result of [`Config::from_json_lenient`]: the best config that could be
+/// recovered from a file, and what had to be given up to get it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LenientConfig {
+    pub config: Config,
+    /// The `schemaVersion` the file declared, or the legacy version when it
+    /// declared none.
+    pub schema_version: u32,
+    /// JSON keys that could not be read and fell back to their defaults.
+    /// A dropped binding is reported as `bindings.<action>`.
+    pub reset_fields: Vec<String>,
+}
+
+impl LenientConfig {
+    /// Whether the file came from a newer build than this one.
+    pub fn is_newer_schema(&self) -> bool {
+        self.schema_version > CONFIG_SCHEMA_VERSION
+    }
+}
+
+/// Serializes a [`Config`] with the schema version leading the object.
+#[derive(Serialize)]
+struct VersionedConfig<'a> {
+    #[serde(rename = "schemaVersion")]
+    schema_version: u32,
+    #[serde(flatten)]
+    config: &'a Config,
+}
+
+/// Whether `value` alone deserializes as the `key` field of a [`Config`].
+fn field_parses(key: &str, value: &serde_json::Value) -> bool {
+    let mut single = serde_json::Map::new();
+    single.insert(key.to_owned(), value.clone());
+    serde_json::from_value::<Config>(serde_json::Value::Object(single)).is_ok()
+}
+
 impl Config {
     /// Parses configuration from JSON, filling in defaults for missing fields.
     pub fn from_json(json: &str) -> Result<Self, ConfigError> {
         let mut config: Config = serde_json::from_str(json)?;
-        config.normalize();
-        config.migrate_directional_displays();
+        config.finish_load();
         Ok(config)
     }
 
+    /// Parses configuration from JSON one field at a time, so a single
+    /// wrong-typed value resets only that value instead of the whole file.
+    ///
+    /// Within `bindings`, only the entries that cannot be read are dropped.
+    /// Unknown keys are ignored. Fails only when the text is not JSON or not
+    /// a JSON object.
+    pub fn from_json_lenient(json: &str) -> Result<LenientConfig, ConfigError> {
+        let value: serde_json::Value = serde_json::from_str(json)?;
+        let serde_json::Value::Object(mut map) = value else {
+            return Err(ConfigError::Invalid(
+                "configuration is not a JSON object".into(),
+            ));
+        };
+        let mut reset_fields = Vec::new();
+
+        let schema_version = match map.remove(SCHEMA_VERSION_KEY) {
+            None => LEGACY_SCHEMA_VERSION,
+            Some(raw) => match raw.as_u64().and_then(|v| u32::try_from(v).ok()) {
+                Some(version) => version,
+                None => {
+                    reset_fields.push(SCHEMA_VERSION_KEY.to_owned());
+                    LEGACY_SCHEMA_VERSION
+                }
+            },
+        };
+
+        let keys: Vec<String> = map.keys().cloned().collect();
+        for key in keys {
+            if field_parses(&key, &map[&key]) {
+                continue;
+            }
+            if key == BINDINGS_KEY {
+                if let Some(serde_json::Value::Object(entries)) = map.get_mut(&key) {
+                    entries.retain(|action, hotkey| {
+                        let mut entry = serde_json::Map::new();
+                        entry.insert(action.clone(), hotkey.clone());
+                        let ok = field_parses(BINDINGS_KEY, &serde_json::Value::Object(entry));
+                        if !ok {
+                            reset_fields.push(format!("{BINDINGS_KEY}.{action}"));
+                        }
+                        ok
+                    });
+                    continue;
+                }
+            }
+            map.remove(&key);
+            reset_fields.push(key);
+        }
+
+        let mut config: Config = serde_json::from_value(serde_json::Value::Object(map))?;
+        config.finish_load();
+        Ok(LenientConfig {
+            config,
+            schema_version,
+            reset_fields,
+        })
+    }
+
+    fn finish_load(&mut self) {
+        self.normalize();
+        self.migrate_directional_displays();
+    }
+
+    /// Serializes the config, always stamped with [`CONFIG_SCHEMA_VERSION`].
     pub fn to_json(&self) -> Result<String, ConfigError> {
-        Ok(serde_json::to_string_pretty(self)?)
+        Ok(serde_json::to_string_pretty(&VersionedConfig {
+            schema_version: CONFIG_SCHEMA_VERSION,
+            config: self,
+        })?)
     }
 
     /// Drops invalid bindings and clamps out-of-range values so a hand-edited
@@ -697,6 +851,39 @@ impl Config {
         self.minimum_window_height = normalize_minimum_fraction(self.minimum_window_height);
         self.normalize_cycle_sizes();
         self.animation.normalize();
+    }
+
+    /// Applies one Advanced setting, clamping an out-of-range value to the
+    /// nearest bound instead of the default a hand-edited file falls back to:
+    /// someone who types 150% means "as wide as possible", not 90%.
+    pub fn set_advanced(&mut self, setting: AdvancedSetting) {
+        match setting {
+            AdvancedSetting::AlmostMaximizeWidth(value) => {
+                self.almost_maximize_width = clamp_fraction(value, self.almost_maximize_width);
+            }
+            AdvancedSetting::AlmostMaximizeHeight(value) => {
+                self.almost_maximize_height = clamp_fraction(value, self.almost_maximize_height);
+            }
+            AdvancedSetting::SizeStep(value) => {
+                self.size_step = clamp_step(value, self.size_step);
+            }
+            AdvancedSetting::WidthStep(value) => {
+                self.width_step = clamp_step(value, self.width_step);
+            }
+            AdvancedSetting::MoveStep(value) => {
+                self.move_step = clamp_step(value, self.move_step);
+            }
+            AdvancedSetting::MinimumWindowWidth(value) => {
+                self.minimum_window_width = clamp_fraction(value, self.minimum_window_width);
+            }
+            AdvancedSetting::MinimumWindowHeight(value) => {
+                self.minimum_window_height = clamp_fraction(value, self.minimum_window_height);
+            }
+            AdvancedSetting::AnimationFps(value) => {
+                self.animation.fps = value.clamp(MIN_ANIMATION_FPS, MAX_ANIMATION_FPS);
+            }
+        }
+        self.normalize();
     }
 
     /// Moves a display throw still sitting on the retired `Shift`+arrow
@@ -807,17 +994,20 @@ impl Config {
         self.bindings.get(&action).copied().flatten()
     }
 
+    /// Every action other than `action` that `hotkey` is bound to, in
+    /// catalogue order. Binding `hotkey` to `action` would unbind these.
+    pub fn actions_using(&self, hotkey: Hotkey, action: WindowAction) -> Vec<WindowAction> {
+        WindowAction::ALL
+            .into_iter()
+            .filter(|a| *a != action && self.binding(*a) == Some(hotkey))
+            .collect()
+    }
+
     /// Binds `hotkey` to `action`, unbinding any other action that already
     /// used it so the configuration can never contain a duplicate.
     pub fn set_binding(&mut self, action: WindowAction, hotkey: Option<Hotkey>) {
         if let Some(hk) = hotkey {
-            let clashing: Vec<_> = self
-                .bindings
-                .iter()
-                .filter(|(a, h)| **a != action && **h == Some(hk))
-                .map(|(a, _)| *a)
-                .collect();
-            for a in clashing {
+            for a in self.actions_using(hk, action) {
                 self.bindings.insert(a, None);
             }
         }
@@ -1487,6 +1677,21 @@ mod tests {
     }
 
     #[test]
+    fn actions_using_names_every_other_holder_of_a_hotkey() {
+        let mut config = Config::default();
+        let hk = config.binding(WindowAction::LeftHalf).unwrap();
+        assert_eq!(
+            config.actions_using(hk, WindowAction::Center),
+            vec![WindowAction::LeftHalf]
+        );
+        assert!(config.actions_using(hk, WindowAction::LeftHalf).is_empty());
+
+        config.set_binding(WindowAction::Center, Some(hk));
+        assert_eq!(config.binding(WindowAction::LeftHalf), None);
+        assert!(config.actions_using(hk, WindowAction::Center).is_empty());
+    }
+
+    #[test]
     fn normalize_clamps_bad_gaps() {
         let mut config = Config {
             gaps: Gaps::uniform(-5.0),
@@ -1936,6 +2141,74 @@ mod tests {
     }
 
     #[test]
+    fn advanced_settings_deserialize_from_the_ui_shape() {
+        let setting: AdvancedSetting =
+            serde_json::from_str(r#"{ "field": "moveStep", "value": 32 }"#).unwrap();
+        assert_eq!(setting, AdvancedSetting::MoveStep(32.0));
+        let setting: AdvancedSetting =
+            serde_json::from_str(r#"{ "field": "almostMaximizeWidth", "value": 0.8 }"#).unwrap();
+        assert_eq!(setting, AdvancedSetting::AlmostMaximizeWidth(0.8));
+        let setting: AdvancedSetting =
+            serde_json::from_str(r#"{ "field": "animationFps", "value": 60 }"#).unwrap();
+        assert_eq!(setting, AdvancedSetting::AnimationFps(60));
+        assert!(
+            serde_json::from_str::<AdvancedSetting>(r#"{ "field": "gap", "value": 1 }"#).is_err()
+        );
+    }
+
+    #[test]
+    fn advanced_settings_change_only_their_own_field() {
+        type Expect = fn(&mut Config);
+        let defaults = Config::default();
+        let cases: [(AdvancedSetting, Expect); 8] = [
+            (AdvancedSetting::AlmostMaximizeWidth(0.8), |c| {
+                c.almost_maximize_width = 0.8
+            }),
+            (AdvancedSetting::AlmostMaximizeHeight(0.7), |c| {
+                c.almost_maximize_height = 0.7
+            }),
+            (AdvancedSetting::SizeStep(40.0), |c| c.size_step = 40.0),
+            (AdvancedSetting::WidthStep(50.0), |c| c.width_step = 50.0),
+            (AdvancedSetting::MoveStep(32.0), |c| c.move_step = 32.0),
+            (AdvancedSetting::MinimumWindowWidth(0.3), |c| {
+                c.minimum_window_width = 0.3
+            }),
+            (AdvancedSetting::MinimumWindowHeight(0.2), |c| {
+                c.minimum_window_height = 0.2
+            }),
+            (AdvancedSetting::AnimationFps(60), |c| c.animation.fps = 60),
+        ];
+        for (setting, expect) in cases {
+            let mut actual = defaults.clone();
+            actual.set_advanced(setting);
+            let mut expected = defaults.clone();
+            expect(&mut expected);
+            assert_eq!(actual, expected, "{setting:?} touched another field");
+        }
+    }
+
+    #[test]
+    fn advanced_settings_clamp_to_the_nearest_bound() {
+        let mut config = Config::default();
+        config.set_advanced(AdvancedSetting::AlmostMaximizeWidth(1.5));
+        assert_eq!(config.almost_maximize_width, 1.0);
+        config.set_advanced(AdvancedSetting::MinimumWindowHeight(0.0));
+        assert_eq!(config.minimum_window_height, MIN_SIZE_FRACTION);
+        config.set_advanced(AdvancedSetting::MinimumWindowWidth(-3.0));
+        assert_eq!(config.minimum_window_width, MIN_SIZE_FRACTION);
+        config.set_advanced(AdvancedSetting::SizeStep(0.0));
+        assert_eq!(config.size_step, 1.0);
+        config.set_advanced(AdvancedSetting::MoveStep(5000.0));
+        assert_eq!(config.move_step, MAX_STEP);
+        config.set_advanced(AdvancedSetting::WidthStep(f64::NAN));
+        assert_eq!(config.width_step, 30.0);
+        config.set_advanced(AdvancedSetting::AnimationFps(0));
+        assert_eq!(config.animation.fps, MIN_ANIMATION_FPS);
+        config.set_advanced(AdvancedSetting::AnimationFps(1000));
+        assert_eq!(config.animation.fps, MAX_ANIMATION_FPS);
+    }
+
+    #[test]
     fn size_options_carry_the_persisted_steps() {
         let config = Config {
             size_step: 15.0,
@@ -1995,6 +2268,97 @@ mod tests {
         let config = Config::from_json(r#"{"cycleSizes": []}"#).unwrap();
         assert!(config.cycle_sizes().is_empty());
         assert!(!config.cycles_sizes());
+    }
+
+    fn saved_value(config: &Config) -> serde_json::Value {
+        serde_json::from_str(&config.to_json().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn to_json_writes_the_current_schema_version() {
+        let value = saved_value(&Config::default());
+        assert_eq!(value["schemaVersion"], CONFIG_SCHEMA_VERSION);
+        let loaded = Config::from_json_lenient(&value.to_string()).unwrap();
+        assert_eq!(loaded.schema_version, CONFIG_SCHEMA_VERSION);
+        assert!(loaded.reset_fields.is_empty());
+        assert_eq!(loaded.config, Config::default());
+    }
+
+    #[test]
+    fn a_config_without_a_schema_version_is_legacy() {
+        let loaded = Config::from_json_lenient(r#"{"gap": 8, "launchOnLogin": false}"#).unwrap();
+        assert_eq!(loaded.schema_version, LEGACY_SCHEMA_VERSION);
+        assert!(!loaded.is_newer_schema());
+        assert!(loaded.reset_fields.is_empty());
+        assert!(!loaded.config.launch_on_login);
+    }
+
+    #[test]
+    fn one_wrong_typed_field_resets_only_that_field() {
+        let mut value = saved_value(&Config {
+            launch_on_login: false,
+            gaps: Gaps::uniform(17.0),
+            ..Config::default()
+        });
+        value["sizeStep"] = serde_json::json!("not a number");
+        let loaded = Config::from_json_lenient(&value.to_string()).unwrap();
+        assert_eq!(loaded.reset_fields, vec!["sizeStep".to_owned()]);
+        assert_eq!(loaded.config.size_step, Config::default().size_step);
+        assert!(!loaded.config.launch_on_login);
+        assert_eq!(loaded.config.gaps, Gaps::uniform(17.0));
+        // The strict parser still rejects the same file outright.
+        assert!(Config::from_json(&value.to_string()).is_err());
+    }
+
+    #[test]
+    fn a_bad_binding_entry_drops_only_that_entry() {
+        let mut value = saved_value(&Config::default());
+        let bindings = value["bindings"].as_object_mut().unwrap();
+        bindings.insert("not-an-action".into(), serde_json::json!(null));
+        bindings.insert("maximize".into(), serde_json::json!(42));
+        let loaded = Config::from_json_lenient(&value.to_string()).unwrap();
+        let mut reset = loaded.reset_fields.clone();
+        reset.sort();
+        assert_eq!(reset, vec!["bindings.maximize", "bindings.not-an-action"]);
+        assert_eq!(loaded.config.binding(WindowAction::Maximize), None);
+        assert_eq!(
+            loaded.config.binding(WindowAction::LeftHalf),
+            Config::default().binding(WindowAction::LeftHalf)
+        );
+    }
+
+    #[test]
+    fn a_non_object_bindings_value_resets_to_defaults() {
+        let loaded = Config::from_json_lenient(r#"{"bindings": [1, 2]}"#).unwrap();
+        assert_eq!(loaded.reset_fields, vec!["bindings".to_owned()]);
+        assert_eq!(loaded.config.bindings, Config::default().bindings);
+    }
+
+    #[test]
+    fn a_newer_schema_version_still_loads_what_it_can() {
+        let mut value = saved_value(&Config {
+            launch_on_login: false,
+            ..Config::default()
+        });
+        value["schemaVersion"] = serde_json::json!(CONFIG_SCHEMA_VERSION + 1);
+        value["somethingFromTheFuture"] = serde_json::json!({"x": 1});
+        let loaded = Config::from_json_lenient(&value.to_string()).unwrap();
+        assert!(loaded.is_newer_schema());
+        assert!(loaded.reset_fields.is_empty());
+        assert!(!loaded.config.launch_on_login);
+    }
+
+    #[test]
+    fn a_wrong_typed_schema_version_is_reported_and_treated_as_legacy() {
+        let loaded = Config::from_json_lenient(r#"{"schemaVersion": "two"}"#).unwrap();
+        assert_eq!(loaded.schema_version, LEGACY_SCHEMA_VERSION);
+        assert_eq!(loaded.reset_fields, vec!["schemaVersion".to_owned()]);
+    }
+
+    #[test]
+    fn lenient_parsing_rejects_non_objects_and_bad_json() {
+        assert!(Config::from_json_lenient("[1, 2]").is_err());
+        assert!(Config::from_json_lenient("{ nope").is_err());
     }
 
     #[test]

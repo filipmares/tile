@@ -399,7 +399,36 @@ export interface Config {
   animation: AnimationConfig;
 }
 
+/** A Settings ▸ Advanced field, named as `AdvancedSetting` serializes it. */
+export type AdvancedField =
+  | "almostMaximizeWidth"
+  | "almostMaximizeHeight"
+  | "sizeStep"
+  | "widthStep"
+  | "moveStep"
+  | "minimumWindowWidth"
+  | "minimumWindowHeight"
+  | "animationFps";
+
+/**
+ * `AdvancedSetting` — serde `tag = "field", content = "value"`. Fractions
+ * travel as fractions (0.9), not percentages.
+ */
+export interface AdvancedSetting {
+  field: AdvancedField;
+  value: number;
+}
+
 export type PermissionStatus = "granted" | "denied" | "not-required";
+
+/** What the permission panel's primary button does next. */
+export type GrantStep = "prompt" | "open-settings";
+
+export interface AccessibilityHelp {
+  grantStep: GrantStep;
+  /** The running Tile.app, or null for an unbundled development build. */
+  appBundle: string | null;
+}
 
 export type HotkeyRoute =
   | "registered"
@@ -416,6 +445,8 @@ export interface HotkeyBindingStatus {
 export interface HotkeyStatus {
   bindings: HotkeyBindingStatus[];
   hookInstalled: boolean;
+  /** The keyboard hook keeps failing; intercepted shortcuts do nothing. */
+  hookUnavailable: boolean;
   applyError: string | null;
 }
 
@@ -429,11 +460,16 @@ export interface BuildInfo {
 }
 
 /**
- * `ConfigRecoveryDto` — this launch could not read the saved settings and
- * started from defaults. `backupPath` is null when the old file could not be
- * kept, in which case nothing is being saved this session.
+ * `ConfigRecoveryDto` — this launch could not load the saved settings as-is.
+ * `kind` says why: unreadable (`corrupt`, started from defaults), some fields
+ * reset (`partial-reset`), or written by a newer Tile (`newer-version`).
+ * `someFieldsReset` is true whenever any setting fell back to its default,
+ * including for a `newer-version` file. `backupPath` is null when the old
+ * file could not be kept, in which case nothing is being saved this session.
  */
 export interface ConfigRecovery {
+  kind: "corrupt" | "partial-reset" | "newer-version";
+  someFieldsReset: boolean;
   backupPath: string | null;
 }
 
@@ -455,7 +491,20 @@ export type UpdateStatus =
       totalBytes: number | null;
     }
   | { status: "ready-to-relaunch"; version: string }
-  | { status: "error"; message: string };
+  | { status: "error"; kind: UpdateErrorKind };
+
+/**
+ * `UpdateErrorKind` — why an update failed. The raw updater text stays in
+ * the log; `updateErrorMessage` in `errors.ts` turns this into a sentence.
+ */
+export type UpdateErrorKind =
+  | "offline"
+  | "server"
+  | "signature"
+  | "interrupted"
+  | "disk"
+  | "installer"
+  | "unknown";
 
 /** `WelcomeStatusDto` — what the welcome walkthrough may honestly ask for. */
 export interface WelcomeStatus {
