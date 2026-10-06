@@ -183,9 +183,8 @@ fn permission_message(err: &PlatformError) -> String {
         )
     } else if cfg!(target_os = "macos") {
         format!(
-            "Tile needs Accessibility permission to move windows.\n\n{err}\n\nIn System \
-             Settings, open Privacy & Security ▸ Accessibility and switch on Tile. Tile's \
-             settings window explains each step."
+            "Tile needs Accessibility permission to move windows.\n\n{err}\n\nTile's \
+             settings window is open with the steps for your version of macOS."
         )
     } else {
         format!("Tile does not have permission to move this window.\n\n{err}")

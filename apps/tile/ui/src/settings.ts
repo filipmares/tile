@@ -86,7 +86,7 @@ const STRINGS = {
   grantPrompt: "Grant permission…",
   grantOpenSettings: "Open Accessibility settings…",
   accessibilityOpened:
-    "System Settings is open. Switch on Tile under Privacy & Security ▸ Accessibility.",
+    "The Accessibility list should now be open. Follow the steps above.",
   accessibilityFailed: (err: unknown) => String(err),
   revealFailed: (err: unknown) => `Could not show Tile in Finder: ${String(err)}`,
 };

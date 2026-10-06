@@ -318,8 +318,9 @@ pub fn open_accessibility_settings() -> Result<(), String> {
         return Ok(());
     }
     Err(
-        "Tile could not open System Settings. Open it from the Apple menu, then go to \
-         Privacy & Security ▸ Accessibility."
+        "Tile could not open System Settings. From the Apple menu, open System Settings ▸ \
+         Privacy & Security ▸ Accessibility (on macOS 12 and earlier, System Preferences ▸ \
+         Security & Privacy ▸ Privacy ▸ Accessibility)."
             .into(),
     )
 }
