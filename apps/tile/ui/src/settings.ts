@@ -24,12 +24,12 @@ import { confirmDialog } from "./confirm";
 import { dom } from "./dom";
 import { resetErrorMessage, settingsErrorMessage } from "./errors";
 import { isMac } from "./hotkey";
+import { applySettingsSearch, wireSettingsSearch } from "./settingsSearch";
 import {
   listenForHotkeyStatus,
   refreshHotkeyStatus,
   renderBindings,
   setRecordingStatus,
-  wireShortcutEvents,
 } from "./shortcuts";
 import { config, setConfig } from "./state";
 import {
@@ -304,6 +304,8 @@ function renderBehaviour(): void {
   setAnimationDurationEnabled(config.animation.enabled);
   dom.launch.checked = config.launchOnLogin;
   renderAdvanced(config);
+  // The cycle sizes are built on first render, after the search may have run.
+  applySettingsSearch();
 }
 
 /**
@@ -679,7 +681,7 @@ function wireEvents(): void {
     }
   }
 
-  wireShortcutEvents();
+  wireSettingsSearch();
 
   dom.reset.addEventListener("click", () => {
     void confirmDialog({
