@@ -459,13 +459,14 @@ function aimDisplaySlide(): void {
 
 /**
  * Whether `event` satisfies `slide`. The display slide takes any throw that
- * really moved the window to another display — or its own key, even as a
- * preview — rather than only the one chord printed on it.
+ * really moved the window to another display, rather than only the one chord
+ * printed on it. With no window to move, a throw that would go somewhere
+ * counts as a preview. A real window that stayed put does not count; the
+ * refusal re-aims the keycap from where the window actually is.
  */
 function satisfies(slide: Slide, event: ActionPerformed): boolean {
   if (!slide.actions.includes(event.action)) return false;
   if (slide.id !== "display") return true;
-  if (event.action === slide.shown) return true;
   if (!event.hadWindow) {
     return displayTarget(event.action, walk.currentScreen) !== null;
   }
