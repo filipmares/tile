@@ -13,6 +13,56 @@
   !define TILE_MANAGES_LOGIN_ITEM
 !endif
 
+; Waits for an updating Tile to finish exiting.
+;
+; The updater launches this installer and then calls std::process::exit, so
+; the old process is usually still tearing down when the installer starts.
+; Newer Tauri templates check for a running app with Restart Manager, which
+; sees a process whose windows are already gone as an "Unknown App" it cannot
+; shut down, and aborts with "Failed to kill Tile". Opening the executable for
+; writing fails while any process still has it mapped, so poll that until the
+; old process is gone (bounded, so a Tile that really is still running falls
+; through to Tauri's own check). Only updates race like this; a manual
+; install with Tile running goes straight to Tauri's prompt.
+;
+; A macro rather than a Function so both the installer and the uninstaller
+; (which the updater runs with /UPDATE before reinstalling) can use it.
+!macro TILE_WAIT_FOR_UPDATING_APP_TO_EXIT
+  ${If} $UpdateMode = 1
+  ${AndIf} ${FileExists} "$INSTDIR\${MAINBINARYNAME}.exe"
+    Push $0
+    Push $1
+    StrCpy $1 0
+    ${Do}
+      ClearErrors
+      FileOpen $0 "$INSTDIR\${MAINBINARYNAME}.exe" a
+      ${IfNot} ${Errors}
+        FileClose $0
+        ${Break}
+      ${EndIf}
+      ${If} $1 >= 80
+        DetailPrint "${PRODUCTNAME} is still running after 20 seconds."
+        ${Break}
+      ${EndIf}
+      ${If} $1 = 0
+        DetailPrint "Waiting for ${PRODUCTNAME} to exit..."
+      ${EndIf}
+      IntOp $1 $1 + 1
+      Sleep 250
+    ${Loop}
+    Pop $1
+    Pop $0
+  ${EndIf}
+!macroend
+
+!macro NSIS_HOOK_PREINSTALL
+  !insertmacro TILE_WAIT_FOR_UPDATING_APP_TO_EXIT
+!macroend
+
+!macro NSIS_HOOK_PREUNINSTALL
+  !insertmacro TILE_WAIT_FOR_UPDATING_APP_TO_EXIT
+!macroend
+
 ; Restores the OS login item after every install.
 ;
 ; Tauri's uninstaller deletes HKCU\...\Run\Tile unless it runs with /UPDATE,
