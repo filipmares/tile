@@ -161,6 +161,7 @@ const CYCLING_ACTIONS: WindowAction[] = [
   "bottom-right",
 ];
 
+/** The throws the display slide may teach, in order of preference. */
 const DISPLAY_ACTIONS: WindowAction[] = [
   "display-left",
   "display-right",
@@ -168,6 +169,19 @@ const DISPLAY_ACTIONS: WindowAction[] = [
   "display-down",
   "previous-display",
   "next-display",
+];
+
+/**
+ * Every action that moves a window to another display. The display slide
+ * accepts any of them: the lesson is that the window crossed screens, not
+ * which of several bound chords did it.
+ */
+const THROW_ACTIONS: WindowAction[] = [
+  ...DISPLAY_ACTIONS,
+  "first-display",
+  "second-display",
+  "third-display",
+  "fourth-display",
 ];
 
 /**
@@ -189,7 +203,15 @@ interface Slide {
   actions: WindowAction[];
   needsRepeat: boolean;
   done: boolean;
+  /**
+   * The display slide's taught throw. It is re-aimed from wherever the window
+   * is now, since the window being moved may not be the one that was focused
+   * when the deck was built.
+   */
+  shown?: WindowAction;
   card?: HTMLDivElement;
+  /** The first keycap, so a re-aimed display slide can relabel it. */
+  keyCap?: HTMLElement;
   dot?: HTMLSpanElement;
   /** One per cycle size, on the slide that teaches the cycle. */
   pips?: HTMLSpanElement[];
@@ -207,6 +229,7 @@ const walk = {
   screenCount: 1,
   currentScreen: 0,
   displayNeighbors: [] as WelcomeStatus["displayNeighbors"],
+  bindings: {} as Config["bindings"],
   pane: FLOATING,
   /** The last action performed, for spotting a repeat. */
   lastAction: null as WindowAction | null,
@@ -301,16 +324,19 @@ function buildSlides(
     isMac() ? STRINGS.maximizeDetailMac : STRINGS.maximizeDetailOther,
   );
   if (screenCount > 1) {
-    const displayAction = DISPLAY_ACTIONS.find(
-      (action) => combo(action) && displayTarget(action, currentScreen) !== null,
-    );
-    if (displayAction) {
-      add(
-        "display",
-        displayAction,
-        STRINGS.display,
-        STRINGS.displayDetail,
-      );
+    const shown = displayKeyFrom(currentScreen);
+    const keys = shown ? combo(shown) : null;
+    if (shown && keys) {
+      slides.push({
+        id: "display",
+        line: STRINGS.display,
+        detail: STRINGS.displayDetail,
+        combos: [keys],
+        actions: THROW_ACTIONS.filter((action) => combo(action)),
+        needsRepeat: false,
+        done: false,
+        shown,
+      });
     }
   }
 
@@ -399,7 +425,52 @@ function displayTarget(action: WindowAction, from: number): number | null {
     const step = action === "next-display" ? 1 : walk.screenCount - 1;
     return (from + step) % walk.screenCount;
   }
+  const named = THROW_ACTIONS.indexOf(action) - DISPLAY_ACTIONS.length;
+  if (named >= 0) return named < walk.screenCount ? named : null;
   return walk.displayNeighbors[from]?.[action] ?? null;
+}
+
+/** The first bound throw that actually goes somewhere from display `from`. */
+function displayKeyFrom(from: number): WindowAction | null {
+  return (
+    DISPLAY_ACTIONS.find(
+      (action) => walk.bindings[action] && displayTarget(action, from) !== null,
+    ) ?? null
+  );
+}
+
+/**
+ * Re-aims the display slide at a throw that works from where the window is
+ * now. The deck is built from whichever window was focused when it opened,
+ * which need not be the one the user ends up moving; a key that does nothing
+ * from the real window's display would leave the slide unfinishable.
+ */
+function aimDisplaySlide(): void {
+  const slide = walk.slides.find((s) => s.id === "display");
+  if (!slide || slide.done) return;
+  const shown = displayKeyFrom(walk.currentScreen);
+  const hotkey = shown ? walk.bindings[shown] : null;
+  if (!shown || !hotkey || shown === slide.shown) return;
+  const keys = formatHotkey(hotkey);
+  slide.shown = shown;
+  slide.combos = [keys];
+  if (slide.keyCap) slide.keyCap.textContent = keys;
+}
+
+/**
+ * Whether `event` satisfies `slide`. The display slide takes any throw that
+ * really moved the window to another display, rather than only the one chord
+ * printed on it. With no window to move, a throw that would go somewhere
+ * counts as a preview. A real window that stayed put does not count; the
+ * refusal re-aims the keycap from where the window actually is.
+ */
+function satisfies(slide: Slide, event: ActionPerformed): boolean {
+  if (!slide.actions.includes(event.action)) return false;
+  if (slide.id !== "display") return true;
+  if (!event.hadWindow) {
+    return displayTarget(event.action, walk.currentScreen) !== null;
+  }
+  return event.moved;
 }
 
 /**
@@ -410,9 +481,9 @@ function ghostFrame(): PaneFrame | null {
   const slide = walk.slides[walk.at];
   if (!slide || slide.done) return null;
 
-  const action = slide.actions[0];
+  const action = slide.id === "display" ? slide.shown : slide.actions[0];
   if (!action) return null;
-  if (DISPLAY_ACTIONS.includes(action)) {
+  if (THROW_ACTIONS.includes(action)) {
     const target = displayTarget(action, walk.currentScreen);
     if (target === null) return null;
     return {
@@ -450,6 +521,7 @@ function ghostFrame(): PaneFrame | null {
 
 /** Draws — or hides — the outline showing where the next press will land. */
 function renderGhost(): void {
+  aimDisplaySlide();
   const frame = ghostFrame();
   dom.welcomeGhost.hidden = frame === null;
   if (frame) placeOnStage(dom.welcomeGhost, frame);
@@ -482,7 +554,7 @@ function reflectOnStage(
       : Math.min(Math.max(screen, 0), walk.screenCount - 1);
   const reported = realScreen === null ? null : onStage(realScreen);
 
-  if (DISPLAY_ACTIONS.includes(action)) {
+  if (THROW_ACTIONS.includes(action)) {
     const target =
       realScreen ?? displayTarget(action, walk.currentScreen) ?? walk.currentScreen;
     walk.currentScreen = target;
@@ -595,6 +667,7 @@ function renderDeck(): void {
       kbd.className = "slide__key";
       kbd.textContent = text;
       keys.append(kbd);
+      if (i === 0) slide.keyCap = kbd;
     });
 
     const line = document.createElement("p");
@@ -792,13 +865,13 @@ function onActionPerformed(event: ActionPerformed): void {
   // out: it is a lesson about pressing one key repeatedly, and a single press
   // of it out of order has not shown that.
   const current =
-    showing && !showing.actions.includes(event.action)
+    showing && !satisfies(showing, event)
       ? walk.slides.find(
           (slide) =>
             !slide.done &&
             !slide.needsRepeat &&
             slide.id !== "cycle" &&
-            slide.actions.includes(event.action),
+            satisfies(slide, event),
         )
       : showing;
 
@@ -957,6 +1030,7 @@ export async function bootWelcome(): Promise<void> {
   renderStage(status.screenCount);
   walk.screenCount = Math.max(status.screenCount, 1);
   walk.displayNeighbors = status.displayNeighbors;
+  walk.bindings = cfg?.bindings ?? {};
   walk.currentScreen = Math.min(
     Math.max(status.currentScreen, 0),
     walk.screenCount - 1,
