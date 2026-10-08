@@ -1674,6 +1674,9 @@ impl OwnerState {
         set_hook_capture(listener)?;
         if start {
             if self.hook.is_none() {
+                // Without a hook no key-up was seen, so earlier captures
+                // cannot still be held as far as we can tell.
+                clear_key_bits(&CAPTURED_KEYS);
                 if let Err(err) = self.install_hook() {
                     let _ = set_hook_capture(None);
                     return Err(err);
@@ -1684,6 +1687,8 @@ impl OwnerState {
         } else {
             if current_hook_bindings().is_empty() {
                 if let Some(hook) = self.hook.take() {
+                    // No hook will see these keys' key-ups any more.
+                    clear_key_bits(&CAPTURED_KEYS);
                     if let Err(err) = unsafe { UnhookWindowsHookEx(hook) } {
                         log::debug!("recorder keyboard hook was already gone: {}", err.message());
                     }

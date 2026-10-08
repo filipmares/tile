@@ -395,9 +395,29 @@ function startRecording(action: WindowAction, scope: Scope): void {
   // The page never sees most Win chords (the shell takes them), nor anything
   // Tile already claims, so the backend records modified chords natively.
   // Should that fail, the page's own keyboard events still work.
-  beginHotkeyCapture().catch((err) =>
-    console.warn("native shortcut capture is unavailable", err),
-  );
+  queueCapture(true);
+}
+
+/**
+ * Capture begin/end calls run one at a time, in order, so a stop from a
+ * cancelled recording can never land after the next recording's start.
+ */
+let captureQueue: Promise<void> = Promise.resolve();
+
+function queueCapture(start: boolean): void {
+  captureQueue = captureQueue
+    .then(async () => {
+      if (start) await beginHotkeyCapture();
+      else await endHotkeyCapture();
+    })
+    .catch((err) =>
+      console.warn(
+        start
+          ? "native shortcut capture is unavailable"
+          : "could not stop native shortcut capture",
+        err,
+      ),
+    );
 }
 
 /** Ends recording and hands focus back to the row that was recorded. */
@@ -406,9 +426,7 @@ function stopRecording(): void {
   recording = null;
   window.removeEventListener("keydown", onRecordKey, { capture: true });
   window.removeEventListener("blur", onRecordBlur);
-  endHotkeyCapture().catch((err) =>
-    console.warn("could not stop native shortcut capture", err),
-  );
+  queueCapture(false);
   renderBindings();
   if (action !== null) bindingButton(action, recordingScope)?.focus();
 }
