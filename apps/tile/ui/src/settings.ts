@@ -32,6 +32,7 @@ import { isMac } from "./hotkey";
 import { applySettingsSearch, wireSettingsSearch } from "./settingsSearch";
 import {
   listenForHotkeyStatus,
+  listenForCapturedHotkeys,
   refreshHotkeyStatus,
   renderBindings,
   setRecordingStatus,
@@ -766,6 +767,11 @@ export async function bootSettings(): Promise<void> {
     await listenForHotkeyStatus();
   } catch (err) {
     console.error("could not follow hotkey status changes", err);
+  }
+  try {
+    await listenForCapturedHotkeys();
+  } catch (err) {
+    console.error("could not follow recorded shortcuts", err);
   }
   try {
     setConfig(await getConfig());

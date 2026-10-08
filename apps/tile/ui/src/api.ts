@@ -131,6 +131,19 @@ export const revealAppBundle = (): Promise<void> => invoke("reveal_app_bundle");
 export const getHotkeyStatus = (): Promise<HotkeyStatus> =>
   invoke("get_hotkey_status");
 
+/**
+ * Starts native chord capture for the shortcut recorder. Resolves to whether
+ * the backend captures natively; captured chords arrive as `HOTKEY_CAPTURED`.
+ */
+export const beginHotkeyCapture = (): Promise<boolean> =>
+  invoke("begin_hotkey_capture");
+
+export const endHotkeyCapture = (): Promise<void> =>
+  invoke("end_hotkey_capture");
+
+/** Carries a `Hotkey` the backend captured while the recorder is open. */
+export const HOTKEY_CAPTURED = "tile://hotkey-captured";
+
 export const getUpdateStatus = (): Promise<UpdateStatus> =>
   invoke("get_update_status");
 

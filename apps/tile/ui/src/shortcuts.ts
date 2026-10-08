@@ -2,7 +2,13 @@
 // captures a new chord. Searching the list is the settings search's job.
 
 import { listen } from "@tauri-apps/api/event";
-import { getHotkeyStatus, setBinding } from "./api";
+import {
+  beginHotkeyCapture,
+  endHotkeyCapture,
+  getHotkeyStatus,
+  HOTKEY_CAPTURED,
+  setBinding,
+} from "./api";
 import { confirmDialog } from "./confirm";
 import { dom } from "./dom";
 import {
@@ -12,6 +18,7 @@ import {
   hotkeyWarnings,
   interpret,
   isMac,
+  RecordOutcome,
 } from "./hotkey";
 import { renderWholeConfig, saveSetting } from "./settings";
 import { applySettingsSearch, openByUser } from "./settingsSearch";
@@ -384,6 +391,13 @@ function startRecording(action: WindowAction, scope: Scope): void {
   setRecordingStatus(STRINGS.recording(labelFor(action)));
   renderBindings();
   window.addEventListener("keydown", onRecordKey, { capture: true });
+  window.addEventListener("blur", onRecordBlur);
+  // The page never sees most Win chords (the shell takes them), nor anything
+  // Tile already claims, so the backend records modified chords natively.
+  // Should that fail, the page's own keyboard events still work.
+  beginHotkeyCapture().catch((err) =>
+    console.warn("native shortcut capture is unavailable", err),
+  );
 }
 
 /** Ends recording and hands focus back to the row that was recorded. */
@@ -391,16 +405,38 @@ function stopRecording(): void {
   const action = recording;
   recording = null;
   window.removeEventListener("keydown", onRecordKey, { capture: true });
+  window.removeEventListener("blur", onRecordBlur);
+  endHotkeyCapture().catch((err) =>
+    console.warn("could not stop native shortcut capture", err),
+  );
   renderBindings();
   if (action !== null) bindingButton(action, recordingScope)?.focus();
+}
+
+/** Leaving the window ends recording, so no chord is captured unseen. */
+function onRecordBlur(): void {
+  if (recording === null) return;
+  setRecordingStatus(STRINGS.cancelled);
+  stopRecording();
+}
+
+/** Follows chords the backend captured while the recorder is open. */
+export async function listenForCapturedHotkeys(): Promise<void> {
+  await listen<Hotkey>(HOTKEY_CAPTURED, ({ payload }) => {
+    if (recording === null) return;
+    handleOutcome({ kind: "bound", hotkey: payload });
+  });
 }
 
 function onRecordKey(e: KeyboardEvent): void {
   if (recording === null) return;
   e.preventDefault();
   e.stopPropagation();
+  handleOutcome(interpret(e));
+}
 
-  const outcome = interpret(e);
+function handleOutcome(outcome: RecordOutcome): void {
+  if (recording === null) return;
   switch (outcome.kind) {
     case "pending":
       return;

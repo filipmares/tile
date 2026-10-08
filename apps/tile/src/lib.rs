@@ -26,7 +26,7 @@ use std::thread;
 
 use tauri::{AppHandle, Emitter, Manager, RunEvent, Runtime};
 use tauri_plugin_autostart::MacosLauncher;
-use tile_core::Config;
+use tile_core::{Config, Hotkey};
 use tile_platform::PermissionStatus;
 
 use build_kind::BuildKind;
@@ -85,6 +85,8 @@ pub fn run() {
             commands::open_accessibility_settings,
             commands::reveal_app_bundle,
             commands::get_hotkey_status,
+            commands::begin_hotkey_capture,
+            commands::end_hotkey_capture,
             commands::get_update_status,
             commands::open_update_window,
             commands::check_for_updates,
@@ -320,6 +322,10 @@ fn setup_app<R: Runtime>(app: &AppHandle<R>) -> Result<(), Box<dyn std::error::E
     }));
     spawn_hotkey_status_worker(app.clone(), state.clone(), status_rx)?;
 
+    let (captured, captured_rx) = mpsc::channel::<Hotkey>();
+    app.manage(commands::HotkeyCaptureSink(captured));
+    spawn_hotkey_capture_worker(app.clone(), captured_rx)?;
+
     // Worker thread: drains hotkey presses and menu clicks and performs them.
     // It only touches the window backend (safe off the main thread); hotkey
     // registration stays with the backend's own loop.
@@ -422,6 +428,26 @@ fn spawn_hotkey_status_worker<R: Runtime>(
                 }
             }
             log::debug!("hotkey status thread exiting");
+        })
+        .map(|_| ())
+}
+
+/// Hands chords captured for the shortcut recorder to the settings window.
+fn spawn_hotkey_capture_worker<R: Runtime>(
+    app: AppHandle<R>,
+    captured: mpsc::Receiver<Hotkey>,
+) -> std::io::Result<()> {
+    thread::Builder::new()
+        .name("tile-hotkey-capture".into())
+        .spawn(move || {
+            for hotkey in captured {
+                if let Err(err) =
+                    app.emit_to(window::SETTINGS_LABEL, commands::HOTKEY_CAPTURED, hotkey)
+                {
+                    log::warn!("could not send a recorded shortcut to settings: {err}");
+                }
+            }
+            log::debug!("hotkey capture thread exiting");
         })
         .map(|_| ())
 }

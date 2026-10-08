@@ -44,7 +44,7 @@ use windows::Win32::System::RemoteDesktop::{
 };
 use windows::Win32::System::SystemInformation::GetTickCount;
 use windows::Win32::System::SystemServices::GUID_CONSOLE_DISPLAY_STATE;
-use windows::Win32::System::Threading::GetCurrentThreadId;
+use windows::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetLastInputInfo, RegisterHotKey, SendInput, UnregisterHotKey,
     HOT_KEY_MODIFIERS, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
@@ -59,19 +59,19 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_SHIFT, VK_SPACE, VK_SUBTRACT, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-    KillTimer, PeekMessageW, PostThreadMessageW, RegisterClassExW, SetTimer, SetWindowsHookExW,
-    TranslateMessage, UnhookWindowsHookEx, UnregisterClassW, DEVICE_NOTIFY_WINDOW_HANDLE,
-    HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, MSG, PBT_APMRESUMEAUTOMATIC,
-    PBT_POWERSETTINGCHANGE, PM_NOREMOVE, WH_KEYBOARD_LL, WM_APP, WM_HOTKEY, WM_KEYDOWN, WM_KEYUP,
-    WM_POWERBROADCAST, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER, WM_WTSSESSION_CHANGE, WNDCLASSEXW,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WTS_CONSOLE_CONNECT, WTS_REMOTE_CONNECT,
-    WTS_SESSION_UNLOCK,
+    CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
+    GetForegroundWindow, GetMessageW, GetWindowThreadProcessId, KillTimer, PeekMessageW,
+    PostThreadMessageW, RegisterClassExW, SetTimer, SetWindowsHookExW, TranslateMessage,
+    UnhookWindowsHookEx, UnregisterClassW, DEVICE_NOTIFY_WINDOW_HANDLE, HC_ACTION, HHOOK,
+    KBDLLHOOKSTRUCT, LLKHF_EXTENDED, MSG, PBT_APMRESUMEAUTOMATIC, PBT_POWERSETTINGCHANGE,
+    PM_NOREMOVE, WH_KEYBOARD_LL, WM_APP, WM_HOTKEY, WM_KEYDOWN, WM_KEYUP, WM_POWERBROADCAST,
+    WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER, WM_WTSSESSION_CHANGE, WNDCLASSEXW, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_POPUP, WTS_CONSOLE_CONNECT, WTS_REMOTE_CONNECT, WTS_SESSION_UNLOCK,
 };
 
 use crate::{
-    HotkeyApplyReport, HotkeyBackend, HotkeyBinding, HotkeyBindingStatus, HotkeyRoute,
-    HotkeyStatusListener, PlatformError, Result,
+    HotkeyApplyReport, HotkeyBackend, HotkeyBinding, HotkeyBindingStatus, HotkeyCaptureListener,
+    HotkeyRoute, HotkeyStatusListener, PlatformError, Result,
 };
 
 const COMMAND_MESSAGE: u32 = WM_APP + 0x544;
@@ -127,6 +127,9 @@ struct HookBinding {
 struct HookDispatch {
     sender: Sender<ActionRequest>,
     bindings: Vec<HookBinding>,
+    /// Set while the shortcut recorder is open; see
+    /// [`HotkeyBackend::set_capture`].
+    capture: Option<HotkeyCaptureListener>,
 }
 
 thread_local! {
@@ -136,6 +139,11 @@ thread_local! {
 
 static SWALLOWED_KEYS: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
 static HELD_KEYS: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
+/// Keys the shortcut recorder captured and that are still down. Kept apart
+/// from [`SWALLOWED_KEYS`] so ending capture or applying the new binding —
+/// both of which clear transient keys — cannot hand a held chord's
+/// auto-repeats to the shell or to the binding just recorded.
+static CAPTURED_KEYS: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
 static LAST_KEY_DOWN: [AtomicU32; 512] = [const { AtomicU32::new(0) }; 512];
 /// Tick (`GetTickCount` base) of the last event the hook observed.
 static HOOK_LAST_EVENT: AtomicU32 = AtomicU32::new(0);
@@ -208,6 +216,7 @@ fn now_tick() -> u32 {
 struct KeyTracker<'a> {
     swallowed: &'a [AtomicU64; 8],
     held: &'a [AtomicU64; 8],
+    captured: &'a [AtomicU64; 8],
     last_down: &'a [AtomicU32; 512],
 }
 
@@ -216,6 +225,7 @@ impl KeyTracker<'static> {
         Self {
             swallowed: &SWALLOWED_KEYS,
             held: &HELD_KEYS,
+            captured: &CAPTURED_KEYS,
             last_down: &LAST_KEY_DOWN,
         }
     }
@@ -248,9 +258,22 @@ fn key_down_verdict(
     if is_modifier_vk(vk) {
         return KeyVerdict::Pass;
     }
+    let last_down = &tracker.last_down[key_index(vk, extended)];
+    // A chord the recorder captured stays claimed until its key-up, so a
+    // press held past the end of recording neither leaks its auto-repeats
+    // nor fires the binding it was just recorded for.
+    if key_bit_is_set(tracker.captured, vk, extended) {
+        if tick_elapsed(now, last_down.load(Ordering::Relaxed)) <= STALE_KEY_MS {
+            last_down.store(now, Ordering::Relaxed);
+            return KeyVerdict::Swallow {
+                action: None,
+                suppress_start_menu: false,
+            };
+        }
+        take_key_bit(tracker.captured, vk, extended);
+    }
     let mods = modifiers();
     let matched = match_binding_in(bindings, vk, extended, mods);
-    let last_down = &tracker.last_down[key_index(vk, extended)];
 
     if key_bit_is_set(tracker.swallowed, vk, extended) {
         let stale = tick_elapsed(now, last_down.load(Ordering::Relaxed)) > STALE_KEY_MS;
@@ -280,7 +303,8 @@ fn key_down_verdict(
 /// Returns whether the hook swallows a key-up (only for keys it claimed).
 fn key_up_verdict(vk: u16, extended: bool, tracker: &KeyTracker<'_>) -> bool {
     take_key_bit(tracker.held, vk, extended);
-    take_key_bit(tracker.swallowed, vk, extended)
+    let captured = take_key_bit(tracker.captured, vk, extended);
+    take_key_bit(tracker.swallowed, vk, extended) | captured
 }
 
 /// Why the owner thread is re-arming the hotkey machinery.
@@ -519,6 +543,10 @@ enum Command {
         deadline: Instant,
         control: std::sync::Arc<ApplyControl>,
         reply: Sender<Result<HotkeyApplyReport>>,
+    },
+    Capture {
+        listener: Option<HotkeyCaptureListener>,
+        reply: Sender<Result<bool>>,
     },
     Shutdown,
 }
@@ -851,6 +879,20 @@ impl HotkeyBackend for WindowsHotkeyBackend {
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(listener);
     }
 
+    fn set_capture(&mut self, listener: Option<HotkeyCaptureListener>) -> Result<bool> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        self.commands
+            .send(Command::Capture {
+                listener,
+                reply: reply_tx,
+            })
+            .map_err(|e| PlatformError::os("queue hotkey capture", e.to_string()))?;
+        self.wake_owner()?;
+        reply_rx
+            .recv_timeout(COMMAND_TIMEOUT)
+            .map_err(|e| PlatformError::os("hotkey capture", e.to_string()))?
+    }
+
     fn shutdown(&mut self) {
         if self.shutdown_done {
             return;
@@ -916,6 +958,7 @@ fn owner_thread_main(
             *dispatch.borrow_mut() = Some(HookDispatch {
                 sender: events,
                 bindings: Vec::new(),
+                capture: None,
             });
         });
         if startup_cancelled.load(Ordering::Acquire)
@@ -989,6 +1032,13 @@ fn await_start(commands: &Receiver<Command>, cancelled: &AtomicBool) -> bool {
             )));
             false
         }
+        Ok(Command::Capture { reply, .. }) => {
+            let _ = reply.send(Err(PlatformError::os(
+                "hotkey thread startup",
+                "received capture before startup acknowledgement",
+            )));
+            false
+        }
         Ok(Command::Shutdown) | Err(_) => false,
     }
 }
@@ -1019,6 +1069,11 @@ fn drain_commands(commands: &Receiver<Command>, owner: &mut OwnerState) -> bool 
                 if failed {
                     owner.publish_status();
                 }
+            }
+            Command::Capture { listener, reply } => {
+                let result = owner.set_capture(listener);
+                owner.sync_watchdog();
+                let _ = reply.send(result);
             }
             Command::Shutdown => return false,
         }
@@ -1207,7 +1262,7 @@ impl OwnerState {
         clear_transient_keys();
 
         let mut warning = None;
-        if hook_bindings.is_empty() {
+        if hook_bindings.is_empty() && !capture_active() {
             if let Some(hook) = self.hook {
                 match unsafe { UnhookWindowsHookEx(hook) } {
                     Ok(()) => {
@@ -1353,7 +1408,7 @@ impl OwnerState {
     /// harmlessly when Windows already removed it), and a missing hook is
     /// installed if any binding still depends on it.
     fn arm_hook(&mut self) -> Result<HookArm> {
-        let arm = hook_arm(self.hook.is_some(), !current_hook_bindings().is_empty());
+        let arm = hook_arm(self.hook.is_some(), hook_in_use());
         match arm {
             HookArm::NotNeeded => return Ok(arm),
             HookArm::Installed => self.install_hook()?,
@@ -1608,7 +1663,35 @@ impl OwnerState {
     }
 
     fn hook_wanted(&self) -> bool {
-        self.hook.is_some() || !current_hook_bindings().is_empty()
+        self.hook.is_some() || hook_in_use()
+    }
+
+    /// Starts or stops capture for the shortcut recorder. Capture needs the
+    /// hook even when no binding does, so it installs one on demand and
+    /// removes it again afterwards if nothing else still uses it.
+    fn set_capture(&mut self, listener: Option<HotkeyCaptureListener>) -> Result<bool> {
+        let start = listener.is_some();
+        set_hook_capture(listener)?;
+        if start {
+            if self.hook.is_none() {
+                if let Err(err) = self.install_hook() {
+                    let _ = set_hook_capture(None);
+                    return Err(err);
+                }
+                log::debug!("Windows keyboard hook installed for the shortcut recorder");
+            }
+            log::debug!("Windows shortcut capture started");
+        } else {
+            if current_hook_bindings().is_empty() {
+                if let Some(hook) = self.hook.take() {
+                    if let Err(err) = unsafe { UnhookWindowsHookEx(hook) } {
+                        log::debug!("recorder keyboard hook was already gone: {}", err.message());
+                    }
+                }
+            }
+            log::debug!("Windows shortcut capture stopped");
+        }
+        Ok(start)
     }
 
     /// Runs the watchdog timer only while there is a hook to watch, a hook that
@@ -1782,6 +1865,8 @@ impl OwnerState {
 
     fn release_all(&mut self) {
         set_hook_bindings(Vec::new()).ok();
+        set_hook_capture(None).ok();
+        clear_key_bits(&CAPTURED_KEYS);
         clear_transient_keys();
         self.pending.clear();
         for binding in self.registered.drain(..) {
@@ -1929,6 +2014,40 @@ fn current_hook_bindings() -> Vec<HookBinding> {
         .unwrap_or_default()
 }
 
+/// Whether the shortcut recorder is capturing through the hook.
+fn capture_active() -> bool {
+    HOOK_DISPATCH
+        .try_with(|dispatch| {
+            dispatch
+                .try_borrow()
+                .ok()
+                .and_then(|guard| guard.as_ref().map(|state| state.capture.is_some()))
+        })
+        .ok()
+        .flatten()
+        .unwrap_or(false)
+}
+
+/// Whether anything — a binding or the recorder — currently needs the hook.
+fn hook_in_use() -> bool {
+    !current_hook_bindings().is_empty() || capture_active()
+}
+
+fn set_hook_capture(listener: Option<HotkeyCaptureListener>) -> Result<()> {
+    HOOK_DISPATCH
+        .try_with(|dispatch| {
+            let mut guard = dispatch
+                .try_borrow_mut()
+                .map_err(|_| PlatformError::os("hotkey", "hook table is in use"))?;
+            let state = guard
+                .as_mut()
+                .ok_or_else(|| PlatformError::os("hotkey", "hook state is unavailable"))?;
+            state.capture = listener;
+            Ok(())
+        })
+        .map_err(|_| PlatformError::os("hotkey", "hook state was torn down"))?
+}
+
 fn set_hook_bindings(bindings: Vec<HookBinding>) -> Result<()> {
     HOOK_DISPATCH
         .try_with(|dispatch| {
@@ -1986,6 +2105,19 @@ fn handle_hook_key(message: u32, kb: &KBDLLHOOKSTRUCT) -> bool {
                 let Some(state) = guard.as_ref() else {
                     return KeyVerdict::Pass;
                 };
+                if let Some(capture) = &state.capture {
+                    if let Some(verdict) = capture_verdict(
+                        vk,
+                        extended,
+                        kb.time,
+                        foreground_is_ours,
+                        current_modifiers,
+                        &tracker,
+                        capture,
+                    ) {
+                        return verdict;
+                    }
+                }
                 let verdict = key_down_verdict(
                     &state.bindings,
                     vk,
@@ -2025,6 +2157,63 @@ fn handle_hook_key(message: u32, kb: &KBDLLHOOKSTRUCT) -> bool {
 
 fn repeat_action(binding: HookBinding) -> Option<WindowAction> {
     binding.repeat.then_some(binding.action)
+}
+
+/// Decides what the hook does with a key-down while the shortcut recorder is
+/// open, or `None` to fall through to the normal binding dispatch.
+///
+/// Only a modified chord pressed in one of Tile's own windows is captured.
+/// It is reported once — auto-repeats are swallowed silently — and swallowed,
+/// key-up included, so neither the shell, a bound action, nor the page sees
+/// it. Bare keys pass, so the page still handles Esc and Backspace, and any
+/// other app keeps its keyboard if focus moves while the recorder is open.
+fn capture_verdict(
+    vk: u16,
+    extended: bool,
+    now: u32,
+    foreground_is_ours: impl FnOnce() -> bool,
+    modifiers: impl FnOnce() -> Modifiers,
+    tracker: &KeyTracker<'_>,
+    report: impl FnOnce(Hotkey),
+) -> Option<KeyVerdict> {
+    if is_modifier_vk(vk) || !foreground_is_ours() {
+        return None;
+    }
+    let mods = modifiers();
+    if mods == Modifiers::NONE {
+        return None;
+    }
+    let key = vk_to_keycode(vk, extended)?;
+    let last_down = &tracker.last_down[key_index(vk, extended)];
+    let repeated = key_bit_is_set(tracker.captured, vk, extended)
+        && tick_elapsed(now, last_down.load(Ordering::Relaxed)) <= STALE_KEY_MS;
+    set_key_bit(tracker.captured, vk, extended);
+    last_down.store(now, Ordering::Relaxed);
+    if !repeated {
+        report(Hotkey::new(mods, key));
+    }
+    Some(KeyVerdict::Swallow {
+        action: None,
+        suppress_start_menu: !repeated && mods.contains(Modifiers::META),
+    })
+}
+
+/// Whether the foreground window belongs to this process.
+fn foreground_is_ours() -> bool {
+    let window = unsafe { GetForegroundWindow() };
+    if window.0.is_null() {
+        return false;
+    }
+    let mut process = 0u32;
+    unsafe { GetWindowThreadProcessId(window, Some(&mut process)) };
+    process == unsafe { GetCurrentProcessId() }
+}
+
+/// Reverse of [`keycode_to_vk`] and [`keycode_extended`].
+fn vk_to_keycode(vk: u16, extended: bool) -> Option<KeyCode> {
+    KeyCode::ALL.iter().copied().find(|&k| {
+        keycode_to_vk(k).0 == vk && keycode_extended(k).map_or(true, |want| want == extended)
+    })
 }
 
 fn match_binding_in(
@@ -2317,13 +2506,6 @@ mod tests {
         assert_eq!(swallow_index(0, true), 256);
         assert_eq!(swallow_index(0xFF, true), 511);
         assert_ne!(swallow_index(0x0D, false), swallow_index(0x0D, true));
-    }
-
-    /// Reverse mapping, defined only for the round-trip test.
-    fn vk_to_keycode(vk: u16, extended: bool) -> Option<KeyCode> {
-        KeyCode::ALL.iter().copied().find(|&k| {
-            keycode_to_vk(k).0 == vk && keycode_extended(k).map_or(true, |want| want == extended)
-        })
     }
 
     #[test]
@@ -2621,6 +2803,7 @@ mod tests {
     struct LocalKeys {
         swallowed: [AtomicU64; 8],
         held: [AtomicU64; 8],
+        captured: [AtomicU64; 8],
         last_down: [AtomicU32; 512],
     }
 
@@ -2629,6 +2812,7 @@ mod tests {
             Self {
                 swallowed: [const { AtomicU64::new(0) }; 8],
                 held: [const { AtomicU64::new(0) }; 8],
+                captured: [const { AtomicU64::new(0) }; 8],
                 last_down: [const { AtomicU32::new(0) }; 512],
             }
         }
@@ -2637,6 +2821,7 @@ mod tests {
             KeyTracker {
                 swallowed: &self.swallowed,
                 held: &self.held,
+                captured: &self.captured,
                 last_down: &self.last_down,
             }
         }
@@ -2776,6 +2961,124 @@ mod tests {
         assert_eq!(
             keys.down(&t, VK_LEFT.0, 1, Modifiers::CONTROL),
             fired(WindowAction::LeftHalf, false)
+        );
+    }
+
+    impl LocalKeys {
+        /// A capture key-down in Tile's foreground window, returning the
+        /// verdict and what was reported.
+        fn capture(
+            &self,
+            vk: u16,
+            extended: bool,
+            ours: bool,
+            mods: Modifiers,
+        ) -> (Option<KeyVerdict>, Option<Hotkey>) {
+            let mut reported = None;
+            let verdict = capture_verdict(
+                vk,
+                extended,
+                1,
+                || ours,
+                || mods,
+                &self.tracker(),
+                |hotkey| reported = Some(hotkey),
+            );
+            (verdict, reported)
+        }
+
+        fn up_extended(&self, vk: u16, extended: bool) -> bool {
+            key_up_verdict(vk, extended, &self.tracker())
+        }
+    }
+
+    #[test]
+    fn capture_reports_a_win_chord_once_and_swallows_it() {
+        let keys = LocalKeys::new();
+        assert_eq!(
+            keys.capture(VK_RETURN.0, false, true, Modifiers::META),
+            (
+                Some(KeyVerdict::Swallow {
+                    action: None,
+                    suppress_start_menu: true,
+                }),
+                Some(Hotkey::new(Modifiers::META, KeyCode::Enter)),
+            )
+        );
+        assert_eq!(
+            keys.capture(VK_RETURN.0, false, true, Modifiers::META),
+            (Some(SWALLOW_SILENTLY), None),
+            "auto-repeat is swallowed without a second report"
+        );
+        assert!(keys.up_extended(VK_RETURN.0, false), "key-up is swallowed");
+        assert_eq!(
+            keys.capture(VK_RETURN.0, true, true, Modifiers::META).1,
+            Some(Hotkey::new(Modifiers::META, KeyCode::NumpadEnter)),
+            "the keypad Enter is told apart"
+        );
+    }
+
+    #[test]
+    fn capture_leaves_bare_keys_modifiers_and_other_apps_alone() {
+        let keys = LocalKeys::new();
+        assert_eq!(
+            keys.capture(VK_ESCAPE.0, false, true, Modifiers::NONE),
+            (None, None),
+            "the page still sees Esc and Backspace"
+        );
+        assert_eq!(
+            keys.capture(VK_LWIN.0, false, true, Modifiers::META),
+            (None, None)
+        );
+        assert_eq!(
+            keys.capture(VK_RETURN.0, false, false, Modifiers::META),
+            (None, None),
+            "nothing is captured while another app is in front"
+        );
+        assert!(!keys.up_extended(VK_RETURN.0, false));
+    }
+
+    #[test]
+    fn a_chord_held_past_capture_drains_until_its_key_up() {
+        let keys = LocalKeys::new();
+        keys.capture(VK_RETURN.0, false, true, Modifiers::META);
+        // Recording ended and the chord was bound while the key is still down.
+        clear_key_bits(&keys.swallowed);
+        let bound = vec![HookBinding {
+            vk: VK_RETURN.0,
+            extended: Some(false),
+            mods: Modifiers::META,
+            action: WindowAction::Center,
+            repeat: false,
+        }];
+        assert_eq!(
+            keys.down(&bound, VK_RETURN.0, 500, Modifiers::META),
+            SWALLOW_SILENTLY,
+            "the held chord's repeat neither fires nor leaks"
+        );
+        assert_eq!(
+            keys.down(&[], VK_RETURN.0, 533, Modifiers::META),
+            SWALLOW_SILENTLY,
+            "nor reaches the shell when nothing is bound"
+        );
+        assert!(keys.up(VK_RETURN.0), "its key-up is swallowed");
+        assert_eq!(
+            keys.down(&bound, VK_RETURN.0, 900, Modifiers::META),
+            fired(WindowAction::Center, true),
+            "a fresh press fires the new binding"
+        );
+    }
+
+    #[test]
+    fn capture_reports_chords_without_win_too() {
+        let keys = LocalKeys::new();
+        let mods = Modifiers::CONTROL | Modifiers::ALT;
+        assert_eq!(
+            keys.capture(VK_LEFT.0, true, true, mods),
+            (
+                Some(SWALLOW_SILENTLY),
+                Some(Hotkey::new(mods, KeyCode::Left)),
+            )
         );
     }
 
@@ -3077,6 +3380,7 @@ mod tests {
                 *dispatch.borrow_mut() = Some(HookDispatch {
                     sender: tx,
                     bindings: Vec::new(),
+                    capture: None,
                 });
             });
             set_hook_bindings(table()).unwrap();
