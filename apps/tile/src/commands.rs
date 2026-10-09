@@ -449,27 +449,37 @@ pub fn get_hotkey_status(state: State<'_, Shared>) -> HotkeyStatusDto {
     hotkey_status_dto(state.hotkey_status())
 }
 
-/// Emitted with a [`Hotkey`] for each chord the backend captures while the
-/// shortcut recorder is open.
+/// Emitted with a [`CapturedHotkey`] for each chord the backend captures while
+/// the shortcut recorder is open.
 pub const HOTKEY_CAPTURED: &str = "tile://hotkey-captured";
+
+/// A captured chord, tagged with the recording session that asked for it so
+/// the UI can drop a late event from a recording that has since ended.
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapturedHotkey {
+    pub session: u32,
+    pub hotkey: Hotkey,
+}
 
 /// Where captured chords are queued. The backend calls its listener from
 /// inside the keyboard hook, which must never block, so the listener only
 /// queues and a worker thread does the emitting.
-pub struct HotkeyCaptureSink(pub std::sync::mpsc::Sender<Hotkey>);
+pub struct HotkeyCaptureSink(pub std::sync::mpsc::Sender<CapturedHotkey>);
 
-/// Starts native chord capture for the shortcut recorder. Returns whether the
-/// backend captures natively; when it does not, the recorder reads the
-/// page's own keyboard events instead.
+/// Starts native chord capture for the shortcut recorder session `session`.
+/// Returns whether the backend captures natively; when it does not, the
+/// recorder reads the page's own keyboard events instead.
 #[tauri::command]
 pub fn begin_hotkey_capture(
     state: State<'_, Shared>,
     sink: State<'_, HotkeyCaptureSink>,
+    session: u32,
 ) -> Result<bool, String> {
     let queue = sink.0.clone();
     state
         .set_hotkey_capture(Some(Box::new(move |hotkey| {
-            let _ = queue.send(hotkey);
+            let _ = queue.send(CapturedHotkey { session, hotkey });
         })))
         .map_err(|err| {
             log::warn!("could not start shortcut capture: {err}");

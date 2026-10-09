@@ -132,17 +132,23 @@ export const getHotkeyStatus = (): Promise<HotkeyStatus> =>
   invoke("get_hotkey_status");
 
 /**
- * Starts native chord capture for the shortcut recorder. Resolves to whether
- * the backend captures natively; captured chords arrive as `HOTKEY_CAPTURED`.
+ * Starts native chord capture for recording session `session`. Resolves to
+ * whether the backend captures natively; captured chords arrive as
+ * `HOTKEY_CAPTURED`, tagged with that session.
  */
-export const beginHotkeyCapture = (): Promise<boolean> =>
-  invoke("begin_hotkey_capture");
+export const beginHotkeyCapture = (session: number): Promise<boolean> =>
+  invoke("begin_hotkey_capture", { session });
 
 export const endHotkeyCapture = (): Promise<void> =>
   invoke("end_hotkey_capture");
 
-/** Carries a `Hotkey` the backend captured while the recorder is open. */
+/** Carries a `CapturedHotkey` the backend captured while recording. */
 export const HOTKEY_CAPTURED = "tile://hotkey-captured";
+
+export interface CapturedHotkey {
+  session: number;
+  hotkey: Hotkey;
+}
 
 export const getUpdateStatus = (): Promise<UpdateStatus> =>
   invoke("get_update_status");

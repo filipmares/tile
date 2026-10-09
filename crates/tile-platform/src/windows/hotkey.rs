@@ -1686,11 +1686,19 @@ impl OwnerState {
             log::debug!("Windows shortcut capture started");
         } else {
             if current_hook_bindings().is_empty() {
-                if let Some(hook) = self.hook.take() {
-                    // No hook will see these keys' key-ups any more.
-                    clear_key_bits(&CAPTURED_KEYS);
-                    if let Err(err) = unsafe { UnhookWindowsHookEx(hook) } {
-                        log::debug!("recorder keyboard hook was already gone: {}", err.message());
+                if let Some(hook) = self.hook {
+                    // Keep the handle (and the drain state) unless Windows
+                    // confirms removal, as the apply path does.
+                    match unsafe { UnhookWindowsHookEx(hook) } {
+                        Ok(()) => {
+                            self.hook = None;
+                            // No hook will see these keys' key-ups any more.
+                            clear_key_bits(&CAPTURED_KEYS);
+                        }
+                        Err(err) => log::warn!(
+                            "could not remove the recorder keyboard hook: {}",
+                            err.message()
+                        ),
                     }
                 }
             }

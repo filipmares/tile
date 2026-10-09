@@ -4,6 +4,7 @@
 import { listen } from "@tauri-apps/api/event";
 import {
   beginHotkeyCapture,
+  CapturedHotkey,
   endHotkeyCapture,
   getHotkeyStatus,
   HOTKEY_CAPTURED,
@@ -395,8 +396,14 @@ function startRecording(action: WindowAction, scope: Scope): void {
   // The page never sees most Win chords (the shell takes them), nor anything
   // Tile already claims, so the backend records modified chords natively.
   // Should that fail, the page's own keyboard events still work.
-  queueCapture(true);
+  queueCapture(++captureSession);
 }
+
+/**
+ * Identifies the current recording, so a chord captured for one that has
+ * since ended cannot be applied to the next.
+ */
+let captureSession = 0;
 
 /**
  * Capture begin/end calls run one at a time, in order, so a stop from a
@@ -404,15 +411,16 @@ function startRecording(action: WindowAction, scope: Scope): void {
  */
 let captureQueue: Promise<void> = Promise.resolve();
 
-function queueCapture(start: boolean): void {
+/** Queues a begin for `session`, or an end when `session` is null. */
+function queueCapture(session: number | null): void {
   captureQueue = captureQueue
     .then(async () => {
-      if (start) await beginHotkeyCapture();
+      if (session !== null) await beginHotkeyCapture(session);
       else await endHotkeyCapture();
     })
     .catch((err) =>
       console.warn(
-        start
+        session !== null
           ? "native shortcut capture is unavailable"
           : "could not stop native shortcut capture",
         err,
@@ -424,9 +432,10 @@ function queueCapture(start: boolean): void {
 function stopRecording(): void {
   const action = recording;
   recording = null;
+  captureSession++;
   window.removeEventListener("keydown", onRecordKey, { capture: true });
   window.removeEventListener("blur", onRecordBlur);
-  queueCapture(false);
+  queueCapture(null);
   renderBindings();
   if (action !== null) bindingButton(action, recordingScope)?.focus();
 }
@@ -440,9 +449,9 @@ function onRecordBlur(): void {
 
 /** Follows chords the backend captured while the recorder is open. */
 export async function listenForCapturedHotkeys(): Promise<void> {
-  await listen<Hotkey>(HOTKEY_CAPTURED, ({ payload }) => {
-    if (recording === null) return;
-    handleOutcome({ kind: "bound", hotkey: payload });
+  await listen<CapturedHotkey>(HOTKEY_CAPTURED, ({ payload }) => {
+    if (recording === null || payload.session !== captureSession) return;
+    handleOutcome({ kind: "bound", hotkey: payload.hotkey });
   });
 }
 

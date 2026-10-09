@@ -26,7 +26,7 @@ use std::thread;
 
 use tauri::{AppHandle, Emitter, Manager, RunEvent, Runtime};
 use tauri_plugin_autostart::MacosLauncher;
-use tile_core::{Config, Hotkey};
+use tile_core::Config;
 use tile_platform::PermissionStatus;
 
 use build_kind::BuildKind;
@@ -322,7 +322,7 @@ fn setup_app<R: Runtime>(app: &AppHandle<R>) -> Result<(), Box<dyn std::error::E
     }));
     spawn_hotkey_status_worker(app.clone(), state.clone(), status_rx)?;
 
-    let (captured, captured_rx) = mpsc::channel::<Hotkey>();
+    let (captured, captured_rx) = mpsc::channel::<commands::CapturedHotkey>();
     app.manage(commands::HotkeyCaptureSink(captured));
     spawn_hotkey_capture_worker(app.clone(), captured_rx)?;
 
@@ -435,14 +435,14 @@ fn spawn_hotkey_status_worker<R: Runtime>(
 /// Hands chords captured for the shortcut recorder to the settings window.
 fn spawn_hotkey_capture_worker<R: Runtime>(
     app: AppHandle<R>,
-    captured: mpsc::Receiver<Hotkey>,
+    captured: mpsc::Receiver<commands::CapturedHotkey>,
 ) -> std::io::Result<()> {
     thread::Builder::new()
         .name("tile-hotkey-capture".into())
         .spawn(move || {
-            for hotkey in captured {
+            for event in captured {
                 if let Err(err) =
-                    app.emit_to(window::SETTINGS_LABEL, commands::HOTKEY_CAPTURED, hotkey)
+                    app.emit_to(window::SETTINGS_LABEL, commands::HOTKEY_CAPTURED, event)
                 {
                     log::warn!("could not send a recorded shortcut to settings: {err}");
                 }
