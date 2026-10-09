@@ -449,6 +449,52 @@ pub fn get_hotkey_status(state: State<'_, Shared>) -> HotkeyStatusDto {
     hotkey_status_dto(state.hotkey_status())
 }
 
+/// Emitted with a [`CapturedHotkey`] for each chord the backend captures while
+/// the shortcut recorder is open.
+pub const HOTKEY_CAPTURED: &str = "tile://hotkey-captured";
+
+/// A captured chord, tagged with the recording session that asked for it so
+/// the UI can drop a late event from a recording that has since ended.
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapturedHotkey {
+    pub session: u32,
+    pub hotkey: Hotkey,
+}
+
+/// Where captured chords are queued. The backend calls its listener from
+/// inside the keyboard hook, which must never block, so the listener only
+/// queues and a worker thread does the emitting.
+pub struct HotkeyCaptureSink(pub std::sync::mpsc::Sender<CapturedHotkey>);
+
+/// Starts native chord capture for the shortcut recorder session `session`.
+/// Returns whether the backend captures natively; when it does not, the
+/// recorder reads the page's own keyboard events instead.
+#[tauri::command]
+pub fn begin_hotkey_capture(
+    state: State<'_, Shared>,
+    sink: State<'_, HotkeyCaptureSink>,
+    session: u32,
+) -> Result<bool, String> {
+    let queue = sink.0.clone();
+    state
+        .set_hotkey_capture(Some(Box::new(move |hotkey| {
+            let _ = queue.send(CapturedHotkey { session, hotkey });
+        })))
+        .map_err(|err| {
+            log::warn!("could not start shortcut capture: {err}");
+            err.to_string()
+        })
+}
+
+#[tauri::command]
+pub fn end_hotkey_capture(state: State<'_, Shared>) -> Result<(), String> {
+    state.set_hotkey_capture(None).map(|_| ()).map_err(|err| {
+        log::warn!("could not stop shortcut capture: {err}");
+        err.to_string()
+    })
+}
+
 /// The status as the settings UI reads it, both on request and from the
 /// `hotkey-status-changed` event.
 pub fn hotkey_status_dto(status: crate::state::HotkeyStatus) -> HotkeyStatusDto {

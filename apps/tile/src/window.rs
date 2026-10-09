@@ -165,6 +165,17 @@ pub fn open_settings<R: Runtime>(app: &AppHandle<R>, kind: BuildKind) -> tauri::
         .visible(false)
         .build()?;
     demote_when_destroyed(app, &window, SETTINGS_LABEL);
+    // A recorder left open when the window goes away must not keep capturing.
+    let handle = app.clone();
+    window.on_window_event(move |event| {
+        if matches!(event, tauri::WindowEvent::Destroyed) {
+            if let Some(state) = handle.try_state::<std::sync::Arc<crate::state::AppState>>() {
+                if let Err(err) = state.set_hotkey_capture(None) {
+                    log::warn!("could not stop shortcut capture after settings closed: {err}");
+                }
+            }
+        }
+    });
     present_focusable_window(app, window, SETTINGS_LABEL)
 }
 

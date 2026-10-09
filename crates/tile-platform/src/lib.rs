@@ -226,6 +226,24 @@ pub trait HotkeyBackend: Send {
     /// Backends that never change status by themselves ignore it.
     fn set_status_listener(&mut self, _listener: HotkeyStatusListener) {}
 
+    /// Starts (`Some`) or stops (`None`) capturing chords for the shortcut
+    /// recorder, returning whether capture is now active.
+    ///
+    /// The settings webview cannot see every chord on its own: the OS shell
+    /// consumes many `Win` combinations, and anything Tile already claims is
+    /// swallowed before it reaches the page. While capture is active, a
+    /// backend that can do better reports each modified chord pressed in one
+    /// of Tile's own windows to `listener` instead of to the page or the
+    /// bound action. Bare keys still reach the page, so it keeps handling
+    /// Esc, Backspace and its own validation.
+    ///
+    /// The listener may run on the backend's own thread and must not block.
+    /// Backends without such a mechanism return `Ok(false)`, and the recorder
+    /// falls back to the page's keyboard events.
+    fn set_capture(&mut self, _listener: Option<HotkeyCaptureListener>) -> Result<bool> {
+        Ok(false)
+    }
+
     /// Releases every hotkey and stops any background thread.
     fn shutdown(&mut self);
 }
@@ -274,6 +292,10 @@ pub struct HotkeyApplyReport {
 
 /// Receives reports a [`HotkeyBackend`] publishes on its own.
 pub type HotkeyStatusListener = Box<dyn Fn(HotkeyApplyReport) + Send + 'static>;
+
+/// Receives chords captured for the shortcut recorder; see
+/// [`HotkeyBackend::set_capture`].
+pub type HotkeyCaptureListener = Box<dyn Fn(Hotkey) + Send + 'static>;
 
 impl HotkeyApplyReport {
     pub fn unavailable(&self) -> impl Iterator<Item = &HotkeyBindingStatus> {

@@ -44,8 +44,8 @@ use tile_core::{
     WindowSnapshot,
 };
 use tile_platform::{
-    AnimationSession, HotkeyApplyReport, HotkeyBackend, HotkeyBinding, PermissionStatus,
-    PlatformError, WindowBackend,
+    AnimationSession, HotkeyApplyReport, HotkeyBackend, HotkeyBinding, HotkeyCaptureListener,
+    PermissionStatus, PlatformError, WindowBackend,
 };
 
 use crate::animate::{self, Interruption, Pacer, SleepPacer};
@@ -578,6 +578,15 @@ impl AppState {
     /// tray-menu action raises.
     pub fn should_show_menu_notice(&self) -> bool {
         lock(&self.menu_notice_limiter).allow()
+    }
+
+    /// Starts (`Some`) or stops (`None`) native capture for the shortcut
+    /// recorder. Returns whether the backend is capturing.
+    pub fn set_hotkey_capture(
+        &self,
+        listener: Option<HotkeyCaptureListener>,
+    ) -> Result<bool, PlatformError> {
+        lock(&self.hotkeys).set_capture(listener)
     }
 
     /// Releases OS hotkeys. Called on shutdown.
