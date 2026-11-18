@@ -475,7 +475,7 @@ body {
 }
 
 .binding__key {
-  min-width: min(9rem, 100%);
+  min-width: 9rem;
   overflow-wrap: anywhere;
   padding: 6px 10px;
   font: inherit;
