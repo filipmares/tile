@@ -275,16 +275,16 @@ pub struct UpdateManager {
 }
 
 fn suppresses_check(status: &UpdateStatus) -> bool {
-    if matches!(status, UpdateStatus::Downloading { .. }) {
-        return true;
-    }
     #[cfg(target_os = "macos")]
     {
-        matches!(status, UpdateStatus::ReadyToRelaunch { .. })
+        matches!(
+            status,
+            UpdateStatus::Downloading { .. } | UpdateStatus::ReadyToRelaunch { .. }
+        )
     }
     #[cfg(not(target_os = "macos"))]
     {
-        false
+        matches!(status, UpdateStatus::Downloading { .. })
     }
 }
 
