@@ -1057,9 +1057,9 @@ pub const MAX_GAP: f64 = 200.0;
 /// would make those characters impossible to type — a German user could not
 /// type `@`.
 #[cfg(target_os = "macos")]
-const BASE_MODIFIERS: Modifiers = Modifiers(Modifiers::CONTROL.0 | Modifiers::ALT.0);
+pub(crate) const BASE_MODIFIERS: Modifiers = Modifiers(Modifiers::CONTROL.0 | Modifiers::ALT.0);
 #[cfg(not(target_os = "macos"))]
-const BASE_MODIFIERS: Modifiers = Modifiers::META;
+pub(crate) const BASE_MODIFIERS: Modifiers = Modifiers::META;
 
 /// The modifier carrying the directional display throws.
 ///
@@ -1123,9 +1123,11 @@ const DISPLAY_MODIFIERS: Modifiers =
 ///
 /// The vertical halves are unbound because top/bottom halves are a
 /// portrait-monitor need rather than a universal one. `Up` maximizes, while
-/// `Down` restores. The centred column keeps its full cycling behaviour,
-/// including the backwards step through [`WindowAction::cycle_anchor`],
-/// for users who bind `CenterHalf` or `CenterHalfBack`.
+/// `Down` restores — unless a side arrow was pressed earlier in the same
+/// hold of the base modifier, in which case they compose a corner on that
+/// side (see [`crate::compose`]). The corners therefore need no bindings of
+/// their own. `Enter` places the centred column and cycles its width;
+/// `CenterHalfBack` stays unbound.
 ///
 /// # Why Windows uses `Win+Arrow`
 ///
@@ -1198,6 +1200,12 @@ pub fn default_bindings() -> BTreeMap<WindowAction, Option<Hotkey>> {
         WindowAction::Restore,
         Some(Hotkey::new(base, KeyCode::Down)),
     );
+    // Enter centres a full-height column and cycles its width. Saved configs
+    // store every binding, so this reaches new installs only.
+    map.insert(
+        WindowAction::CenterHalf,
+        Some(Hotkey::new(base, KeyCode::Enter)),
+    );
 
     // The display throws sit on the platform's own move-window-to-display
     // combination (`Win+Alt` / `Control+Command+Option`), keeping the current
@@ -1229,14 +1237,16 @@ mod tests {
 
     /// The actions that ship with a default binding.
     ///
-    /// Four arrows for tiling, plus the display throws on all four arrows.
-    /// Every other action — center, the centred column, the corners,
-    /// maximize-height and the explicitly-sized thirds and two-thirds — ships unbound.
-    const CORE_BOUND: [WindowAction; 8] = [
+    /// Four arrows and `Enter` for tiling, plus the display throws on all four
+    /// arrows. Every other action — center, the backwards centred column, the
+    /// corners (composed from the arrows instead), maximize-height and the
+    /// explicitly-sized thirds and two-thirds — ships unbound.
+    const CORE_BOUND: [WindowAction; 9] = [
         WindowAction::LeftHalf,
         WindowAction::RightHalf,
         WindowAction::Maximize,
         WindowAction::Restore,
+        WindowAction::CenterHalf,
         WindowAction::DisplayLeft,
         WindowAction::DisplayRight,
         WindowAction::DisplayUp,
@@ -1261,14 +1271,14 @@ mod tests {
             );
         }
 
-        // The centred column keeps the full cycle for custom bindings.
+        // The centred column cycles on Enter; its backwards step ships unbound.
         assert!(WindowAction::CenterHalf.cycles());
         assert_eq!(
             WindowAction::CenterHalfBack.cycle_anchor(),
             WindowAction::CenterHalf
         );
         assert!(WindowAction::CenterHalfBack.cycles_backwards());
-        assert_eq!(config.binding(WindowAction::CenterHalf), None);
+        assert!(config.binding(WindowAction::CenterHalf).is_some());
         assert_eq!(config.binding(WindowAction::CenterHalfBack), None);
 
         // The sizes these arrows stand in for must stay in the catalogue, so
@@ -1310,8 +1320,9 @@ mod tests {
         // "bigger / undo" axis:
         //
         //   Left / Right   place and resize
-        //   Up            maximize
-        //   Down          restore
+        //   Up            maximize (or a top corner after a side)
+        //   Down          restore (or a bottom corner after a side)
+        //   Enter         centred column
         //
         // Changing one silently breaks the mnemonic, so they are pinned here.
         let config = Config::default();
@@ -1320,6 +1331,7 @@ mod tests {
             (WindowAction::RightHalf, KeyCode::Right),
             (WindowAction::Maximize, KeyCode::Up),
             (WindowAction::Restore, KeyCode::Down),
+            (WindowAction::CenterHalf, KeyCode::Enter),
         ];
         for (action, key) in expected {
             let hotkey = config.binding(action).expect("action must be bound");
@@ -1345,13 +1357,12 @@ mod tests {
             );
         }
 
-        // Nothing else ships bound: the vertical halves, center and corners
-        // are catalogue-only.
+        // Nothing else ships bound: the vertical halves and center are
+        // catalogue-only, and the corners are composed from the arrows.
         for action in [
             WindowAction::TopHalf,
             WindowAction::BottomHalf,
             WindowAction::Center,
-            WindowAction::CenterHalf,
             WindowAction::CenterHalfBack,
             WindowAction::TopLeft,
             WindowAction::TopRight,
@@ -1380,6 +1391,7 @@ mod tests {
             (WindowAction::RightHalf, KeyCode::Right),
             (WindowAction::Maximize, KeyCode::Up),
             (WindowAction::Restore, KeyCode::Down),
+            (WindowAction::CenterHalf, KeyCode::Enter),
         ];
         for (action, key) in expected {
             let hotkey = config.binding(action).expect("action must be bound");

@@ -14,7 +14,6 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
-use tile_core::WindowAction;
 use tile_platform::{PermissionStatus, PlatformError};
 
 use crate::logging;
@@ -78,7 +77,7 @@ fn notice_for(origin: ActionOrigin, result: &Result<ActionOutcome, PlatformError
 pub fn run_action_preemptible<R: Runtime>(
     app: &AppHandle<R>,
     request: ActionRequest,
-    next: &mut dyn FnMut() -> Option<WindowAction>,
+    next: &mut dyn FnMut() -> Option<ActionRequest>,
 ) {
     let state = app.state::<Arc<AppState>>();
     let action = request.action;
@@ -203,6 +202,7 @@ fn permission_message(err: &PlatformError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tile_core::WindowAction;
 
     fn denied() -> PlatformError {
         PlatformError::PermissionDenied("denied".into())

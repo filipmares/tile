@@ -28,7 +28,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use tile_core::{ActionRequest, Hotkey, KeyCode, Modifiers, WindowAction};
+use tile_core::{ActionRequest, CornerComposer, Hotkey, KeyCode, Modifiers, WindowAction};
 
 use windows::core::{w, HRESULT, PCWSTR};
 use windows::Win32::Foundation::{
@@ -134,7 +134,31 @@ struct HookDispatch {
 
 thread_local! {
     static HOOK_DISPATCH: RefCell<Option<HookDispatch>> = const { RefCell::new(None) };
+    static COMPOSER: RefCell<CornerComposer> = RefCell::new(CornerComposer::new());
     static DISPLAY_STATE: Cell<Option<u32>> = const { Cell::new(None) };
+}
+
+/// Counts modifier key releases seen by the hook. Two presses with the same
+/// count were made in one hold of the modifiers, which is what corner
+/// composition keys on.
+static MODIFIER_RELEASES: AtomicU64 = AtomicU64::new(0);
+
+/// The request a press of `hotkey` sends, composing a corner when it follows
+/// a side arrow in the same hold. Runs on the owner thread and never blocks:
+/// if the composer is busy the press is sent as it is.
+fn compose_request(hotkey: Option<Hotkey>, action: WindowAction) -> ActionRequest {
+    let Some(hotkey) = hotkey else {
+        return action.into();
+    };
+    let hold = MODIFIER_RELEASES.load(Ordering::Relaxed);
+    COMPOSER
+        .try_with(|composer| {
+            composer
+                .try_borrow_mut()
+                .map(|mut composer| composer.press(hotkey, action, hold))
+                .unwrap_or_else(|_| action.into())
+        })
+        .unwrap_or_else(|_| action.into())
 }
 
 static SWALLOWED_KEYS: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
@@ -1841,7 +1865,10 @@ impl OwnerState {
             binding.binding.hotkey,
             binding.binding.action
         );
-        let _ = self.events.send(binding.binding.action.into());
+        let _ = self.events.send(compose_request(
+            Some(binding.binding.hotkey),
+            binding.binding.action,
+        ));
     }
 
     fn log_apply_report(report: &HotkeyApplyReport) {
@@ -2144,7 +2171,9 @@ fn handle_hook_key(message: u32, kb: &KBDLLHOOKSTRUCT) -> bool {
                     ..
                 } = verdict
                 {
-                    let _ = state.sender.send(action.into());
+                    let hotkey = vk_to_keycode(vk, extended)
+                        .map(|key| Hotkey::new(current_modifiers(), key));
+                    let _ = state.sender.send(compose_request(hotkey, action));
                 }
                 verdict
             })
@@ -2162,6 +2191,9 @@ fn handle_hook_key(message: u32, kb: &KBDLLHOOKSTRUCT) -> bool {
             }
         }
     } else if message == WM_KEYUP || message == WM_SYSKEYUP {
+        if is_modifier_vk(vk) {
+            MODIFIER_RELEASES.fetch_add(1, Ordering::Relaxed);
+        }
         key_up_verdict(vk, extended, &tracker)
     } else {
         false

@@ -386,7 +386,7 @@ impl AppState {
     pub fn perform_action_preemptible(
         &self,
         request: impl Into<ActionRequest>,
-        next: &mut dyn FnMut() -> Option<WindowAction>,
+        next: &mut dyn FnMut() -> Option<ActionRequest>,
         observe: &mut dyn FnMut(ActionReport),
     ) -> tile_platform::Result<ActionOutcome> {
         let request = request.into();
@@ -878,27 +878,14 @@ fn screen_index(screens: &[Screen], frame: Rect) -> Option<usize> {
 
 pub use tile_core::ActionRequest;
 
-fn plan(
-    engine: &Engine,
-    action: WindowAction,
-    exact: bool,
-    window: &WindowSnapshot,
-    screens: &[Screen],
-) -> Plan {
-    if exact {
-        engine.plan_exact(action, window, screens)
-    } else {
-        engine.plan(action, window, screens)
-    }
-}
-
 fn apply_once(
     backend: &dyn WindowBackend,
     engine: &mut Engine,
     request: impl Into<ActionRequest>,
     observe: &mut dyn FnMut(ActionReport),
 ) -> tile_platform::Result<ActionOutcome> {
-    let ActionRequest { action, exact } = request.into();
+    let request = request.into();
+    let action = request.action;
     let Some(window) = backend.focused_window()? else {
         log::debug!("ignoring {action}: no movable focused window");
         observe(ActionReport {
@@ -910,10 +897,10 @@ fn apply_once(
     };
     let screens = backend.screens()?;
 
-    match plan(engine, action, exact, &window, &screens) {
+    match engine.plan_request(request, &window, &screens) {
         Plan::Move { id, target } => {
             let actual = backend.set_window_frame(id, target)?;
-            engine.commit(action, &window, actual);
+            engine.commit_request(request, &window, actual);
             log::debug!("performed {action} on window {id}");
             observe(ActionReport {
                 action,
@@ -940,6 +927,8 @@ struct Flight {
     /// The action that put it in motion, held so it can still be committed if
     /// something supersedes it.
     action: WindowAction,
+    /// Whether [`Flight::action`] is a corner composed from a side placement.
+    composed: bool,
     /// Where the window was when this action was planned. This is the "before"
     /// frame Restore will return to.
     window: WindowSnapshot,
@@ -969,7 +958,7 @@ impl Flight {
     fn begin(
         backend: &dyn WindowBackend,
         id: WindowId,
-        action: WindowAction,
+        request: ActionRequest,
         window: WindowSnapshot,
         target: Rect,
         params: AnimationParams,
@@ -991,7 +980,8 @@ impl Flight {
 
         Ok(Self {
             id,
-            action,
+            action: request.action,
+            composed: request.composed,
             animator: Animator::new(start, target, params),
             window,
             session,
@@ -1011,7 +1001,7 @@ impl Flight {
         if self.committed {
             return;
         }
-        engine.commit(self.action, &self.window, self.animator.target());
+        engine.commit_request(self.request(), &self.window, self.animator.target());
         self.committed = true;
     }
 
@@ -1035,7 +1025,15 @@ impl Flight {
         } else {
             self.window.clone()
         };
-        engine.commit(self.action, &window, actual);
+        engine.commit_request(self.request(), &window, actual);
+    }
+
+    fn request(&self) -> ActionRequest {
+        ActionRequest {
+            action: self.action,
+            exact: false,
+            composed: self.composed,
+        }
     }
 }
 
@@ -1051,7 +1049,7 @@ fn animated_pipeline(
     request: impl Into<ActionRequest>,
     params: AnimationParams,
     pacer: &mut dyn Pacer,
-    next: &mut dyn FnMut() -> Option<WindowAction>,
+    next: &mut dyn FnMut() -> Option<ActionRequest>,
     observe: &mut dyn FnMut(ActionReport),
 ) -> tile_platform::Result<ActionOutcome> {
     let mut flight: Option<Flight> = None;
@@ -1101,18 +1099,18 @@ fn run_animated_pipeline(
     request: ActionRequest,
     params: AnimationParams,
     pacer: &mut dyn Pacer,
-    next: &mut dyn FnMut() -> Option<WindowAction>,
+    next: &mut dyn FnMut() -> Option<ActionRequest>,
     observe: &mut dyn FnMut(ActionReport),
     flight: &mut Option<Flight>,
     outcome: &mut ActionOutcome,
 ) -> tile_platform::Result<()> {
     // Only the first action can be exact. Anything that preempts it mid-flight
     // came from a hotkey, so it keeps the ordinary repeat-to-cycle behaviour.
-    let mut exact = request.exact;
-    let mut pending = Some(request.action);
+    let mut pending = Some(request);
 
     loop {
-        if let Some(action) = pending.take() {
+        if let Some(request) = pending.take() {
+            let action = request.action;
             // Read everything fallible *before* touching the engine. Committing
             // first and then failing on one of these would leave history and
             // the cycle claiming the old target was applied while the window is
@@ -1164,13 +1162,7 @@ fn run_animated_pipeline(
                 }
             }
 
-            match plan(
-                engine,
-                action,
-                std::mem::take(&mut exact),
-                &window,
-                &screens,
-            ) {
+            match engine.plan_request(request, &window, &screens) {
                 Plan::Move { id, target } => {
                     *outcome = ActionOutcome::Moved;
                     // An action aimed at a *different* window must not leave
@@ -1193,12 +1185,13 @@ fn run_animated_pipeline(
                             // to the new one.
                             in_flight.animator.retarget(target);
                             in_flight.action = action;
+                            in_flight.composed = request.composed;
                             in_flight.window = window;
                             in_flight.committed = false;
                         }
                         None => {
                             *flight =
-                                Some(Flight::begin(backend, id, action, window, target, params)?);
+                                Some(Flight::begin(backend, id, request, window, target, params)?);
                         }
                     }
 
@@ -1257,9 +1250,9 @@ fn run_animated_pipeline(
                 }
                 break;
             }
-            Interruption::Preempted(action) => {
-                log::debug!("{action} arrived mid-flight; retargeting");
-                pending = Some(action);
+            Interruption::Preempted(request) => {
+                log::debug!("{} arrived mid-flight; retargeting", request.action);
+                pending = Some(request);
             }
         }
     }
@@ -1573,8 +1566,8 @@ mod tests {
     fn after_frames(
         delay: usize,
         actions: Vec<WindowAction>,
-    ) -> impl FnMut() -> Option<WindowAction> {
-        let mut queued: VecDeque<WindowAction> = actions.into();
+    ) -> impl FnMut() -> Option<ActionRequest> {
+        let mut queued: VecDeque<ActionRequest> = actions.into_iter().map(Into::into).collect();
         let mut frame = 0usize;
         move || {
             frame += 1;
@@ -1643,6 +1636,44 @@ mod tests {
     }
 
     #[test]
+    fn a_composed_corner_mid_flight_keeps_the_side_width_and_its_composition() {
+        // Side then Up in one hold arrives while the side is still animating.
+        // The preempting request must stay composed, so it lands on a corner
+        // at the side's width, and the side pressed next continues its cycle.
+        let backend = FakeBackend::new();
+        let mut engine = engine_with_animation();
+
+        let mut queued = vec![ActionRequest::composed(WindowAction::TopLeft)];
+        let mut frame = 0usize;
+        animated_pipeline(
+            &backend,
+            &mut engine,
+            WindowAction::LeftHalf,
+            params(),
+            &mut FixedPacer,
+            &mut || {
+                frame += 1;
+                (frame == 2).then(|| queued.pop()).flatten()
+            },
+            &mut |_| {},
+        )
+        .unwrap();
+        assert_eq!(backend.last_frame(), Rect::new(0.0, 0.0, 960.0, 540.0));
+
+        animated_pipeline(
+            &backend,
+            &mut engine,
+            WindowAction::LeftHalf,
+            params(),
+            &mut FixedPacer,
+            &mut || None,
+            &mut |_| {},
+        )
+        .unwrap();
+        assert_eq!(backend.last_frame(), Rect::new(0.0, 0.0, 1280.0, 1080.0));
+    }
+
+    #[test]
     fn losing_focus_mid_flight_still_lands_the_window() {
         // A preempting action arrives, but by the time it is planned there is
         // no movable focused window. The flight must not simply be dropped:
@@ -1663,7 +1694,7 @@ mod tests {
                 if frame == 2 {
                     // Focus disappears at the same moment as the next press.
                     *backend.focus_lost.borrow_mut() = true;
-                    Some(WindowAction::TopHalf)
+                    Some(WindowAction::TopHalf.into())
                 } else {
                     None
                 }
@@ -1800,7 +1831,7 @@ mod tests {
                 // action arrives.
                 if *backend.focused_id.borrow() == 1 && !backend.frames.borrow().is_empty() {
                     *backend.focused_id.borrow_mut() = 2;
-                    Some(WindowAction::RightHalf)
+                    Some(WindowAction::RightHalf.into())
                 } else {
                     None
                 }

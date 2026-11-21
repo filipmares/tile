@@ -356,16 +356,12 @@ fn setup_app<R: Runtime>(app: &AppHandle<R>) -> Result<(), Box<dyn std::error::E
                     if deferred.is_some() {
                         return None;
                     }
-                    match rx.try_recv().ok()? {
-                        ActionRequest {
-                            action,
-                            exact: false,
-                        } => Some(action),
-                        exact => {
-                            deferred = Some(exact);
-                            None
-                        }
+                    let request = rx.try_recv().ok()?;
+                    if request.exact {
+                        deferred = Some(request);
+                        return None;
                     }
+                    Some(request)
                 });
             }
             log::debug!("action worker thread exiting");
