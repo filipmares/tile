@@ -62,7 +62,9 @@ use objc2::runtime::AnyObject;
 use objc2::{class, msg_send, sel};
 use objc2_foundation::NSRect;
 
-use tile_core::{ActionRequest, Rect, Screen, WindowAction, WindowId, WindowSnapshot};
+use tile_core::{
+    ActionRequest, CornerComposer, Hotkey, Rect, Screen, WindowAction, WindowId, WindowSnapshot,
+};
 
 use crate::{
     AnimationSession, HotkeyApplyReport, HotkeyBackend, HotkeyBinding, HotkeyBindingStatus,
@@ -234,7 +236,16 @@ mod ffi {
         pub static kCGWindowNumber: CFStringRef;
         pub static kCGWindowOwnerPID: CFStringRef;
         pub static kCGWindowLayer: CFStringRef;
+        /// Seconds since the last event of `event_type` from `state_id`. Used
+        /// with `kCGEventFlagsChanged` to tell whether a modifier changed
+        /// between two hotkey presses; it needs no Input Monitoring access.
+        pub fn CGEventSourceSecondsSinceLastEventType(state_id: i32, event_type: u32) -> f64;
     }
+
+    /// `kCGEventSourceStateCombinedSessionState`.
+    pub const kCGEventSourceStateCombinedSessionState: i32 = 0;
+    /// `kCGEventFlagsChanged`.
+    pub const kCGEventFlagsChanged: u32 = 12;
 
     #[link(name = "AppKit", kind = "framework")]
     extern "C" {
@@ -1788,7 +1799,45 @@ unsafe fn display_number(screen: *mut AnyObject, key: &CFString) -> Option<u32> 
 /// runs on the main thread and `apply` only briefly touches the map.
 struct HotkeyState {
     sender: Mutex<Sender<ActionRequest>>,
-    actions: Mutex<HashMap<u32, WindowAction>>,
+    actions: Mutex<HashMap<u32, (Hotkey, WindowAction)>>,
+    compose: Mutex<Composition>,
+}
+
+/// Corner composition across Carbon hotkey presses.
+///
+/// Carbon reports presses only — no key-ups and no modifier changes — so a
+/// new hold is detected by asking CoreGraphics whether any modifier changed
+/// since the previous press.
+#[derive(Default)]
+struct Composition {
+    composer: CornerComposer,
+    last_press: Option<Instant>,
+    hold: u64,
+}
+
+impl Composition {
+    fn press(&mut self, hotkey: Hotkey, action: WindowAction) -> ActionRequest {
+        let now = Instant::now();
+        // SAFETY: plain scalar query with no preconditions.
+        let since_flags = unsafe {
+            ffi::CGEventSourceSecondsSinceLastEventType(
+                ffi::kCGEventSourceStateCombinedSessionState,
+                ffi::kCGEventFlagsChanged,
+            )
+        };
+        let flags_changed = Duration::try_from_secs_f64(since_flags)
+            .ok()
+            .and_then(|ago| now.checked_sub(ago));
+        let new_hold = match (self.last_press, flags_changed) {
+            (Some(last), Some(changed)) => changed > last,
+            _ => true,
+        };
+        if new_hold {
+            self.hold = self.hold.wrapping_add(1);
+        }
+        self.last_press = Some(now);
+        self.composer.press(hotkey, action, self.hold)
+    }
 }
 
 /// Carbon registrations plus the bindings they serve.
@@ -1870,7 +1919,7 @@ impl Registrar {
             if status == ffi::noErr && !hotkey_ref.is_null() {
                 self.registered.push(hotkey_ref as usize);
                 if let Ok(mut map) = self.state.actions.lock() {
-                    map.insert(id, action);
+                    map.insert(id, (hotkey, action));
                 }
                 statuses.push(HotkeyBindingStatus {
                     binding: *binding,
@@ -2076,6 +2125,7 @@ impl MacHotkeyBackend {
         let state = Arc::new(HotkeyState {
             sender: Mutex::new(events),
             actions: Mutex::new(HashMap::new()),
+            compose: Mutex::new(Composition::default()),
         });
         Ok(Self {
             registrar: Arc::new(Mutex::new(Registrar {
@@ -2224,14 +2274,18 @@ extern "C" fn hotkey_handler(
         return ffi::noErr;
     }
 
-    let action = state
+    let bound = state
         .actions
         .lock()
         .ok()
         .and_then(|map| map.get(&hotkey_id.id).copied());
-    if let Some(action) = action {
+    if let Some((hotkey, action)) = bound {
+        let request = match state.compose.lock() {
+            Ok(mut compose) => compose.press(hotkey, action),
+            Err(_) => action.into(),
+        };
         if let Ok(sender) = state.sender.lock() {
-            let _ = sender.send(action.into());
+            let _ = sender.send(request);
         }
     }
     ffi::noErr

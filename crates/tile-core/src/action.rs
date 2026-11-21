@@ -697,6 +697,16 @@ impl WindowAction {
         }
     }
 
+    /// The full-height side a corner sits on: `LeftHalf` for the left
+    /// corners, `RightHalf` for the right ones.
+    pub const fn corner_side(self) -> Option<WindowAction> {
+        match self {
+            WindowAction::TopLeft | WindowAction::BottomLeft => Some(WindowAction::LeftHalf),
+            WindowAction::TopRight | WindowAction::BottomRight => Some(WindowAction::RightHalf),
+            _ => None,
+        }
+    }
+
     /// Whether this action walks its cycle towards the *previous* size rather
     /// than the next one.
     pub const fn cycles_backwards(self) -> bool {
@@ -1172,6 +1182,10 @@ impl fmt::Display for WindowAction {
 pub struct ActionRequest {
     pub action: WindowAction,
     pub exact: bool,
+    /// A corner composed from a side placement — see [`crate::CornerComposer`].
+    /// The corner keeps the width the window already has on that side
+    /// instead of starting at a half.
+    pub composed: bool,
 }
 
 impl ActionRequest {
@@ -1179,6 +1193,15 @@ impl ActionRequest {
         Self {
             action,
             exact: true,
+            composed: false,
+        }
+    }
+
+    pub const fn composed(action: WindowAction) -> Self {
+        Self {
+            action,
+            exact: false,
+            composed: true,
         }
     }
 }
@@ -1188,6 +1211,7 @@ impl From<WindowAction> for ActionRequest {
         Self {
             action,
             exact: false,
+            composed: false,
         }
     }
 }

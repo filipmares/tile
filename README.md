@@ -21,7 +21,7 @@ Settings and is restored to on by **Restore defaults**.
 
 ## Default keyboard shortcuts
 
-The four tiling shortcuts are the same on both platforms — only the modifier you
+The tiling shortcuts are the same on both platforms — only the modifier you
 hold differs:
 
 - **macOS** — `Control` + `Option`
@@ -32,8 +32,10 @@ Hold that, then press:
 | Key             | Action                                                             |
 | --------------- | ------------------------------------------------------------------ |
 | `←` `→`         | **Left / right** — half, then two thirds, then a third (see below) |
-| `↑`             | Maximize                                                          |
+| `↑`             | Maximize                                                           |
 | `↓`             | Restore to the window's previous position                          |
+| `←` / `→` then `↑` / `↓` | **Corner** — top or bottom of that side, keeping its width |
+| `Enter`         | **Center column** — full height, centred; repeat to cycle its width |
 
 Moving a window to the adjacent display keeps its slot. This is the one place
 the two platforms differ by more than the base modifier, because each follows
@@ -44,7 +46,7 @@ its own move-window-to-display convention:
 | **macOS** `Control`+`Command`+`Option`+`←` `→` `↑` `↓` | **Display left / right / above / below** — same slot |
 | **Windows** `Win`+`Alt`+`←` `→` `↑` `↓` | **Display left / right / above / below** — same slot |
 
-That is the whole default set — **the arrows and the display
+That is the whole default set — **the arrows, `Enter` and the display
 throws.** Both platforms keep the same shape, with the modifier held in the
 left hand and the arrows in the right.
 
@@ -57,10 +59,23 @@ an arrow cycles its width:
 ```
 
 The vertical pair is the bigger/undo axis: `↑` maximizes and
-`↓` restores the window. Enter (Return) is unbound by default.
+`↓` restores the window.
+
+Corners are composed rather than bound. Keep the modifier held, press `←` or `→`
+(as often as you like, to pick a width), then `↑` or `↓`: the window moves to
+that side's top or bottom corner at the width it had. While the modifier is
+still held, `↑` and `↓` switch between the two corners, and pressing the side
+arrow again returns to full height at the next width in the cycle. Let go of
+the modifier and `↑`/`↓` are maximize and restore again. Composition only
+applies to the arrows on the base modifier; rebound shortcuts keep their plain
+meaning.
+
+`Enter` (Return) centres a full-height column and cycles its width the same
+way the side arrows do. It is a default for new installs; existing settings
+keep their bindings, so bind **Center Half** to `Enter` yourself in Settings to get it.
 
 Everything is rebindable, and the rest of the catalogue — the explicitly-sized
-thirds and two-thirds, the corners, center, the centred-column cycle, maximize-height, almost-maximize,
+thirds and two-thirds, direct corner bindings, center, the backwards centred-column step, maximize-height, almost-maximize,
 plus fourths, sixths, ninths, corner thirds, the top/bottom halves, the
 incremental move/resize/halve-double families and the named-display moves —
 ships unbound, reachable through a binding of your own.

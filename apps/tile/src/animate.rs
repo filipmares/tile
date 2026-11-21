@@ -8,7 +8,7 @@
 
 use std::time::{Duration, Instant};
 
-use tile_core::{AnimationParams, Animator, Rect, WindowAction, WindowId};
+use tile_core::{ActionRequest, AnimationParams, Animator, Rect, WindowId};
 use tile_platform::{AnimationSession, WindowBackend};
 
 /// Ceiling on the animation frame rate imposed by a platform, if any.
@@ -61,7 +61,7 @@ pub enum Interruption {
     /// A new action arrived while the window was still in flight. The animator
     /// is left untouched, so the caller can retarget it and keep the momentum
     /// the window already has.
-    Preempted(WindowAction),
+    Preempted(ActionRequest),
 }
 
 /// Paces the animation, one call per emitted frame.
@@ -220,7 +220,7 @@ pub fn pump(
     animator: &mut Animator,
     params: AnimationParams,
     pacer: &mut dyn Pacer,
-    next: &mut dyn FnMut() -> Option<WindowAction>,
+    next: &mut dyn FnMut() -> Option<ActionRequest>,
 ) -> tile_platform::Result<Interruption> {
     let interval = effective_interval(params);
 
