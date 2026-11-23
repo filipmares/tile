@@ -64,11 +64,14 @@ The vertical pair is the bigger/undo axis: `↑` maximizes and
 Corners are composed rather than bound. Keep the modifier held, press `←` or `→`
 (as often as you like, to pick a width), then `↑` or `↓`: the window moves to
 that side's top or bottom corner at the width it had. While the modifier is
-still held, `↑` and `↓` switch between the two corners, and pressing the side
-arrow again returns to full height at the next width in the cycle. Let go of
-the modifier and `↑`/`↓` are maximize and restore again. Composition only
-applies to the arrows on the base modifier; rebound shortcuts keep their plain
-meaning.
+still held, pressing that side's arrow (`←` in a left corner, `→` in a right
+corner) cycles the corner's width, and the opposite side arrow resets to a
+full-height half on the other side. Vertically, `↑` and `↓` step along
+`Top ↔ Full ↔ Bottom` keeping the current width, while pushing past the ends —
+`↑` from a top corner or `↓` from a bottom corner — maximizes or restores and
+ends composition. Let go of the modifier and `↑`/`↓` are maximize and restore
+again, and `←`/`→` start a fresh full-height half. Composition only applies to
+the arrows on the base modifier; rebound shortcuts keep their plain meaning.
 
 `Enter` (Return) centres a full-height column and cycles its width the same
 way the side arrows do. It is a default for new installs; existing settings

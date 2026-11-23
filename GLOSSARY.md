@@ -10,10 +10,14 @@ _Avoid_: Super combo (which can be confused with the Super/Windows key)
 
 **Side placement**:
 A full-height window placement anchored to the left or right edge of the available screen area.
+_Avoid_: Side snap
 
 **Corner placement**:
 A half-height window placement anchored to a top or bottom corner of the available screen area. Its width can vary; a corner placement is not necessarily a quarter of the screen.
 _Avoid_: Quarter (when referring to corners of varying widths)
+
+**Corner composition**:
+A single-hold gesture with the base modifier where a side placement followed by an up or down arrow turns the window into a corner placement on that side.
 
 **Center column**:
 A full-height window placement centered horizontally in the available screen area, with a variable width.
