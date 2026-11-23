@@ -1182,9 +1182,9 @@ impl fmt::Display for WindowAction {
 pub struct ActionRequest {
     pub action: WindowAction,
     pub exact: bool,
-    /// A corner composed from a side placement — see [`crate::CornerComposer`].
-    /// The corner keeps the width the window already has on that side
-    /// instead of starting at a half.
+    /// A vertical step composed on a side (`Top ↔ Full ↔ Bottom`) — see
+    /// [`crate::CornerComposer`]. The target keeps the width the window
+    /// already has on that side instead of starting at a half.
     pub composed: bool,
 }
 

@@ -900,7 +900,7 @@ fn apply_once(
     match engine.plan_request(request, &window, &screens) {
         Plan::Move { id, target } => {
             let actual = backend.set_window_frame(id, target)?;
-            engine.commit_request(request, &window, actual);
+            engine.commit(action, &window, actual);
             log::debug!("performed {action} on window {id}");
             observe(ActionReport {
                 action,
@@ -927,8 +927,6 @@ struct Flight {
     /// The action that put it in motion, held so it can still be committed if
     /// something supersedes it.
     action: WindowAction,
-    /// Whether [`Flight::action`] is a corner composed from a side placement.
-    composed: bool,
     /// Where the window was when this action was planned. This is the "before"
     /// frame Restore will return to.
     window: WindowSnapshot,
@@ -958,7 +956,7 @@ impl Flight {
     fn begin(
         backend: &dyn WindowBackend,
         id: WindowId,
-        request: ActionRequest,
+        action: WindowAction,
         window: WindowSnapshot,
         target: Rect,
         params: AnimationParams,
@@ -980,8 +978,7 @@ impl Flight {
 
         Ok(Self {
             id,
-            action: request.action,
-            composed: request.composed,
+            action,
             animator: Animator::new(start, target, params),
             window,
             session,
@@ -1001,7 +998,7 @@ impl Flight {
         if self.committed {
             return;
         }
-        engine.commit_request(self.request(), &self.window, self.animator.target());
+        engine.commit(self.action, &self.window, self.animator.target());
         self.committed = true;
     }
 
@@ -1025,15 +1022,7 @@ impl Flight {
         } else {
             self.window.clone()
         };
-        engine.commit_request(self.request(), &window, actual);
-    }
-
-    fn request(&self) -> ActionRequest {
-        ActionRequest {
-            action: self.action,
-            exact: false,
-            composed: self.composed,
-        }
+        engine.commit(self.action, &window, actual);
     }
 }
 
@@ -1185,13 +1174,12 @@ fn run_animated_pipeline(
                             // to the new one.
                             in_flight.animator.retarget(target);
                             in_flight.action = action;
-                            in_flight.composed = request.composed;
                             in_flight.window = window;
                             in_flight.committed = false;
                         }
                         None => {
                             *flight =
-                                Some(Flight::begin(backend, id, request, window, target, params)?);
+                                Some(Flight::begin(backend, id, action, window, target, params)?);
                         }
                     }
 
@@ -1636,14 +1624,17 @@ mod tests {
     }
 
     #[test]
-    fn a_composed_corner_mid_flight_keeps_the_side_width_and_its_composition() {
-        // Side then Up in one hold arrives while the side is still animating.
-        // The preempting request must stay composed, so it lands on a corner
-        // at the side's width, and the side pressed next continues its cycle.
+    fn a_composed_corner_mid_flight_keeps_width_cycles_and_returns_to_full() {
+        // Side -> Up (TopLeft) -> Left (cycles TopLeft to ⅔) -> Down (returns
+        // to full Left keeping ⅔), all arriving while still animating.
         let backend = FakeBackend::new();
         let mut engine = engine_with_animation();
 
-        let mut queued = vec![ActionRequest::composed(WindowAction::TopLeft)];
+        let mut queued = vec![
+            ActionRequest::composed(WindowAction::LeftHalf),
+            ActionRequest::from(WindowAction::TopLeft),
+            ActionRequest::composed(WindowAction::TopLeft),
+        ];
         let mut frame = 0usize;
         animated_pipeline(
             &backend,
@@ -1653,13 +1644,14 @@ mod tests {
             &mut FixedPacer,
             &mut || {
                 frame += 1;
-                (frame == 2).then(|| queued.pop()).flatten()
+                matches!(frame, 2 | 4 | 6).then(|| queued.pop()).flatten()
             },
             &mut |_| {},
         )
         .unwrap();
-        assert_eq!(backend.last_frame(), Rect::new(0.0, 0.0, 960.0, 540.0));
+        assert_eq!(backend.last_frame(), Rect::new(0.0, 0.0, 1280.0, 1080.0));
 
+        // Pressing Left next continues the full-height cycle to ⅓.
         animated_pipeline(
             &backend,
             &mut engine,
@@ -1670,7 +1662,7 @@ mod tests {
             &mut |_| {},
         )
         .unwrap();
-        assert_eq!(backend.last_frame(), Rect::new(0.0, 0.0, 1280.0, 1080.0));
+        assert_eq!(backend.last_frame(), Rect::new(0.0, 0.0, 640.0, 1080.0));
     }
 
     #[test]

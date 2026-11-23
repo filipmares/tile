@@ -97,9 +97,6 @@ struct CycleState {
     window: WindowId,
     action: WindowAction,
     applied: Rect,
-    /// Whether this was a corner composed from a side placement, which a
-    /// following press of that side continues rather than restarts.
-    composed: bool,
 }
 
 /// How far a window may sit from a computed rectangle and still count as being
@@ -153,26 +150,30 @@ impl Engine {
         screens: &[Screen],
     ) -> Plan {
         if request.composed {
-            if let Some(plan) = self.plan_composed_corner(request.action, window, screens) {
+            if let Some(plan) = self.plan_composed(request.action, window, screens) {
                 return plan;
             }
         }
         self.plan_with(request.action, window, screens, !request.exact)
     }
 
-    /// A half-height corner keeping the width the window has on that side.
-    fn plan_composed_corner(
+    /// A vertical step composed on a side (`Top ↔ Full ↔ Bottom`), keeping the
+    /// width the window already has on that side.
+    fn plan_composed(
         &self,
-        corner: WindowAction,
+        action: WindowAction,
         window: &WindowSnapshot,
         screens: &[Screen],
     ) -> Option<Plan> {
-        corner.corner_side()?;
+        let side = match action {
+            WindowAction::LeftHalf | WindowAction::RightHalf => action,
+            other => other.corner_side()?,
+        };
         let Some(screen) = Screen::best_match(screens, &window.frame) else {
             return Some(Plan::NoOp(NoOpReason::NoScreen));
         };
-        let fraction = self.side_width(corner, window.frame, screen).unwrap_or(0.5);
-        let target = corner.cycle_rect(
+        let fraction = self.side_width(side, window.frame, screen).unwrap_or(0.5);
+        let target = action.cycle_rect(
             screen.work_area,
             &self.config.gaps,
             screen.is_primary,
@@ -188,14 +189,14 @@ impl Engine {
         })
     }
 
-    /// The width fraction `frame` occupies on `corner`'s side, recognised as
-    /// the full-height side or either of its corners at a half or any
-    /// configured cycle size.
-    fn side_width(&self, corner: WindowAction, frame: Rect, screen: &Screen) -> Option<f64> {
-        let side = corner.corner_side()?;
+    /// The width fraction `frame` occupies on `side`, recognised as the
+    /// full-height side or either of its corners at a half or any configured
+    /// cycle size.
+    fn side_width(&self, side: WindowAction, frame: Rect, screen: &Screen) -> Option<f64> {
         let (top, bottom) = match side {
             WindowAction::LeftHalf => (WindowAction::TopLeft, WindowAction::BottomLeft),
-            _ => (WindowAction::TopRight, WindowAction::BottomRight),
+            WindowAction::RightHalf => (WindowAction::TopRight, WindowAction::BottomRight),
+            _ => return None,
         };
         std::iter::once(0.5)
             .chain(self.config.cycle_sizes().iter().map(|size| size.fraction()))
@@ -211,36 +212,6 @@ impl Engine {
                         .is_some_and(|r| r.approx_eq(&frame, APPLIED_TOLERANCE))
                 })
             })
-    }
-
-    /// After a composed corner, pressing its side returns to the full-height
-    /// side at the next width in the cycle.
-    fn side_after_composed_corner(
-        &self,
-        side: WindowAction,
-        window: &WindowSnapshot,
-        screen: &Screen,
-    ) -> Option<Rect> {
-        let state = self.cycle.as_ref()?;
-        if !state.composed
-            || state.window != window.id
-            || state.action.corner_side() != Some(side)
-            || !state.applied.approx_eq(&window.frame, APPLIED_TOLERANCE)
-        {
-            return None;
-        }
-        let width = self.side_width(state.action, window.frame, screen)?;
-        let sizes = self.config.cycle_sizes();
-        let start = sizes
-            .iter()
-            .position(|size| (size.fraction() - width).abs() < f64::EPSILON)
-            .map_or(0, |i| (i + 1) % sizes.len());
-        side.cycle_rect(
-            screen.work_area,
-            &self.config.gaps,
-            screen.is_primary,
-            sizes.get(start)?.fraction(),
-        )
     }
 
     fn plan_with(
@@ -300,13 +271,6 @@ impl Engine {
         // to the target, or report that there is nothing to do.
         if !allow_cycle || !action.cycles() || !self.config.cycles_sizes() {
             return settled();
-        }
-
-        if let Some(next) = self.side_after_composed_corner(action, window, screen) {
-            return Plan::Move {
-                id: window.id,
-                target: next,
-            };
         }
 
         if !continues {
@@ -451,18 +415,6 @@ impl Engine {
     /// original when the window is *not* where Tile last left it, so an
     /// arbitrarily long cycle keeps the pre-Tile frame.
     pub fn commit(&mut self, action: WindowAction, window: &WindowSnapshot, target: Rect) {
-        self.commit_request(action.into(), window, target);
-    }
-
-    /// As [`Engine::commit`], remembering whether the move was a composed
-    /// corner.
-    pub fn commit_request(
-        &mut self,
-        request: ActionRequest,
-        window: &WindowSnapshot,
-        target: Rect,
-    ) {
-        let action = request.action;
         if action.uses_history() {
             self.history.forget(window.id);
             self.cycle = None;
@@ -476,7 +428,6 @@ impl Engine {
                     window: window.id,
                     action,
                     applied: target,
-                    composed: request.composed,
                 })
             } else {
                 None
@@ -986,7 +937,7 @@ mod tests {
     ) -> WindowSnapshot {
         match engine.plan_request(request, &win, &[screen()]) {
             Plan::Move { id, target } => {
-                engine.commit_request(request, &win, target);
+                engine.commit(request.action, &win, target);
                 WindowSnapshot { id, frame: target }
             }
             Plan::NoOp(reason) => panic!("expected a move for {request:?}, got {reason:?}"),
@@ -994,28 +945,243 @@ mod tests {
     }
 
     #[test]
-    fn a_composed_corner_keeps_the_side_width_and_the_side_continues_its_cycle() {
+    fn composed_corner_keeps_width_cycles_with_side_arrow_and_returns_to_full() {
         let mut engine = Engine::default();
-        let win = apply(&mut engine, WindowAction::LeftHalf, window());
-        let win = apply(&mut engine, WindowAction::LeftHalf, win);
+        let mut composer = CornerComposer::new();
+        let base = |key| Hotkey::new(crate::config::BASE_MODIFIERS, key);
+
+        let press = |engine: &mut Engine,
+                     composer: &mut CornerComposer,
+                     key,
+                     action,
+                     hold,
+                     win: WindowSnapshot| {
+            let req = composer.press(base(key), action, hold);
+            apply_request(engine, req, win)
+        };
+
+        // Hold 1: Left (½) -> Left (⅔) -> Up (TopLeft ⅔) -> Left (TopLeft ⅓).
+        let win = press(
+            &mut engine,
+            &mut composer,
+            KeyCode::Left,
+            WindowAction::LeftHalf,
+            1,
+            window(),
+        );
+        assert_eq!(win.frame, Rect::new(0.0, 0.0, 960.0, 1040.0));
+
+        let win = press(
+            &mut engine,
+            &mut composer,
+            KeyCode::Left,
+            WindowAction::LeftHalf,
+            1,
+            win,
+        );
         assert_eq!(win.frame, Rect::new(0.0, 0.0, 1280.0, 1040.0));
 
-        let win = apply_request(
+        let win = press(
             &mut engine,
-            ActionRequest::composed(WindowAction::TopLeft),
+            &mut composer,
+            KeyCode::Up,
+            WindowAction::Maximize,
+            1,
             win,
         );
         assert_eq!(win.frame, Rect::new(0.0, 0.0, 1280.0, 520.0));
-        let win = apply_request(
+
+        let win = press(
             &mut engine,
-            ActionRequest::composed(WindowAction::BottomLeft),
+            &mut composer,
+            KeyCode::Left,
+            WindowAction::LeftHalf,
+            1,
             win,
         );
-        assert_eq!(win.frame, Rect::new(0.0, 520.0, 1280.0, 520.0));
+        assert_eq!(win.frame, Rect::new(0.0, 0.0, 640.0, 520.0));
 
-        // Back on the side: full height at the width after two thirds.
-        let win = apply(&mut engine, WindowAction::LeftHalf, win);
+        // Down steps back to Full Left keeping ⅓, then Down moves to BottomLeft ⅓.
+        let win = press(
+            &mut engine,
+            &mut composer,
+            KeyCode::Down,
+            WindowAction::Restore,
+            1,
+            win,
+        );
         assert_eq!(win.frame, Rect::new(0.0, 0.0, 640.0, 1040.0));
+
+        let win = press(
+            &mut engine,
+            &mut composer,
+            KeyCode::Down,
+            WindowAction::Restore,
+            1,
+            win,
+        );
+        assert_eq!(win.frame, Rect::new(0.0, 520.0, 640.0, 520.0));
+
+        // Left cycles BottomLeft from ⅓ -> ½, then Up returns to Full Left ½,
+        // and Left continues cycling Full Left from ½ -> ⅔.
+        let win = press(
+            &mut engine,
+            &mut composer,
+            KeyCode::Left,
+            WindowAction::LeftHalf,
+            1,
+            win,
+        );
+        assert_eq!(win.frame, Rect::new(0.0, 520.0, 960.0, 520.0));
+
+        let win = press(
+            &mut engine,
+            &mut composer,
+            KeyCode::Up,
+            WindowAction::Maximize,
+            1,
+            win,
+        );
+        assert_eq!(win.frame, Rect::new(0.0, 0.0, 960.0, 1040.0));
+
+        let win = press(
+            &mut engine,
+            &mut composer,
+            KeyCode::Left,
+            WindowAction::LeftHalf,
+            1,
+            win,
+        );
+        assert_eq!(win.frame, Rect::new(0.0, 0.0, 1280.0, 1040.0));
+
+        // Up -> TopLeft ⅔, then Right resets to a fresh full-height RightHalf ½.
+        let win = press(
+            &mut engine,
+            &mut composer,
+            KeyCode::Up,
+            WindowAction::Maximize,
+            1,
+            win,
+        );
+        assert_eq!(win.frame, Rect::new(0.0, 0.0, 1280.0, 520.0));
+
+        let win = press(
+            &mut engine,
+            &mut composer,
+            KeyCode::Right,
+            WindowAction::RightHalf,
+            1,
+            win,
+        );
+        assert_eq!(win.frame, Rect::new(960.0, 0.0, 960.0, 1040.0));
+    }
+
+    #[test]
+    fn releasing_the_modifier_starts_a_fresh_full_side_on_next_press() {
+        let mut engine = Engine::default();
+        let mut composer = CornerComposer::new();
+        let base = |key| Hotkey::new(crate::config::BASE_MODIFIERS, key);
+
+        let win = apply_request(
+            &mut engine,
+            composer.press(base(KeyCode::Left), WindowAction::LeftHalf, 1),
+            window(),
+        );
+        let win = apply_request(
+            &mut engine,
+            composer.press(base(KeyCode::Up), WindowAction::Maximize, 1),
+            win,
+        );
+        let win = apply_request(
+            &mut engine,
+            composer.press(base(KeyCode::Left), WindowAction::LeftHalf, 1),
+            win,
+        );
+        assert_eq!(win.frame, Rect::new(0.0, 0.0, 1280.0, 520.0));
+
+        // New hold: Left starts fresh at full-height LeftHalf ½.
+        let win = apply_request(
+            &mut engine,
+            composer.press(base(KeyCode::Left), WindowAction::LeftHalf, 2),
+            win,
+        );
+        assert_eq!(win.frame, Rect::new(0.0, 0.0, 960.0, 1040.0));
+    }
+
+    #[test]
+    fn pushing_past_corner_ends_maximizes_or_restores_to_original() {
+        let mut engine = Engine::default();
+        let mut composer = CornerComposer::new();
+        let base = |key| Hotkey::new(crate::config::BASE_MODIFIERS, key);
+        let original = window();
+
+        // Left -> Up (TopLeft) -> Up (Maximize) -> Down (Restore original).
+        let win = apply_request(
+            &mut engine,
+            composer.press(base(KeyCode::Left), WindowAction::LeftHalf, 1),
+            original.clone(),
+        );
+        let win = apply_request(
+            &mut engine,
+            composer.press(base(KeyCode::Up), WindowAction::Maximize, 1),
+            win,
+        );
+        let win = apply_request(
+            &mut engine,
+            composer.press(base(KeyCode::Up), WindowAction::Maximize, 1),
+            win,
+        );
+        assert_eq!(win.frame, screen().work_area);
+        let win = apply_request(
+            &mut engine,
+            composer.press(base(KeyCode::Down), WindowAction::Restore, 1),
+            win,
+        );
+        assert_eq!(win.frame, original.frame);
+
+        // Right -> Down (BottomRight) -> Down (Restore original).
+        let win = apply_request(
+            &mut engine,
+            composer.press(base(KeyCode::Right), WindowAction::RightHalf, 2),
+            original.clone(),
+        );
+        let win = apply_request(
+            &mut engine,
+            composer.press(base(KeyCode::Down), WindowAction::Restore, 2),
+            win,
+        );
+        let win = apply_request(
+            &mut engine,
+            composer.press(base(KeyCode::Down), WindowAction::Restore, 2),
+            win,
+        );
+        assert_eq!(win.frame, original.frame);
+    }
+
+    #[test]
+    fn corner_width_cycling_honours_disabled_cycling_setting() {
+        let mut engine = Engine::default();
+        engine.config.subsequent_execution_mode = SubsequentExecutionMode::DoNothing;
+        let mut composer = CornerComposer::new();
+        let base = |key| Hotkey::new(crate::config::BASE_MODIFIERS, key);
+
+        let win = apply_request(
+            &mut engine,
+            composer.press(base(KeyCode::Left), WindowAction::LeftHalf, 1),
+            window(),
+        );
+        let win = apply_request(
+            &mut engine,
+            composer.press(base(KeyCode::Up), WindowAction::Maximize, 1),
+            win,
+        );
+        assert_eq!(win.frame, Rect::new(0.0, 0.0, 960.0, 520.0));
+
+        let req = composer.press(base(KeyCode::Left), WindowAction::LeftHalf, 1);
+        assert_eq!(
+            engine.plan_request(req, &win, &[screen()]),
+            Plan::NoOp(NoOpReason::AlreadyInPosition)
+        );
     }
 
     #[test]
@@ -1027,7 +1193,7 @@ mod tests {
             window(),
         );
         assert_eq!(win.frame, Rect::new(960.0, 0.0, 960.0, 520.0));
-        // A corner repeated in place is already there rather than cycling.
+        // A composed corner repeated in place is already there rather than cycling.
         assert_eq!(
             engine.plan_request(
                 ActionRequest::composed(WindowAction::TopRight),
