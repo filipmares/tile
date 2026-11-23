@@ -6,6 +6,12 @@ Tile is a cross-platform window management app built from scratch in Rust. Snap
 the focused window to halves and thirds of the screen, maximize it, or undo the
 last move — all from the arrow keys.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hero-dark.webp">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/hero-light.webp">
+  <img alt="Animated demo of Tile's default keyboard loop: hold the base modifier (Control+Option on macOS, Win on Windows) and press Left three times to cycle half, two thirds, and third, press Up while still holding to compose a top-left third corner, press Up again to push past into Maximize, then press Down to restore the floating window." src="docs/assets/hero-light.webp" width="840">
+</picture>
+
 The first-run guide offers **Launch Tile when I log in**, enabled by default so
 the shortcuts are ready after a restart. The same setting remains available in
 Settings and is restored to on by **Restore defaults**.
@@ -31,7 +37,7 @@ Hold that, then press:
 
 | Key             | Action                                                             |
 | --------------- | ------------------------------------------------------------------ |
-| `←` `→`         | **Left / right** — half, then two thirds, then a third (see below) |
+| `←` `→`         | **Left / right** — half, then two thirds, then a third ([see below](#press-it-again-to-change-the-size)) |
 | `↑`             | Maximize                                                           |
 | `↓`             | Restore to the window's previous position                          |
 | `←` / `→` then `↑` / `↓` | **Corner** — top or bottom of that side, keeping its width |
@@ -51,15 +57,9 @@ throws.** Both platforms keep the same shape, with the modifier held in the
 left hand and the arrows in the right.
 
 The horizontal pair places the window and carries every size, because repeating
-an arrow cycles its width:
-
-```text
-  ←   ½ → ⅔ → ⅓ → …   anchored left
-  →   ½ → ⅔ → ⅓ → …   anchored right
-```
-
-The vertical pair is the bigger/undo axis: `↑` maximizes and
-`↓` restores the window.
+an arrow cycles its width (`½ → ⅔ → ⅓`, [see below](#press-it-again-to-change-the-size)).
+The vertical pair is the bigger/undo axis: `↑` maximizes and `↓` restores the
+window.
 
 Corners are composed rather than bound. Keep the modifier held, press `←` or `→`
 (as often as you like, to pick a width), then `↑` or `↓`: the window moves to
@@ -72,6 +72,12 @@ full-height half on the other side. Vertically, `↑` and `↓` step along
 ends composition. Let go of the modifier and `↑`/`↓` are maximize and restore
 again, and `←`/`→` start a fresh full-height half. Composition only applies to
 the arrows on the base modifier; rebound shortcuts keep their plain meaning.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/corner-composition-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/corner-composition-light.svg">
+  <img alt="Corner composition state diagram: keep the base modifier (Control+Option on macOS, Win on Windows) held after pressing Left or Right arrow; Up and Down step vertically along Top corner, Full height, and Bottom corner while preserving width; same-side arrow cycles corner width, opposite-side arrow resets to the opposite full half, and pushing past top maximizes or past bottom restores and ends composition." src="docs/assets/corner-composition-light.svg" width="840">
+</picture>
 
 `Enter` (Return) centres a full-height column and cycles its width the same
 way the side arrows do. It is a default for new installs; existing settings
@@ -110,6 +116,12 @@ Pressing the same shortcut again changes the size. The horizontal arrows and
 four corners **cycle through sizes**: half, two thirds, third, then back to
 half. Corners cycle their width while keeping their half height.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/size-cycle-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/size-cycle-light.svg">
+  <img alt="Size cycling diagram: repeating Left or Right arrow cycles a side pane through half, two thirds, and third before repeating; repeating Enter cycles a full-height centered column through the same widths, with dashed outlines showing the next step." src="docs/assets/size-cycle-light.svg" width="840">
+</picture>
+
 The sizes are configurable in Settings ▸ Behaviour — ½, ⅔, ¾, ¼ and ⅓. A half,
 two thirds and a third are enabled by default; enable ¼ for a four-step cycle,
 or turn cycling off so repeats do nothing.
@@ -144,6 +156,12 @@ left third on arrival. A window that is not in a recognisable slot keeps its
 fills the right half of a 1080p one rather than hanging off its edge. That holds
 across mixed-DPI desks, because the placement is computed as fractions of each
 display's own work area rather than by scaling pixels.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/display-throws-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/display-throws-light.svg">
+  <img alt="Moving between displays diagram: a tiled window moved from a 4K display to a 1080p display preserves its exact slot (a left third stays a left third), while an unslotted floating window maps proportionally by work-area fractions so it stays inside bounds across mixed DPI." src="docs/assets/display-throws-light.svg" width="840">
+</picture>
 
 ### Nudging, resizing, halving and doubling
 

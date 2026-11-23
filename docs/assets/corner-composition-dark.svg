@@ -1,0 +1,188 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 532" width="840" height="532" role="img" aria-label="Tile corner composition state diagram">
+  <title>Tile corner composition state diagram</title>
+  <desc>Keep the base modifier held after pressing left or right arrow. Up and down step between Top corner, Full height, and Bottom corner while preserving width. Same side arrow cycles corner width, opposite arrow resets to the opposite full half, and pushing past top maximizes or past bottom restores and ends composition.</desc>
+  <defs>
+    <filter id="cc-dark-float" x="-18%" y="-18%" width="136%" height="146%">
+      <feDropShadow dx="0" dy="4" stdDeviation="3.5" flood-color="#000000" flood-opacity="0.42"/>
+    </filter>
+    <filter id="cc-dark-snap" x="-10%" y="-10%" width="120%" height="126%">
+      <feDropShadow dx="0" dy="1.5" stdDeviation="1.4" flood-color="#000000" flood-opacity="0.22"/>
+    </filter>
+    <clipPath id="cc-dark-top-pane-clip"><rect x="331" y="93" width="51.33" height="47" rx="4.5"/></clipPath>
+    <clipPath id="cc-dark-full-pane-clip"><rect x="331" y="245" width="51.33" height="94" rx="4.5"/></clipPath>
+    <clipPath id="cc-dark-bot-pane-clip"><rect x="331" y="444" width="51.33" height="47" rx="4.5"/></clipPath>
+    <clipPath id="cc-dark-max-pane-clip"><rect x="651" y="93" width="154" height="94" rx="4.5"/></clipPath>
+    <clipPath id="cc-dark-restore-pane-clip"><rect x="684.88" y="412.04" width="86.24" height="60.16" rx="4.5"/></clipPath>
+  </defs>
+  <rect x="0.5" y="0.5" width="839" height="531" rx="10" fill="#22262b" stroke="#3a414a" stroke-width="1"/>
+  <text x="24" y="34" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="13.5" font-weight="600" fill="#f3f4f6">Corner composition — keep the modifier held</text>
+  <g>
+    <rect x="770" y="18" width="46" height="24" rx="5" fill="#3b82f6"/>
+    <rect x="770.5" y="17.5" width="45" height="23" rx="5" fill="#25344d" stroke="#3b82f6" stroke-width="1"/>
+    <text x="793" y="32.91" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="600" fill="#60a5fa">Win</text>
+  </g>
+  <text x="764" y="33" text-anchor="end" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#a8b0bb">Windows</text>
+  <text x="706" y="33" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="12" fill="#a8b0bb">·</text>
+  <g>
+    <rect x="651" y="18" width="46" height="24" rx="5" fill="#3b82f6"/>
+    <rect x="651.5" y="17.5" width="45" height="23" rx="5" fill="#25344d" stroke="#3b82f6" stroke-width="1"/>
+    <text x="674" y="32.91" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="600" fill="#60a5fa">⌃⌥</text>
+  </g>
+  <text x="645" y="33" text-anchor="end" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#a8b0bb">macOS</text>
+  <g>
+    <rect x="543.5" y="18.5" width="53" height="21" rx="11" fill="#25344d" stroke="#3b82f6" stroke-width="1"/>
+    <circle cx="556" cy="29" r="3" fill="#60a5fa"/>
+    <text x="564" y="32.8" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#60a5fa">Hold</text>
+  </g>
+  <line x1="24" y1="54" x2="816" y2="54" stroke="#3a414a" stroke-width="1"/>
+  <text x="408" y="79" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#f3f4f6">Top corner</text>
+  <rect x="328.5" y="90.5" width="159" height="99" rx="7" fill="#2b3036" stroke="#3a414a" stroke-width="1"/>
+  <g filter="url(#cc-dark-snap)">
+    <rect x="331" y="93" width="51.33" height="47" rx="4.5" fill="#273854"/>
+    <g clip-path="url(#cc-dark-top-pane-clip)">
+      <rect x="331" y="93" width="51.33" height="7" fill="#2d4d80"/>
+      <line x1="331" y1="100" x2="382.33" y2="100" stroke="#3a5886" stroke-width="1"/>
+    </g>
+    <rect x="331.5" y="93.5" width="50.33" height="46" rx="4.5" fill="none" stroke="#3a5e97" stroke-width="1"/>
+  </g>
+  <rect x="331.75" y="93.75" width="49.83" height="92.5" rx="4.5" fill="none" stroke="#a8b0bb" stroke-opacity="0.55" stroke-width="1.25" stroke-dasharray="4 3"/>
+  <g fill="none" stroke="#a8b0bb" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="382" y1="197" x2="382" y2="235"/>
+    <path d="M 378.2 202.5 L 382 197 L 385.8 202.5"/>
+  </g>
+  <g>
+    <rect x="348" y="206" width="26" height="22" rx="5" fill="#2563eb"/>
+    <rect x="348.5" y="205.5" width="25" height="21" rx="5" fill="#3b82f6" stroke="#3b82f6" stroke-width="1"/>
+    <text x="361" y="220.08" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#ffffff">↑</text>
+  </g>
+  <g fill="none" stroke="#a8b0bb" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="434" y1="197" x2="434" y2="235"/>
+    <path d="M 430.2 229.5 L 434 235 L 437.8 229.5"/>
+  </g>
+  <g>
+    <rect x="442" y="206" width="26" height="22" rx="5" fill="#181b1f"/>
+    <rect x="442.5" y="205.5" width="25" height="21" rx="5" fill="#2b3036" stroke="#3a414a" stroke-width="1"/>
+    <text x="455" y="220.08" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#f3f4f6">↓</text>
+  </g>
+  <rect x="328.5" y="242.5" width="159" height="99" rx="7" fill="#2b3036" stroke="#3a414a" stroke-width="1"/>
+  <g filter="url(#cc-dark-snap)">
+    <rect x="331" y="245" width="51.33" height="94" rx="4.5" fill="#273854"/>
+    <g clip-path="url(#cc-dark-full-pane-clip)">
+      <rect x="331" y="245" width="51.33" height="7" fill="#2d4d80"/>
+      <line x1="331" y1="252" x2="382.33" y2="252" stroke="#3a5886" stroke-width="1"/>
+    </g>
+    <rect x="331.5" y="245.5" width="50.33" height="93" rx="4.5" fill="none" stroke="#3a5e97" stroke-width="1"/>
+  </g>
+  <text x="356.67" y="300" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#93c5fd">⅓</text>
+  <text x="504" y="288" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#f3f4f6">Full height</text>
+  <text x="504" y="305" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#a8b0bb">↑ / ↓ step vertically</text>
+  <text x="504" y="320" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#a8b0bb">while keeping ⅓ width</text>
+  <g fill="none" stroke="#a8b0bb" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="382" y1="349" x2="382" y2="387"/>
+    <path d="M 378.2 381.5 L 382 387 L 385.8 381.5"/>
+  </g>
+  <g>
+    <rect x="348" y="358" width="26" height="22" rx="5" fill="#2563eb"/>
+    <rect x="348.5" y="357.5" width="25" height="21" rx="5" fill="#3b82f6" stroke="#3b82f6" stroke-width="1"/>
+    <text x="361" y="372.08" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#ffffff">↓</text>
+  </g>
+  <g fill="none" stroke="#a8b0bb" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="434" y1="349" x2="434" y2="387"/>
+    <path d="M 430.2 354.5 L 434 349 L 437.8 354.5"/>
+  </g>
+  <g>
+    <rect x="442" y="358" width="26" height="22" rx="5" fill="#181b1f"/>
+    <rect x="442.5" y="357.5" width="25" height="21" rx="5" fill="#2b3036" stroke="#3a414a" stroke-width="1"/>
+    <text x="455" y="372.08" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#f3f4f6">↑</text>
+  </g>
+  <rect x="328.5" y="394.5" width="159" height="99" rx="7" fill="#2b3036" stroke="#3a414a" stroke-width="1"/>
+  <g filter="url(#cc-dark-snap)">
+    <rect x="331" y="444" width="51.33" height="47" rx="4.5" fill="#273854"/>
+    <g clip-path="url(#cc-dark-bot-pane-clip)">
+      <rect x="331" y="444" width="51.33" height="7" fill="#2d4d80"/>
+      <line x1="331" y1="451" x2="382.33" y2="451" stroke="#3a5886" stroke-width="1"/>
+    </g>
+    <rect x="331.5" y="444.5" width="50.33" height="46" rx="4.5" fill="none" stroke="#3a5e97" stroke-width="1"/>
+  </g>
+  <rect x="331.75" y="397.75" width="49.83" height="92.5" rx="4.5" fill="none" stroke="#a8b0bb" stroke-opacity="0.55" stroke-width="1.25" stroke-dasharray="4 3"/>
+  <text x="408" y="514" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#f3f4f6">Bottom corner</text>
+  <g>
+    <rect x="24" y="259" width="34" height="26" rx="6" fill="#2563eb"/>
+    <rect x="24.5" y="258.5" width="33" height="25" rx="6" fill="#3b82f6" stroke="#3b82f6" stroke-width="1"/>
+    <text x="41" y="275.42" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#ffffff">←</text>
+  </g>
+  <text x="69" y="275" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#a8b0bb">or</text>
+  <g>
+    <rect x="80" y="259" width="34" height="26" rx="6" fill="#181b1f"/>
+    <rect x="80.5" y="258.5" width="33" height="25" rx="6" fill="#2b3036" stroke="#3a414a" stroke-width="1"/>
+    <text x="97" y="275.42" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#f3f4f6">→</text>
+  </g>
+  <text x="24" y="304" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#f3f4f6">Pick a side &amp; width</text>
+  <text x="24" y="321" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#a8b0bb">Repeat to size (shown at ⅓)</text>
+  <g fill="none" stroke="#a8b0bb" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="244" y1="292" x2="318" y2="292"/>
+    <path d="M 312.5 288.2 L 318 292 L 312.5 295.8"/>
+  </g>
+  <text x="24" y="102" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#f3f4f6">While in a corner</text>
+  <g>
+    <rect x="24" y="115" width="26" height="22" rx="5" fill="#2563eb"/>
+    <rect x="24.5" y="114.5" width="25" height="21" rx="5" fill="#3b82f6" stroke="#3b82f6" stroke-width="1"/>
+    <text x="37" y="128.91" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="600" fill="#ffffff">←</text>
+  </g>
+  <text x="58" y="129" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#f3f4f6">Same side</text>
+  <text x="58" y="144" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#a8b0bb">cycles corner width (½ · ⅔ · ⅓)</text>
+  <g>
+    <rect x="24" y="155" width="26" height="22" rx="5" fill="#181b1f"/>
+    <rect x="24.5" y="154.5" width="25" height="21" rx="5" fill="#2b3036" stroke="#3a414a" stroke-width="1"/>
+    <text x="37" y="168.91" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="600" fill="#f3f4f6">→</text>
+  </g>
+  <text x="58" y="169" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#f3f4f6">Opposite side</text>
+  <text x="58" y="184" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#a8b0bb">resets to full right half</text>
+  <line x1="258" y1="140" x2="316" y2="140" stroke="#3a414a" stroke-width="1.2" stroke-dasharray="3 3"/>
+  <text x="24" y="424" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#f3f4f6">Release the modifier</text>
+  <text x="24" y="443" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#a8b0bb">Ends composition immediately.</text>
+  <text x="24" y="460" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#a8b0bb">↑ maximizes and ↓ restores again.</text>
+  <g>
+    <rect x="528" y="111" width="26" height="22" rx="5" fill="#2563eb"/>
+    <rect x="528.5" y="110.5" width="25" height="21" rx="5" fill="#3b82f6" stroke="#3b82f6" stroke-width="1"/>
+    <text x="541" y="125.08" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#ffffff">↑</text>
+  </g>
+  <text x="561" y="125" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#a8b0bb">past top</text>
+  <g fill="none" stroke="#a8b0bb" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="500" y1="144" x2="636" y2="144"/>
+    <path d="M 630.5 140.2 L 636 144 L 630.5 147.8"/>
+  </g>
+  <text x="728" y="79" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#f3f4f6">Maximize</text>
+  <rect x="648.5" y="90.5" width="159" height="99" rx="7" fill="#2b3036" stroke="#3a414a" stroke-width="1"/>
+  <g filter="url(#cc-dark-snap)">
+    <rect x="651" y="93" width="154" height="94" rx="4.5" fill="#273854"/>
+    <g clip-path="url(#cc-dark-max-pane-clip)">
+      <rect x="651" y="93" width="154" height="7" fill="#2d4d80"/>
+      <line x1="651" y1="100" x2="805" y2="100" stroke="#3a5886" stroke-width="1"/>
+    </g>
+    <rect x="651.5" y="93.5" width="153" height="93" rx="4.5" fill="none" stroke="#3a5e97" stroke-width="1"/>
+  </g>
+  <text x="728" y="208" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#a8b0bb">Ends composition</text>
+  <g>
+    <rect x="520" y="415" width="26" height="22" rx="5" fill="#2563eb"/>
+    <rect x="520.5" y="414.5" width="25" height="21" rx="5" fill="#3b82f6" stroke="#3b82f6" stroke-width="1"/>
+    <text x="533" y="429.08" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#ffffff">↓</text>
+  </g>
+  <text x="553" y="429" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#a8b0bb">past bottom</text>
+  <g fill="none" stroke="#a8b0bb" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="500" y1="448" x2="636" y2="448"/>
+    <path d="M 630.5 444.2 L 636 448 L 630.5 451.8"/>
+  </g>
+  <text x="728" y="383" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#f3f4f6">Restore</text>
+  <rect x="648.5" y="394.5" width="159" height="99" rx="7" fill="#2b3036" stroke="#3a414a" stroke-width="1"/>
+  <g filter="url(#cc-dark-float)">
+    <rect x="684.88" y="412.04" width="86.24" height="60.16" rx="4.5" fill="#273854"/>
+    <g clip-path="url(#cc-dark-restore-pane-clip)">
+      <rect x="684.88" y="412.04" width="86.24" height="7" fill="#2d4d80"/>
+      <line x1="684.88" y1="419.04" x2="771.12" y2="419.04" stroke="#3a5886" stroke-width="1"/>
+    </g>
+    <rect x="685.38" y="412.54" width="85.24" height="59.16" rx="4.5" fill="none" stroke="#3a5e97" stroke-width="1"/>
+  </g>
+  <rect x="651.75" y="444.75" width="49.83" height="45.5" rx="4.5" fill="none" stroke="#a8b0bb" stroke-opacity="0.55" stroke-width="1.25" stroke-dasharray="4 3"/>
+  <text x="728" y="514" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#a8b0bb">Ends composition</text>
+</svg>
