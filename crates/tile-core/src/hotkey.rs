@@ -22,6 +22,7 @@ impl Modifiers {
     pub const ALT: Modifiers = Modifiers(1 << 2);
     /// `Win` on Windows, `Command` on macOS.
     pub const META: Modifiers = Modifiers(1 << 3);
+    const VALID_MASK: u8 = Self::SHIFT.0 | Self::CONTROL.0 | Self::ALT.0 | Self::META.0;
 
     pub const fn contains(self, other: Modifiers) -> bool {
         self.0 & other.0 == other.0
@@ -33,6 +34,46 @@ impl Modifiers {
 
     pub const fn union(self, other: Modifiers) -> Modifiers {
         Modifiers(self.0 | other.0)
+    }
+
+    /// Strips any unknown modifier bits (for example from a hand-edited config).
+    pub const fn normalized(self) -> Modifiers {
+        Modifiers(self.0 & Self::VALID_MASK)
+    }
+}
+
+impl fmt::Display for Modifiers {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut first = true;
+        for (flag, name) in [
+            (Modifiers::CONTROL, "Ctrl"),
+            (
+                Modifiers::ALT,
+                if cfg!(target_os = "macos") {
+                    "Option"
+                } else {
+                    "Alt"
+                },
+            ),
+            (Modifiers::SHIFT, "Shift"),
+            (
+                Modifiers::META,
+                if cfg!(target_os = "macos") {
+                    "Cmd"
+                } else {
+                    "Win"
+                },
+            ),
+        ] {
+            if self.contains(flag) {
+                if !first {
+                    f.write_str("+")?;
+                }
+                f.write_str(name)?;
+                first = false;
+            }
+        }
+        Ok(())
     }
 }
 

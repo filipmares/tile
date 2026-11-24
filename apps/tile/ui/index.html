@@ -82,7 +82,7 @@
                    means nothing before they have seen a shortcut work. -->
               <p class="slide__detail" id="welcome-end-aside">
                 It waits in the <span id="welcome-home">menu bar</span> —
-                open Settings there to choose more actions.
+                open Settings there to customize shortcuts or spacing.
               </p>
               <label class="welcome__startup">
                 <input
@@ -135,20 +135,6 @@
           </button>
         </footer>
       </section>
-
-      <div class="settings-search" role="search">
-        <label class="sr-only" for="settings-search">Search settings</label>
-        <input
-          type="search"
-          id="settings-search"
-          class="settings-search__input"
-          placeholder="Search settings"
-          autocomplete="off"
-          spellcheck="false"
-        />
-        <p class="settings-search__empty" id="settings-search-empty" hidden></p>
-        <p class="sr-only" id="settings-search-status" aria-live="polite"></p>
-      </div>
 
       <section
         id="development-panel"
@@ -304,7 +290,7 @@
       <section class="section" aria-labelledby="behaviour-heading">
         <div class="section__header">
           <div>
-            <h2 id="behaviour-heading" data-search-heading>Behaviour</h2>
+            <h2 id="behaviour-heading">Behaviour</h2>
             <p class="section__description">
               Fine-tune spacing and what happens when you repeat a shortcut.
             </p>
@@ -413,7 +399,7 @@
         </details>
 
         <div class="settings-group settings-group--last">
-          <h3 class="settings-group__title" data-search-heading>Motion</h3>
+          <h3 class="settings-group__title">Motion</h3>
           <label class="field field--inline">
             <input type="checkbox" id="animate-moves" name="animate-moves" />
             <span class="field__label">Animate window movement</span>
@@ -445,9 +431,9 @@
         </div>
 
         <div class="settings-group settings-group--last">
-          <h3 class="settings-group__title" data-search-heading>Startup</h3>
+          <h3 class="settings-group__title">Startup</h3>
           <label class="field field--inline">
-                      <input type="checkbox" id="launch-on-login" name="launch-on-login" />
+            <input type="checkbox" id="launch-on-login" name="launch-on-login" />
             <span class="field__label">Launch Tile at login</span>
           </label>
           <p class="field__error" id="launch-error" role="alert" hidden></p>
@@ -461,9 +447,9 @@
       <section class="section" aria-labelledby="bindings-heading">
         <div class="section__header">
           <div>
-            <h2 id="bindings-heading" data-search-heading>Shortcuts</h2>
+            <h2 id="bindings-heading">Shortcuts</h2>
             <p class="section__description">
-              Customize the keys Tile uses to move and resize windows.
+              Choose the modifier for each group and the key for each position.
             </p>
           </div>
         </div>
@@ -482,216 +468,7 @@
         <p class="section__hint" id="recording-status" aria-live="assertive"></p>
         <p class="field__error" id="binding-error" role="alert" hidden></p>
 
-        <div class="shortcut-subsection" data-search-group>
-          <h3 class="shortcut-subsection__title" data-search-heading>
-            Active shortcuts
-          </h3>
-          <p class="shortcut-subsection__description">
-            Your currently assigned shortcuts.
-          </p>
-          <ul class="bindings bindings--active" id="assigned-bindings"></ul>
-        </div>
-
-        <details class="all-shortcuts" id="all-shortcuts" data-search-group>
-          <summary class="all-shortcuts__summary">
-            <span data-search-heading>All available shortcuts</span>
-            <span class="all-shortcuts__count" id="all-shortcuts-count"></span>
-          </summary>
-          <ul class="bindings" id="bindings"></ul>
-        </details>
-      </section>
-
-      <section class="section" aria-label="Advanced">
-        <details class="settings-group" id="advanced">
-          <summary class="settings-group__summary">Advanced</summary>
-          <div class="settings-group__content">
-          <p class="panel__hint">
-            Fine-tuning for the sizing and nudging shortcuts. Restore defaults
-            resets these too.
-          </p>
-
-          <div class="field">
-            <div class="field__text">
-              <label class="field__label" for="advanced-almost-maximize-width">
-                Almost Maximize width
-              </label>
-              <p class="field__help" id="advanced-almost-maximize-width-help">
-                Share of the usable screen width Almost Maximize fills. 1–100%.
-              </p>
-            </div>
-            <div class="field__control">
-              <input
-                type="number"
-                id="advanced-almost-maximize-width"
-                min="1"
-                max="100"
-                step="1"
-                aria-describedby="advanced-almost-maximize-width-help"
-              />
-              <span class="field__unit">%</span>
-            </div>
-          </div>
-
-          <div class="field">
-            <div class="field__text">
-              <label class="field__label" for="advanced-almost-maximize-height">
-                Almost Maximize height
-              </label>
-              <p class="field__help" id="advanced-almost-maximize-height-help">
-                Share of the usable screen height Almost Maximize fills. 1–100%.
-              </p>
-            </div>
-            <div class="field__control">
-              <input
-                type="number"
-                id="advanced-almost-maximize-height"
-                min="1"
-                max="100"
-                step="1"
-                aria-describedby="advanced-almost-maximize-height-help"
-              />
-              <span class="field__unit">%</span>
-            </div>
-          </div>
-
-          <div class="field">
-            <div class="field__text">
-              <label class="field__label" for="advanced-size-step">
-                Resize step
-              </label>
-              <p class="field__help" id="advanced-size-step-help">
-                How much Larger, Smaller, Larger Height and Smaller Height
-                change a window per press. 1–1000 <span data-step-unit>px</span>.
-              </p>
-            </div>
-            <div class="field__control">
-              <input
-                type="number"
-                id="advanced-size-step"
-                min="1"
-                max="1000"
-                step="1"
-                aria-describedby="advanced-size-step-help"
-              />
-              <span class="field__unit" data-step-unit>px</span>
-            </div>
-          </div>
-
-          <div class="field">
-            <div class="field__text">
-              <label class="field__label" for="advanced-width-step">
-                Width step
-              </label>
-              <p class="field__help" id="advanced-width-step-help">
-                How much Larger Width and Smaller Width change a window per
-                press. 1–1000 <span data-step-unit>px</span>.
-              </p>
-            </div>
-            <div class="field__control">
-              <input
-                type="number"
-                id="advanced-width-step"
-                min="1"
-                max="1000"
-                step="1"
-                aria-describedby="advanced-width-step-help"
-              />
-              <span class="field__unit" data-step-unit>px</span>
-            </div>
-          </div>
-
-          <div class="field">
-            <div class="field__text">
-              <label class="field__label" for="advanced-move-step">
-                Move step
-              </label>
-              <p class="field__help" id="advanced-move-step-help">
-                How far Move Left, Right, Up and Down slide a window per press.
-                1–1000 <span data-step-unit>px</span>.
-              </p>
-            </div>
-            <div class="field__control">
-              <input
-                type="number"
-                id="advanced-move-step"
-                min="1"
-                max="1000"
-                step="1"
-                aria-describedby="advanced-move-step-help"
-              />
-              <span class="field__unit" data-step-unit>px</span>
-            </div>
-          </div>
-
-          <div class="field">
-            <div class="field__text">
-              <label class="field__label" for="advanced-minimum-width">
-                Minimum window width
-              </label>
-              <p class="field__help" id="advanced-minimum-width-help">
-                Smaller stops at this share of the usable screen width. 1–100%.
-              </p>
-            </div>
-            <div class="field__control">
-              <input
-                type="number"
-                id="advanced-minimum-width"
-                min="1"
-                max="100"
-                step="1"
-                aria-describedby="advanced-minimum-width-help"
-              />
-              <span class="field__unit">%</span>
-            </div>
-          </div>
-
-          <div class="field">
-            <div class="field__text">
-              <label class="field__label" for="advanced-minimum-height">
-                Minimum window height
-              </label>
-              <p class="field__help" id="advanced-minimum-height-help">
-                Smaller stops at this share of the usable screen height. 1–100%.
-              </p>
-            </div>
-            <div class="field__control">
-              <input
-                type="number"
-                id="advanced-minimum-height"
-                min="1"
-                max="100"
-                step="1"
-                aria-describedby="advanced-minimum-height-help"
-              />
-              <span class="field__unit">%</span>
-            </div>
-          </div>
-
-          <div class="field">
-            <div class="field__text">
-              <label class="field__label" for="advanced-animation-fps">
-                Animation frame rate
-              </label>
-              <p class="field__help" id="advanced-animation-fps-help">
-                Frames per second for animated snaps. Higher is smoother but
-                busier. 15–240 fps; macOS may cap it lower.
-              </p>
-            </div>
-            <div class="field__control">
-              <input
-                type="number"
-                id="advanced-animation-fps"
-                min="15"
-                max="240"
-                step="1"
-                aria-describedby="advanced-animation-fps-help"
-              />
-              <span class="field__unit">fps</span>
-            </div>
-          </div>
-          <p class="field__error" id="advanced-error" role="alert" hidden></p>
-          </div>
-        </details>
+        <div class="shortcut-groups" id="shortcut-groups"></div>
       </section>
 
       <p class="field__error" id="reset-error" role="alert" hidden></p>

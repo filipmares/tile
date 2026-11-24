@@ -7,7 +7,7 @@
 
 use std::sync::mpsc::Sender;
 
-use tile_core::{ActionRequest, Rect, Screen, WindowId, WindowSnapshot};
+use tile_core::{ActionRequest, Modifiers, Rect, Screen, WindowId, WindowSnapshot};
 
 use crate::{
     HotkeyApplyReport, HotkeyBackend, HotkeyBinding, PermissionStatus, PlatformError, Result,
@@ -37,7 +37,11 @@ impl WindowBackend for UnsupportedWindowBackend {
 pub struct UnsupportedHotkeyBackend;
 
 impl HotkeyBackend for UnsupportedHotkeyBackend {
-    fn apply(&mut self, _bindings: &[HotkeyBinding]) -> Result<HotkeyApplyReport> {
+    fn apply(
+        &mut self,
+        _bindings: &[HotkeyBinding],
+        _compose_modifiers: Option<Modifiers>,
+    ) -> Result<HotkeyApplyReport> {
         Err(PlatformError::Unsupported("global hotkeys"))
     }
 

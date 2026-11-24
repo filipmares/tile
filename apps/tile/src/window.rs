@@ -138,7 +138,7 @@ pub fn notify_action_performed<R: Runtime>(app: &AppHandle<R>, report: ActionRep
         return;
     }
     let payload = ActionPerformedDto {
-        action: report.action,
+        action: report.target,
         moved: report.outcome == ActionOutcome::Moved,
         had_window: report.outcome != ActionOutcome::NoWindow,
         screen: report.screen,
@@ -146,7 +146,7 @@ pub fn notify_action_performed<R: Runtime>(app: &AppHandle<R>, report: ActionRep
     if let Err(err) = app.emit_to(WELCOME_LABEL, ACTION_PERFORMED_EVENT, payload) {
         log::debug!(
             "could not tell the welcome window about {}: {err}",
-            report.action
+            report.target
         );
     }
 }

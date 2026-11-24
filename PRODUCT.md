@@ -36,17 +36,19 @@ simply expects windows to land where they pressed.
 
 **The press-again size cycle.** One shortcut carries every width — press ← for a
 half, again for two thirds, again for a third, then round again — so the whole
-keymap stays small enough to hold in one hand. Competitors expose each size as
-its own binding; Tile folds them into a repeat. Everything downstream (four
-arrows as the entire default set, seventy-plus actions left rebindable rather
-than pre-bound) follows from that decision, and future work must not undo it by
-spreading sizes back across separate keys.
+keymap stays small enough to hold in one hand. Competitors expose dozens of
+separate grid bindings; Tile keeps nine actions across two configurable
+modifiers (a **base modifier** for placement and a **display modifier** for
+moving across monitors) and folds every fractional width into repeat cycling
+plus single-hold corner composition. Everything downstream follows from that
+decision, and future work must not undo it by spreading sizes back across
+separate keys.
 
 ## Operating Context
 
 - **No main window.** Tile lives in the menu bar (macOS) or system tray
-  (Windows). Its menu offers the common layouts with their current shortcuts
-  and opens Settings; windows exist only when asked for.
+  (Windows). Its menu offers the nine actions with their current shortcuts and
+  opens Settings; windows exist only when asked for.
 - **Three windows exist:** Settings, About, and the first-run Welcome window
   (reopenable from the bottom of Settings). Tile skips its own windows when
   moving things, so a shortcut pressed while one is focused moves the window
@@ -57,34 +59,36 @@ spreading sizes back across separate keys.
   Accessibility permission before Tile can move anything; Windows uses a
   low-level keyboard hook that replaces Aero Snap and cannot see input aimed at
   elevated processes.
-- Settings is the only place bindings are edited. Fine-tuning knobs (step
-  sizes, minimum window fractions, Almost Maximize size, animation fps) live in
-  a collapsed **Settings ▸ Advanced** group, so they don't crowd the defaults.
-  Each Settings control saves on its own and reports a failed save beside
-  itself; **Restore defaults** asks first and offers Undo. A `config.json` that
-  cannot be read is kept as `config.corrupt-<timestamp>.json` and Tile starts
-  from defaults.
+- Settings is the only place shortcuts are edited. Each Settings control saves
+  on its own and reports a failed save beside itself; **Restore defaults** asks
+  first and offers Undo. A `config.json` that cannot be read is kept as
+  `config.corrupt-<timestamp>.json` and Tile starts from defaults.
 - On Windows, Tile re-arms its keyboard hook after resume, unlock and
   display wake, so shortcuts keep working without a restart.
 
 ## Capabilities and Constraints
 
-- 76 window actions — halves, thirds, two-thirds, fourths, sixths, ninths,
-  corners, corner thirds, maximize, maximize-height, almost-maximize, center,
-  restore, display throws, and incremental move/resize/halve-double. **Six ship
-  bound to keys**; the rest are reachable by binding them yourself, and the
-  common layouts also from the tray/menu-bar menu.
-- Default keymap: `Control`+`Option` (macOS) or `Win` (Windows) plus the arrows;
-  display throws add `Command` (macOS) or `Alt` (Windows).
-- Repeat cycles size for the horizontal arrows and corners; the cycle set is
-  configurable (½, ⅔, ¾, ¼, ⅓) and can be turned off entirely.
-- Animated snapping is on by default, 40–1000 ms, and can be switched off in
-  Settings ▸ Behaviour ▸ Motion.
+- 9 bindable window actions across two modifier groups — **Window placement**
+  (`Left`, `Right`, `Maximize`, `Restore`, `Center Column`) and **Displays**
+  (`Display Left`, `Display Right`, `Display Above`, `Display Below`) — plus
+  single-hold **corner composition** (holding the base modifier and pressing a
+  side key followed by maximize or restore). Every action ships bound to a
+  default key; each group's modifier and each action's key are configurable in
+  Settings.
+- Default keymap: `Control`+`Option` (macOS) or `Win` (Windows) as the base
+  modifier with the arrows and `Enter`; `Control`+`Option`+`Command` (macOS) or
+  `Win`+`Alt` (Windows) as the display modifier with the arrows.
+- Repeat cycles width for `Left`, `Right`, `Center Column`, and composed
+  corners; the cycle set is configurable (½, ⅔, ¾, ¼, ⅓) and can be turned off
+  entirely.
+- Animated snapping is on by default, 40–1000 ms, paced to the target display's
+  refresh rate (capped at 45 fps on macOS to avoid Accessibility IPC stutter),
+  and can be switched off in Settings ▸ Behaviour ▸ Motion.
 - Architecture forbids shortcuts: `tile-core` is pure and platform-independent,
   `tile-platform` hides every OS API behind traits, `apps/tile` is a thin shell.
   UI work talks to the core through Tauri commands and events only.
-- The tray/menu-bar menu offers the common layouts directly; a menu item lands
-  exactly where its label says rather than cycling.
+- The tray/menu-bar menu lists the nine actions with their current shortcuts;
+  repeatedly clicking `Left`, `Right`, or `Center Column` cycles through sizes.
 - **Not built yet:** per-app rules and drag-snapping.
 - Development builds are deliberately quarantined from an installed Tile: a
   separate config directory, the login item left alone, and every surface
@@ -101,9 +105,11 @@ spreading sizes back across separate keys.
 
 ## Evidence on Hand
 
-- `README.md` — the accurate, current description of behaviour; the shortcut
-  table is generated from `crates/tile-core/src/config.rs` (`default_bindings`),
-  the single source of truth for defaults.
+- `README.md` — the accurate, current description of behaviour; defaults live
+  in `crates/tile-core/src/config.rs` (`BASE_MODIFIERS`, `DISPLAY_MODIFIERS`,
+  and `default_keys`), the single source of truth for defaults.
+- `GLOSSARY.md` and `docs/adr/0001-minimal-keymap-and-size-cycling.md` — the
+  shared domain language and the decision record for the minimal keymap.
 - GitHub Releases carry a signed and notarized macOS `.dmg` and an **unsigned**
   per-user Windows NSIS installer, so SmartScreen warns on first run. Windows
   signing (Azure Artifact Signing) is wired into the release workflow but stays
@@ -116,8 +122,8 @@ spreading sizes back across separate keys.
 
 1. **Only what actually works ships.** Never show, promise or count an action
    that is not built or not bound. Where the UI can check, it checks.
-2. **The keymap stays small.** New capability arrives as a repeat, a cycle or an
-   unbound action — not as another default binding to memorize.
+2. **The keymap stays small.** New capability arrives as a repeat, a cycle or a
+   composition — not as a catalogue of single-purpose bindings.
 3. **Tile stays out of the way.** Tray-only, no Dock or taskbar presence, no
    main window; surfaces appear because the user asked and leave when done.
 4. **The same product on both desks.** Platform differences are limited to what

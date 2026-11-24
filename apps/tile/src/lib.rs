@@ -63,12 +63,12 @@ pub fn run() {
             commands::get_config_recovery,
             commands::dismiss_config_recovery,
             commands::reveal_config_backup,
-            commands::set_binding,
+            commands::set_key,
+            commands::set_group_modifiers,
             commands::set_gaps,
             commands::set_cycling,
             commands::set_animation,
             commands::set_animation_duration,
-            commands::set_advanced,
             commands::set_launch_on_login,
             commands::reset_to_defaults,
             commands::undo_reset_to_defaults,
@@ -357,7 +357,7 @@ fn setup_app<R: Runtime>(app: &AppHandle<R>) -> Result<(), Box<dyn std::error::E
                         return None;
                     }
                     let request = rx.try_recv().ok()?;
-                    if request.exact {
+                    if request.from_menu {
                         deferred = Some(request);
                         return None;
                     }

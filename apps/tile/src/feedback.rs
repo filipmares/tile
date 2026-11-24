@@ -28,10 +28,8 @@ pub enum ActionOrigin {
 }
 
 impl ActionOrigin {
-    /// Only tray menu items send exact requests: a hotkey is never exact,
-    /// because repeating one is how a window cycles through sizes.
     pub fn of(request: &ActionRequest) -> Self {
-        if request.exact {
+        if request.from_menu {
             Self::TrayMenu
         } else {
             Self::Hotkey
@@ -80,7 +78,7 @@ pub fn run_action_preemptible<R: Runtime>(
     next: &mut dyn FnMut() -> Option<ActionRequest>,
 ) {
     let state = app.state::<Arc<AppState>>();
-    let action = request.action;
+    let target = request.target;
 
     // Reported from inside the pipeline rather than from its return value.
     // The return value arrives only once every window has finished
@@ -95,7 +93,7 @@ pub fn run_action_preemptible<R: Runtime>(
     });
 
     if let Err(err) = &result {
-        log::error!("action {action} failed: {err}");
+        log::error!("action {target} failed: {err}");
     }
     match notice_for(ActionOrigin::of(&request), &result) {
         Notice::Silent => {}
@@ -213,8 +211,8 @@ mod tests {
     }
 
     #[test]
-    fn exact_requests_come_from_the_tray_menu() {
-        let menu = ActionRequest::exact(WindowAction::LeftHalf);
+    fn menu_requests_come_from_the_tray_menu() {
+        let menu = ActionRequest::from_menu(WindowAction::LeftHalf);
         let hotkey = ActionRequest::from(WindowAction::LeftHalf);
         assert_eq!(ActionOrigin::of(&menu), ActionOrigin::TrayMenu);
         assert_eq!(ActionOrigin::of(&hotkey), ActionOrigin::Hotkey);

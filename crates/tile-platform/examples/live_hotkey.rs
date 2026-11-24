@@ -29,11 +29,14 @@ fn windows_hotkey() {
 
     let hotkey = Hotkey::new(Modifiers::CONTROL | Modifiers::SHIFT, KeyCode::M);
     let report = backend
-        .apply(&[HotkeyBinding {
-            hotkey,
-            action: WindowAction::Maximize,
-            repeat: false,
-        }])
+        .apply(
+            &[HotkeyBinding {
+                hotkey,
+                action: WindowAction::Maximize,
+                repeat: false,
+            }],
+            None,
+        )
         .expect("apply bindings");
     println!(
         "applied {hotkey} -> maximize via {:?} (hook installed: {})",
@@ -83,9 +86,9 @@ fn windows_hotkey() {
 
     match rx.recv_timeout(Duration::from_secs(5)) {
         Ok(request) => {
-            println!("registered route delivered: {}", request.action.id());
-            assert_eq!(request.action, WindowAction::Maximize);
-            assert!(!request.exact, "hotkeys must keep cycling");
+            println!("registered route delivered: {}", request.target.id());
+            assert_eq!(request.target, WindowAction::Maximize.into());
+            assert!(!request.from_menu, "hotkeys must not be marked from_menu");
         }
         Err(err) => panic!("hook did not deliver the action: {err}"),
     }
@@ -97,7 +100,7 @@ fn windows_hotkey() {
     assert!(second.is_ok(), "hook stopped delivering after one press");
     println!(
         "registered route delivered again: {}",
-        second.unwrap().action.id()
+        second.unwrap().target.id()
     );
 
     // Extra modifiers must not turn a base binding into a loose subset match.
@@ -119,7 +122,7 @@ fn windows_hotkey() {
     println!("registered route ignored an extra Alt modifier");
 
     // After unbinding, the same keystroke must be ignored.
-    let cleared = backend.apply(&[]).expect("clear bindings");
+    let cleared = backend.apply(&[], None).expect("clear bindings");
     assert!(!cleared.hook_installed);
     std::thread::sleep(Duration::from_millis(300));
     unsafe { SendInput(&sequence, std::mem::size_of::<INPUT>() as i32) };
@@ -139,7 +142,7 @@ fn windows_hotkey() {
         repeat: false,
     };
     let intercepted = backend
-        .apply(&[contested_binding])
+        .apply(&[contested_binding], None)
         .expect("apply contested binding");
     assert_eq!(
         intercepted.bindings[0].route,
@@ -158,8 +161,8 @@ fn windows_hotkey() {
     assert_eq!(
         rx.recv_timeout(Duration::from_secs(5))
             .expect("intercepted Win+Left was not delivered")
-            .action,
-        WindowAction::LeftHalf
+            .target,
+        WindowAction::LeftHalf.into()
     );
     println!("intercepted route delivered left-half");
 

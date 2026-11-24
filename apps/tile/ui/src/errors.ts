@@ -12,7 +12,8 @@ export type SettingsErrorKind =
   | "notSaved"
   | "loginItem"
   | "outOfSync"
-  | "shortcutTaken";
+  | "shortcutTaken"
+  | "invalidShortcut";
 
 /** The `kind` of a settings command rejection, or `null` for anything else. */
 export function settingsErrorKind(err: unknown): SettingsErrorKind | null {
@@ -21,7 +22,8 @@ export function settingsErrorKind(err: unknown): SettingsErrorKind | null {
   return kind === "notSaved" ||
     kind === "loginItem" ||
     kind === "outOfSync" ||
-    kind === "shortcutTaken"
+    kind === "shortcutTaken" ||
+    kind === "invalidShortcut"
     ? kind
     : null;
 }
@@ -37,6 +39,8 @@ export function settingsErrorMessage(err: unknown): string {
       return "Tile could not save this change, so it was undone, but whether Tile opens at login may no longer match this setting. Turn Launch Tile at login off and on again to fix it.";
     case "shortcutTaken":
       return "Another action started using this shortcut before it was saved, so nothing changed. Record it again to choose whether to replace it.";
+    case "invalidShortcut":
+      return "That modifier cannot be used with the current keys. Choose a different modifier or change the colliding keys first.";
     default:
       return "Tile could not apply this change. Try again.";
   }

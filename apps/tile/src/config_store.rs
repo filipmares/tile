@@ -117,6 +117,13 @@ pub fn load_from_dir(dir: &Path) -> LoadedConfig {
     let (config, origin, recovery_kind) = match fs::read_to_string(&path) {
         Ok(contents) => match Config::from_json_lenient(&contents) {
             Ok(loaded) => {
+                if !loaded.migration_notes.is_empty() {
+                    log::info!(
+                        "migrated config at {} ({})",
+                        path.display(),
+                        loaded.migration_notes.join("; ")
+                    );
+                }
                 if !loaded.reset_fields.is_empty() {
                     log::warn!(
                         "config at {} has unreadable settings ({}); reset them to defaults",
@@ -585,7 +592,7 @@ mod tests {
     #[test]
     fn a_wrong_typed_field_resets_only_that_field_and_keeps_a_backup() {
         let dir = TempDir::new();
-        let original = br#"{"schemaVersion":1,"launchOnLogin":false,"sizeStep":"big"}"#;
+        let original = br#"{"schemaVersion":2,"launchOnLogin":false,"gap":"wide"}"#;
         fs::write(config_file_path(&dir.0), original).unwrap();
 
         let loaded = load_from_dir(&dir.0);
@@ -593,7 +600,7 @@ mod tests {
         assert_eq!(loaded.origin, ConfigOrigin::Loaded);
         assert!(!loaded.is_first_run());
         assert!(!loaded.config.launch_on_login);
-        assert_eq!(loaded.config.size_step, Config::default().size_step);
+        assert_eq!(loaded.config.gaps, Config::default().gaps);
         let recovery = loaded.recovery.expect("a partial reset is reported");
         assert_eq!(recovery.kind, RecoveryKind::PartialReset);
         let backup = recovery.backup_path.expect("the original is kept");
@@ -609,12 +616,36 @@ mod tests {
         let dir = TempDir::new();
         fs::write(
             config_file_path(&dir.0),
-            br#"{"orientationShown":false,"sizeStep":"big"}"#,
+            br#"{"orientationShown":false,"gap":"wide"}"#,
         )
         .unwrap();
         let loaded = load_from_dir(&dir.0);
         assert!(loaded.recovery.is_some());
         assert!(!loaded.config.orientation_shown);
+    }
+
+    #[test]
+    fn legacy_v1_config_with_retired_actions_loads_without_recovery() {
+        let dir = TempDir::new();
+        let legacy = br#"{
+            "schemaVersion": 1,
+            "bindings": {
+                "left-half": { "modifiers": 6, "key": "left" },
+                "first-third": { "modifiers": 6, "key": "a" },
+                "top-left": null
+            },
+            "sizeStep": 40,
+            "animation": { "enabled": true, "durationMs": 200, "fps": 120 }
+        }"#;
+        fs::write(config_file_path(&dir.0), legacy).unwrap();
+        let loaded = load_from_dir(&dir.0);
+        assert_eq!(loaded.origin, ConfigOrigin::Loaded);
+        assert!(loaded.recovery.is_none());
+        assert!(backups_in(&dir.0).is_empty());
+        assert_eq!(
+            loaded.config.key(tile_core::WindowAction::LeftHalf),
+            Some(tile_core::KeyCode::Left)
+        );
     }
 
     #[test]

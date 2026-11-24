@@ -10,112 +10,102 @@ The first-run guide offers **Launch Tile when I log in**, enabled by default so
 the shortcuts are ready after a restart. The same setting remains available in
 Settings and is restored to on by **Restore defaults**.
 
-> **Status: early days.** Tile implements 76 window actions — halves, thirds,
-> two-thirds, fourths, corner thirds, sixths, ninths, corners, maximize,
-> maximize-height, almost-maximize, center, restore, display throws, and
-> incremental move, resize and halve/double — but only six ship bound to keys.
-> The other seventy are reachable by binding them yourself in Settings, and the
-> common layouts are also one click away in the tray/menu-bar menu.
-> Per-app rules and drag-snapping are not built yet. This
-> README documents only what actually works today.
+> **Status: early days.** Tile focuses on nine keyboard actions across two
+> configurable modifiers — left, right, center column, maximize, restore, and
+> directional display moves — plus single-hold corner composition and repeat
+> size cycling. Per-app rules and drag-snapping are not built yet. This README
+> documents only what actually works today.
 
 ## Default keyboard shortcuts
 
-The tiling shortcuts are the same on both platforms — only the modifier you
-hold differs:
+Shortcuts are organised into two groups, each with its own configurable
+modifier (**Base modifier** for placement, **Display modifier** for moving
+across displays) and per-action keys. By default, only the modifiers differ by
+platform:
 
-- **macOS** — `Control` + `Option`
-- **Windows** — `Win`
+- **macOS** — Base modifier: `Control` + `Option`; Display modifier: `Control` + `Option` + `Command`
+- **Windows** — Base modifier: `Win`; Display modifier: `Win` + `Alt`
 
-Hold that, then press:
+Hold the **Base modifier**, then press:
 
 | Key             | Action                                                             |
 | --------------- | ------------------------------------------------------------------ |
-| `←` `→`         | **Left / right** — half, then two thirds, then a third (see below) |
-| `↑`             | Maximize                                                           |
-| `↓`             | Restore to the window's previous position                          |
+| `←` `→`         | **Left / Right** — half, then two thirds, then a third (see below) |
+| `↑`             | **Maximize**                                                       |
+| `↓`             | **Restore** to the window's previous position                      |
 | `←` / `→` then `↑` / `↓` | **Corner** — top or bottom of that side, keeping its width |
-| `Enter`         | **Center column** — full height, centred; repeat to cycle its width |
+| `Enter`         | **Center Column** — full height, centred; repeat to cycle its width |
 
-Moving a window to the adjacent display keeps its slot. This is the one place
-the two platforms differ by more than the base modifier, because each follows
-its own move-window-to-display convention:
+Hold the **Display modifier**, then press an arrow to move a window to an
+adjacent display while keeping its slot:
 
 | Shortcut                            | Action                                       |
 | ----------------------------------- | -------------------------------------------- |
-| **macOS** `Control`+`Command`+`Option`+`←` `→` `↑` `↓` | **Display left / right / above / below** — same slot |
-| **Windows** `Win`+`Alt`+`←` `→` `↑` `↓` | **Display left / right / above / below** — same slot |
+| **macOS** `Control`+`Option`+`Command`+`←` `→` `↑` `↓` | **Display Left / Right / Above / Below** — same slot |
+| **Windows** `Win`+`Alt`+`←` `→` `↑` `↓` | **Display Left / Right / Above / Below** — same slot |
 
-That is the whole default set — **the arrows, `Enter` and the display
-throws.** Both platforms keep the same shape, with the modifier held in the
-left hand and the arrows in the right.
+That is the entire keymap — **the arrows, `Enter`, and the display moves.**
+Both platforms keep the same shape, with the modifier held in the left hand and
+the keys in the right.
 
-The horizontal pair places the window and carries every size, because repeating
-an arrow cycles its width:
+The horizontal pair places the window and carries every width, because repeating
+a placement key cycles its size:
 
 ```text
   ←   ½ → ⅔ → ⅓ → …   anchored left
   →   ½ → ⅔ → ⅓ → …   anchored right
 ```
 
-The vertical pair is the bigger/undo axis: `↑` maximizes and
-`↓` restores the window.
+The vertical pair is the bigger/undo axis: `↑` maximizes and `↓` restores the
+window.
 
-Corners are composed rather than bound. Keep the modifier held, press `←` or `→`
-(as often as you like, to pick a width), then `↑` or `↓`: the window moves to
-that side's top or bottom corner at the width it had. While the modifier is
-still held, pressing that side's arrow (`←` in a left corner, `→` in a right
-corner) cycles the corner's width, and the opposite side arrow resets to a
-full-height half on the other side. Vertically, `↑` and `↓` step along
-`Top ↔ Full ↔ Bottom` keeping the current width, while pushing past the ends —
-`↑` from a top corner or `↓` from a bottom corner — maximizes or restores and
-ends composition. Let go of the modifier and `↑`/`↓` are maximize and restore
-again, and `←`/`→` start a fresh full-height half. Composition only applies to
-the arrows on the base modifier; rebound shortcuts keep their plain meaning.
+Corners are composed rather than bound separately. Keep the **Base modifier**
+held, press your `Left` or `Right` key (as often as you like, to pick a width),
+then your `Maximize` or `Restore` key: the window moves to that side's top or
+bottom corner at the width it had. While the modifier is still held, pressing
+that side's key cycles the corner's width, and the opposite side key resets to a
+full-height placement on the other side. Vertically, `Maximize` and `Restore`
+step along `Top ↔ Full ↔ Bottom` keeping the current width, while pushing past
+the ends — `Maximize` from a top corner or `Restore` from a bottom corner —
+maximizes or restores and ends composition. Let go of the modifier and
+`Maximize`/`Restore` resume their plain meaning. Corner composition follows
+whatever **Base modifier** and `Left` / `Right` / `Maximize` / `Restore` keys
+you configure in Settings.
 
-`Enter` (Return) centres a full-height column and cycles its width the same
-way the side arrows do. It is a default for new installs; existing settings
-keep their bindings, so bind **Center Half** to `Enter` yourself in Settings to get it.
+`Enter` (Return) centres a full-height column and cycles its width the same way
+the side keys do.
 
-Everything is rebindable, and the rest of the catalogue — the explicitly-sized
-thirds and two-thirds, direct corner bindings, center, the backwards centred-column step, maximize-height, almost-maximize,
-plus fourths, sixths, ninths, corner thirds, the top/bottom halves, the
-incremental move/resize/halve-double families and the named-display moves —
-ships unbound, reachable through a binding of your own.
+In **Settings ▸ Shortcuts**, choose each group's modifier from platform presets
+(or pick **Custom…** to toggle individual modifier keys) and click any action's
+key to rebind or clear it.
 
 ### The tray and menu-bar menu
 
-The tray (Windows) or menu-bar (macOS) menu offers the common layouts with a
-click, each showing its current shortcut, so it doubles as a cheat sheet:
+The tray (Windows) or menu-bar (macOS) menu offers the nine actions directly,
+each showing its current shortcut:
 
 ```text
-Left   ▸  ½  ⅔  ⅓  ·  Top ▸ ½ ⅔ ⅓  ·  Bottom ▸ ½ ⅔ ⅓
-Right  ▸  ½  ⅔  ⅓  ·  Top ▸ ½ ⅔ ⅓  ·  Bottom ▸ ½ ⅔ ⅓
-Center Column  ▸  ½  ⅔  ⅓
-Top Half · Bottom Half
-Maximize · Almost Maximize · Center · Restore
+Left · Right · Center Column
+Maximize · Restore
 Displays  ▸  Left · Right · Above · Below
 ```
 
-Corners are half height, varying in width.
-
-A menu item always lands exactly where its label says — choosing "½" twice
-does not cycle on to ⅔ the way repeating a shortcut does. A ⅓-wide corner
-leaves room to stack a second window beneath it. Actions apply to the window
+Clicking `Left`, `Right`, or `Center Column` repeatedly cycles through the
+configured sizes just like repeating its shortcut. Actions apply to the window
 that was frontmost before the menu opened.
 
 ### Press it again to change the size
 
-Pressing the same shortcut again changes the size. The horizontal arrows and
-four corners **cycle through sizes**: half, two thirds, third, then back to
-half. Corners cycle their width while keeping their half height.
+Pressing the same shortcut again changes the size. `Left`, `Right`, `Center
+Column`, and composed corners **cycle through sizes**: half, two thirds, third,
+then back to half. Corners cycle their width while keeping their half height.
 
-The sizes are configurable in Settings ▸ Behaviour — ½, ⅔, ¾, ¼ and ⅓. A half,
-two thirds and a third are enabled by default; enable ¼ for a four-step cycle,
-or turn cycling off so repeats do nothing.
+The sizes are configurable in Settings ▸ Behaviour ▸ Repeating shortcuts — ½,
+⅔, ¾, ¼ and ⅓. A half, two thirds and a third are enabled by default; enable ¼
+or ¾ for extra steps, or turn cycling off so repeats do nothing.
 
 The cycle restarts whenever you run a different action, switch to another
-window, or move the window yourself, and `↓` always restores the window
+window, or move the window yourself, and `Restore` always returns the window
 to where it was **before** Tile first touched it, however long you cycled for.
 
 ### Moving between displays
@@ -126,99 +116,60 @@ display beyond that edge is selected, preferring displays aligned on that axis
 over diagonal ones. If there is no display in that direction, nothing moves;
 these shortcuts do not wrap.
 
-Upgrading replaces the old default previous/next arrows (including the retired
-`Shift` shortcuts) with directional moves and adds up/down when those shortcuts
-are free. Custom bindings are preserved. **Previous / Next Display** remain
-available as rebindable actions that cycle through displays with wraparound.
+All display moves keep the window's slot where they can: a left third or
+two-thirds corner stays in that slot on arrival. A window that is not in a
+recognisable slot keeps its **relative** place instead, so something filling the
+right half of a 4K panel fills the right half of a 1080p one rather than hanging
+off its edge. That holds across mixed-DPI desks, because the placement is
+computed as fractions of each display's own work area rather than by scaling
+pixels.
 
-When you would rather name the monitor outright, **First** through **Fourth
-Display** are also available, unbound by default. They count left to right by
-position, then top to bottom — so "second display" means the same monitor every
-time, whatever order Windows or macOS happened to enumerate them in, and
-whatever the window is doing now. Naming a display that is not plugged in does
-nothing.
+### Configuration format
 
-All display moves keep the window's slot where they can: a left third stays a
-left third on arrival. A window that is not in a recognisable slot keeps its
-**relative** place instead, so something filling the right half of a 4K panel
-fills the right half of a 1080p one rather than hanging off its edge. That holds
-across mixed-DPI desks, because the placement is computed as fractions of each
-display's own work area rather than by scaling pixels.
-
-### Nudging, resizing, halving and doubling
-
-Also available, all unbound by default:
-
-| Family | Actions |
-| ------ | ------- |
-| **Move** | Slide the window one step left, right, up or down, stopping flush against the screen edge |
-| **Resize** | Larger / smaller, or just the width or just the height |
-| **Halve & Double** | Halve or double the width or height, keeping the named edge |
-
-Resizing anchors to whichever screen edge the window is already flush against,
-so a window in the right half grows leftwards instead of being pushed off the
-screen; a floating window resizes around its centre. Nothing can be nudged off
-the screen, and by default nothing shrinks below a quarter of the work area.
-
-The step sizes (`sizeStep`, `widthStep` and `moveStep`, each defaulting to 30)
-and the floor (`minimumWindowWidth`, `minimumWindowHeight`, defaulting to 25%
-of the work area) are in **Settings ▸ Advanced**, as is the width and height of
-Almost Maximize (90% by default). Steps range from 1 to 1000 (physical pixels
-on Windows, points on macOS), and the fractions from 1% to 100%.
-
-`config.json` carries a `schemaVersion` (currently `1`; a file without one is
-treated as version 1). Settings are read one at a time, so a hand edit that
-leaves one value with the wrong type resets only that value. If `config.json`
-cannot be read at all — say, after a hand edit leaves it invalid JSON — Tile
-starts from defaults. Either way, and also when the file comes from a newer
-Tile, the original is kept next to it as `config.corrupt-<timestamp>.json`
-(the newest five are kept) and Settings opens once to say so.
+`config.json` carries a `schemaVersion` (currently `2`; older v1 files migrate
+automatically on load, silently dropping retired actions and unused fields).
+Settings are read one at a time, so a hand edit that leaves one value with the
+wrong type resets only that value. If `config.json` cannot be read at all — say,
+after a hand edit leaves it invalid JSON — Tile starts from defaults. Either
+way, and also when the file comes from a newer Tile, the original is kept next
+to it as `config.corrupt-<timestamp>.json` (the newest five are kept) and
+Settings opens once to say so.
 
 ### Animated snapping
 
 Windows and macOS glide to their new frame rather than jumping to it. Both use
-a rigid rectangle and a restrained, monotonic ease-out, with platform-specific
-timing tuned to the native window manager. On every platform, a shortcut pressed
-while a window is still in flight redirects the movement it already has instead
-of restarting it.
+a rigid rectangle and a restrained, monotonic ease-out, paced automatically to
+the target display's refresh rate (capped at 45 fps on macOS to keep
+Accessibility IPC smooth on ProMotion displays). On every platform, a shortcut
+pressed while a window is still in flight redirects the movement it already has
+instead of restarting it.
 
-**This is on by default**, including for existing installs, which had no
-animation before. Turn it off in Settings ▸ Behaviour ▸ Motion for the instant
-snapping Tile used to do; that is also the setting to reach for over a remote
-desktop session, or if you would rather have no motion at all.
-
-How long a snap takes is a slider in the same place, **Settings ▸ Behaviour ▸
-Motion**, from 40 ms to 1000 ms. The frame rate is in **Settings ▸ Advanced**,
-from 15 to 240 fps:
+**This is on by default.** Turn it off in Settings ▸ Behaviour ▸ Motion for
+instant snapping (useful over remote desktop or if you prefer no motion). How
+long a snap takes is controlled by the duration slider in the same place, from
+40 ms to 1000 ms (defaulting to 250 ms on macOS and 220 ms on Windows):
 
 ```jsonc
 "animation": {
   "enabled": true,
-  "durationMs": 220, // 250 on macOS; how long a snap takes; 40–1000
-  "fps": 90          // frames per second; 15–240, capped lower on macOS
+  "durationMs": 220 // 250 on macOS; how long a snap takes; 40–1000
 }
 ```
-
-`durationMs` is the end-to-end duration of the rigid ease-out, and is the value
-behind the Motion slider. The default is 250 ms on macOS and 220 ms on Windows
-and other platforms. The frame rate is a pacing knob; the platform profile
-supplies the native-feeling ease-out tuning.
 
 ### Windows shortcut notes
 
 Tile intercepts the bound `Win`+Arrow shortcuts to replace Aero Snap, and claims
-`Win`+`Alt`+`←`/`→` — Windows 11's snap variants — for the display throws.
-Other shortcuts are registered directly with Windows whenever possible, without
-passing every keystroke through Tile. `Win`+`Shift`+Arrow (Windows' own
-move-between-monitors shortcut) and `Win`+`Ctrl`+`←`/`→` (virtual desktops) both
-remain available.
+`Win`+`Alt`+Arrow — Windows 11's snap variants — for the display moves. Other
+shortcuts are registered directly with Windows whenever possible. `Win`+`Shift`+Arrow
+(Windows' own move-between-monitors shortcut) and `Win`+`Ctrl`+`←`/`→` (virtual
+desktops) both remain available.
 
 Windows treats `Ctrl`+`Alt` as `AltGr` on many international layouts, so Tile
 does not use that modifier by default; doing so could interfere with characters
 such as `@`, `€`, `{` and `}`.
 
-<sub>This table is generated from `crates/tile-core/src/config.rs`
-(`default_bindings`) — the single source of truth for Tile's defaults.</sub>
+<sub>Defaults live in `crates/tile-core/src/config.rs` (`BASE_MODIFIERS`,
+`DISPLAY_MODIFIERS`, and `default_keys`) — the single source of truth.</sub>
 
 ## Platform notes
 
@@ -226,12 +177,13 @@ such as `@`, `€`, `{` and `}`.
 
 Tile registers shortcuts with Windows using `RegisterHotKey` whenever the OS
 will grant them. A **low-level keyboard hook** (`WH_KEYBOARD_LL`) is installed
-only while at least one configured shortcut needs behavior that registration
-cannot provide:
+whenever at least one active feature needs behavior that registration cannot
+provide:
 
 - overriding a shortcut Windows already owns, including the default
   `Win`+Arrow set that **replaces Aero Snap**;
-- distinguishing main Enter from numpad Enter.
+- distinguishing main Enter from numpad Enter;
+- tracking modifier releases for single-hold **corner composition**.
 
 Assigning a shortcut means Tile claims it exclusively whenever Windows permits.
 Tile chooses the mechanism automatically: ordinary shortcuts are registered,

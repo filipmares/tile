@@ -24,6 +24,9 @@ pub enum SettingsErrorKind {
     /// The shortcut is already bound to another action, and the request did
     /// not ask to replace it. Nothing was changed.
     ShortcutTaken,
+    /// The shortcut modifier or combination is invalid (for example, an empty
+    /// modifier or two groups sharing a modifier with colliding keys).
+    InvalidShortcut,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -49,6 +52,10 @@ impl SettingsError {
 
     pub fn shortcut_taken(detail: impl std::fmt::Display) -> Self {
         Self::new(SettingsErrorKind::ShortcutTaken, detail)
+    }
+
+    pub fn invalid_shortcut(detail: impl std::fmt::Display) -> Self {
+        Self::new(SettingsErrorKind::InvalidShortcut, detail)
     }
 
     fn new(kind: SettingsErrorKind, detail: impl std::fmt::Display) -> Self {
@@ -81,7 +88,9 @@ mod tests {
         assert_eq!(login["kind"], "loginItem");
         let out_of_sync = serde_json::to_value(SettingsError::out_of_sync("both")).unwrap();
         assert_eq!(out_of_sync["kind"], "outOfSync");
-        let taken = serde_json::to_value(SettingsError::shortcut_taken("Left Half")).unwrap();
+        let taken = serde_json::to_value(SettingsError::shortcut_taken("Left")).unwrap();
         assert_eq!(taken["kind"], "shortcutTaken");
+        let invalid = serde_json::to_value(SettingsError::invalid_shortcut("empty")).unwrap();
+        assert_eq!(invalid["kind"], "invalidShortcut");
     }
 }

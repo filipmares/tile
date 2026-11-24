@@ -144,6 +144,9 @@ pub struct Screen {
     /// Backing scale factor, e.g. 2.0 on a Retina or 200% display.
     pub scale_factor: f64,
     pub is_primary: bool,
+    /// Display refresh rate in Hz when reported by the OS (e.g. 60, 120, 144).
+    #[serde(default)]
+    pub refresh_rate_hz: Option<u32>,
 }
 
 impl Screen {
@@ -181,19 +184,6 @@ impl Screen {
                 .then(a.id.cmp(&b.id))
         });
         ordered
-    }
-
-    /// The screen `step` places away from `current` in geometric order,
-    /// wrapping at the ends. `step` of `-1` is previous, `+1` is next.
-    pub fn adjacent<'a>(screens: &'a [Screen], current: &Screen, step: i32) -> Option<&'a Screen> {
-        if screens.is_empty() || step == 0 {
-            return None;
-        }
-        let ordered = Screen::geometrically_ordered(screens);
-        let index = ordered.iter().position(|s| s.id == current.id)?;
-        let len = ordered.len() as i32;
-        let next = (index as i32 + step).rem_euclid(len) as usize;
-        Some(ordered[next])
     }
 
     /// Nearest display beyond the requested edge, without wrapping. Prefer
@@ -296,6 +286,7 @@ mod tests {
                 work_area: Rect::new(0.0, 0.0, 1000.0, 1000.0),
                 scale_factor: 1.0,
                 is_primary: true,
+                refresh_rate_hz: None,
             },
             Screen {
                 id: "b".into(),
@@ -303,6 +294,7 @@ mod tests {
                 work_area: Rect::new(1000.0, 0.0, 1000.0, 1000.0),
                 scale_factor: 1.0,
                 is_primary: false,
+                refresh_rate_hz: None,
             },
         ];
         // Window straddles both screens but is mostly on "b".
@@ -318,6 +310,7 @@ mod tests {
             work_area: Rect::new(0.0, 0.0, 100.0, 100.0),
             scale_factor: 1.0,
             is_primary: true,
+            refresh_rate_hz: None,
         }];
         let win = Rect::new(-5000.0, -5000.0, 10.0, 10.0);
         assert_eq!(Screen::best_match(&screens, &win).unwrap().id, "a");
@@ -330,6 +323,7 @@ mod tests {
             work_area: Rect::new(x, y, 100.0, 100.0),
             scale_factor: 1.0,
             is_primary: id == "a",
+            refresh_rate_hz: None,
         }
     }
 
@@ -342,6 +336,7 @@ mod tests {
             work_area: frame,
             scale_factor: scale,
             is_primary: false,
+            refresh_rate_hz: None,
         }
     }
 
@@ -465,29 +460,6 @@ mod tests {
             assert!(Screen::in_direction(&screens[..1], &screens[0], direction).is_none());
             assert!(Screen::in_direction(&screens, &screens[0], direction).is_none());
         }
-    }
-
-    #[test]
-    fn adjacent_walks_left_to_right_and_wraps() {
-        let screens = vec![
-            screen("c", 200.0, 0.0),
-            screen("a", 0.0, 0.0),
-            screen("b", 100.0, 50.0),
-        ];
-        let a = screens.iter().find(|s| s.id == "a").unwrap();
-        assert_eq!(Screen::adjacent(&screens, a, 1).unwrap().id, "b");
-        assert_eq!(Screen::adjacent(&screens, a, -1).unwrap().id, "c");
-        let c = screens.iter().find(|s| s.id == "c").unwrap();
-        assert_eq!(Screen::adjacent(&screens, c, 1).unwrap().id, "a");
-    }
-
-    #[test]
-    fn adjacent_is_identity_on_a_single_screen() {
-        let screens = vec![screen("only", 0.0, 0.0)];
-        assert_eq!(
-            Screen::adjacent(&screens, &screens[0], 1).unwrap().id,
-            "only"
-        );
     }
 
     #[test]

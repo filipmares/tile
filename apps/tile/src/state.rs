@@ -40,8 +40,8 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use tile_core::{
-    AnimationParams, Animator, Config, Engine, Hotkey, Plan, Rect, Screen, WindowAction, WindowId,
-    WindowSnapshot,
+    ActionTarget, AnimationConfig, AnimationParams, Animator, Config, Engine, Hotkey, KeyCode,
+    Modifiers, Plan, Rect, Screen, ShortcutGroup, WindowAction, WindowId, WindowSnapshot,
 };
 use tile_platform::{
     AnimationSession, HotkeyApplyReport, HotkeyBackend, HotkeyBinding, HotkeyCaptureListener,
@@ -402,7 +402,7 @@ impl AppState {
             backend.as_ref(),
             &mut engine,
             request,
-            animation.params(),
+            animation,
             &mut SleepPacer::new(),
             next,
             observe,
@@ -419,10 +419,11 @@ impl AppState {
             .map(|(hotkey, action)| HotkeyBinding {
                 hotkey,
                 action,
-                repeat: action.repeats_while_held(),
+                repeat: false,
             })
             .collect();
-        let result = lock(&self.hotkeys).apply(&bindings);
+        let compose_modifiers = config.compose_modifiers();
+        let result = lock(&self.hotkeys).apply(&bindings, compose_modifiers);
         let snapshot = {
             let mut status = lock(&self.hotkey_status);
             match result {
@@ -504,14 +505,23 @@ impl AppState {
     }
 
     #[cfg(test)]
-    pub fn set_binding(
+    pub fn set_key(
         &self,
         action: WindowAction,
-        hotkey: Option<Hotkey>,
+        key: Option<KeyCode>,
         replace: &[WindowAction],
     ) -> Result<Config, SettingsError> {
+        self.settings_transaction().set_key(action, key, replace)
+    }
+
+    #[cfg(test)]
+    pub fn set_group_modifiers(
+        &self,
+        group: ShortcutGroup,
+        modifiers: Modifiers,
+    ) -> Result<Config, SettingsError> {
         self.settings_transaction()
-            .set_binding(action, hotkey, replace)
+            .set_group_modifiers(group, modifiers)
     }
 
     #[cfg(test)]
@@ -624,23 +634,21 @@ impl SettingsTransaction<'_> {
         })
     }
 
-    /// Binds `hotkey` to `action` as one config change. Other actions holding
-    /// the hotkey are unbound in the same write only if every one of them is
-    /// in `replace`, the holders the user agreed to replace. Otherwise nothing
-    /// changes and the error names the holders, so a chord is never taken from
-    /// an action the user was not asked about, even one that picked it up
-    /// while they were being asked.
-    pub fn set_binding(
+    /// Assigns `key` to `action` under its group's modifier as one config
+    /// change. Other actions holding the resulting hotkey are cleared in the
+    /// same write only if every one of them is in `replace`.
+    pub fn set_key(
         &self,
         action: WindowAction,
-        hotkey: Option<Hotkey>,
+        key: Option<KeyCode>,
         replace: &[WindowAction],
     ) -> Result<Config, SettingsError> {
         self.state.commit_config(true, |config, undo| {
-            if let Some(hk) = hotkey {
+            if let Some(k) = key {
+                let hk = Hotkey::new(config.group_modifiers(action.group()), k);
                 let holders = config.actions_using(hk, action);
                 if holders.iter().any(|holder| !replace.contains(holder)) {
-                    let names: Vec<_> = holders.iter().map(ToString::to_string).collect();
+                    let names: Vec<_> = holders.iter().map(|a| a.label()).collect();
                     return Err(SettingsError::shortcut_taken(format!(
                         "{hk} is already used by {}",
                         names.join(", ")
@@ -648,7 +656,23 @@ impl SettingsTransaction<'_> {
                 }
             }
             *undo = None;
-            config.set_binding(action, hotkey);
+            config.set_key(action, key);
+            Ok(())
+        })
+    }
+
+    /// Updates the modifier combination shared by `group`. Fails if `modifiers`
+    /// is empty or collides with bound keys in the other group.
+    pub fn set_group_modifiers(
+        &self,
+        group: ShortcutGroup,
+        modifiers: Modifiers,
+    ) -> Result<Config, SettingsError> {
+        self.state.commit_config(true, |config, undo| {
+            config
+                .set_group_modifiers(group, modifiers)
+                .map_err(SettingsError::invalid_shortcut)?;
+            *undo = None;
             Ok(())
         })
     }
@@ -859,7 +883,7 @@ pub enum ActionOutcome {
 /// about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ActionReport {
-    pub action: WindowAction,
+    pub target: ActionTarget,
     pub outcome: ActionOutcome,
     /// The display the window is on, or heading for, counted left to right.
     /// `None` when there was no window to act on.
@@ -885,11 +909,11 @@ fn apply_once(
     observe: &mut dyn FnMut(ActionReport),
 ) -> tile_platform::Result<ActionOutcome> {
     let request = request.into();
-    let action = request.action;
+    let target_action = request.target;
     let Some(window) = backend.focused_window()? else {
-        log::debug!("ignoring {action}: no movable focused window");
+        log::debug!("ignoring {target_action}: no movable focused window");
         observe(ActionReport {
-            action,
+            target: target_action,
             outcome: ActionOutcome::NoWindow,
             screen: None,
         });
@@ -900,19 +924,19 @@ fn apply_once(
     match engine.plan_request(request, &window, &screens) {
         Plan::Move { id, target } => {
             let actual = backend.set_window_frame(id, target)?;
-            engine.commit(action, &window, actual);
-            log::debug!("performed {action} on window {id}");
+            engine.commit(target_action, &window, actual);
+            log::debug!("performed {target_action} on window {id}");
             observe(ActionReport {
-                action,
+                target: target_action,
                 outcome: ActionOutcome::Moved,
                 screen: screen_index(&screens, actual),
             });
             Ok(ActionOutcome::Moved)
         }
         Plan::NoOp(reason) => {
-            log::debug!("no-op for {action}: {reason:?}");
+            log::debug!("no-op for {target_action}: {reason:?}");
             observe(ActionReport {
-                action,
+                target: target_action,
                 outcome: ActionOutcome::NoOp,
                 screen: screen_index(&screens, window.frame),
             });
@@ -924,39 +948,27 @@ fn apply_once(
 /// A window currently travelling towards a target.
 struct Flight {
     id: WindowId,
-    /// The action that put it in motion, held so it can still be committed if
-    /// something supersedes it.
-    action: WindowAction,
+    /// The action or composed corner that put it in motion, held so it can
+    /// still be committed if something supersedes it.
+    target: ActionTarget,
     /// Where the window was when this action was planned. This is the "before"
     /// frame Restore will return to.
     window: WindowSnapshot,
     animator: Animator,
+    /// Pacing derived from the destination display's refresh rate.
+    params: AnimationParams,
     /// The backend's fast path for intermediate frames, opened up front and
     /// kept across retargets of the same window.
     session: Option<Box<dyn AnimationSession>>,
-    /// Whether [`Flight::action`] has already been recorded with the engine.
-    /// Set when a newly pressed hotkey supersedes this flight, so the action is
-    /// never committed twice.
+    /// Whether [`Flight::target`] has already been recorded with the engine.
     committed: bool,
 }
 
 impl Flight {
-    /// Starts a flight, opening the backend's animation session up front.
-    ///
-    /// The session is opened *before* the animator is constructed because
-    /// opening it is what restores a maximized, minimized or full-screen
-    /// window to its normal state — which moves the window. Building the
-    /// animator from the pre-restore frame would start the animation from a
-    /// rectangle the window no longer occupies, so the first frame would jump.
-    /// The frame is therefore re-read afterwards and used as the true origin.
-    ///
-    /// Only the animator's origin changes. `window` keeps the frame the action
-    /// was planned against, so Restore still returns the window to where it
-    /// was before Tile touched it, native state and all.
     fn begin(
         backend: &dyn WindowBackend,
         id: WindowId,
-        action: WindowAction,
+        target_action: ActionTarget,
         window: WindowSnapshot,
         target: Rect,
         params: AnimationParams,
@@ -964,55 +976,29 @@ impl Flight {
         let session = backend.begin_animation(id)?;
 
         let start = match session.as_ref() {
-            // Read through the session rather than re-querying the focused
-            // window. Opening the session is what restored the window, and on
-            // macOS that can take until the setup timeout — long enough for
-            // focus to move, which would make a `focused_window` read return
-            // the wrong window or nothing at all and silently fall back to the
-            // stale pre-restore frame.
             Some(open) => open.current_frame()?,
-            // No fast path: nothing has been restored yet, so the frame the
-            // action was planned against is still current.
             None => window.frame,
         };
 
         Ok(Self {
             id,
-            action,
+            target: target_action,
             animator: Animator::new(start, target, params),
+            params,
             window,
             session,
             committed: false,
         })
     }
 
-    /// Records this flight's action with the engine, at the target it is
-    /// heading for, unless that has already happened.
-    ///
-    /// The window may not have physically arrived, but the engine's model has
-    /// to match what the next plan will be computed against.
-    /// [`tile_core::history::WindowHistory::record`] only replaces the stored
-    /// original when the window is somewhere Tile did not put it, so Restore
-    /// still returns to the true pre-Tile frame.
     fn commit_to(&mut self, engine: &mut Engine) {
         if self.committed {
             return;
         }
-        engine.commit(self.action, &self.window, self.animator.target());
+        engine.commit(self.target, &self.window, self.animator.target());
         self.committed = true;
     }
 
-    /// Records the frame the window truly ended up with.
-    ///
-    /// When this flight was already committed at its target — because a
-    /// newly pressed hotkey superseded it and the plan that followed turned
-    /// out to be a no-op — the reconciliation has to start from that recorded
-    /// target, not from the original "before" frame.
-    /// [`tile_core::history::WindowHistory::record`] keeps the stored original
-    /// only when `before` matches the entry's `last_applied`; passing the
-    /// original again would no longer match, so it would insert a fresh entry
-    /// whose original is the mid-flight frame and send Restore back to a
-    /// rectangle the window never really occupied.
     fn commit_final(&self, engine: &mut Engine, actual: Rect) {
         let window = if self.committed {
             WindowSnapshot {
@@ -1022,21 +1008,25 @@ impl Flight {
         } else {
             self.window.clone()
         };
-        engine.commit(self.action, &window, actual);
+        engine.commit(self.target, &window, actual);
     }
 }
 
+fn params_for_target(
+    animation: AnimationConfig,
+    screens: &[Screen],
+    target: Rect,
+) -> AnimationParams {
+    let refresh_hz = Screen::best_match(screens, &target).and_then(|screen| screen.refresh_rate_hz);
+    animation.params(refresh_hz)
+}
+
 /// The animated pipeline.
-///
-/// Plans an action, animates the window towards the result, and keeps going if
-/// another action arrives mid-flight — retargeting rather than queueing, so a
-/// burst of hotkeys reads as one continuous movement instead of the window
-/// visibly stepping through every intermediate layout.
 fn animated_pipeline(
     backend: &dyn WindowBackend,
     engine: &mut Engine,
     request: impl Into<ActionRequest>,
-    params: AnimationParams,
+    animation: AnimationConfig,
     pacer: &mut dyn Pacer,
     next: &mut dyn FnMut() -> Option<ActionRequest>,
     observe: &mut dyn FnMut(ActionReport),
@@ -1047,7 +1037,7 @@ fn animated_pipeline(
         backend,
         engine,
         request.into(),
-        params,
+        animation,
         pacer,
         next,
         observe,
@@ -1055,17 +1045,6 @@ fn animated_pipeline(
         &mut outcome,
     );
 
-    // Any error anywhere above abandons the loop with the window possibly
-    // part-way through its journey. Leaving it there is not neutral: Tile's
-    // model has no record of the move, so the *next* action would treat that
-    // arbitrary intermediate rectangle as the frame the user chose and make it
-    // the Restore point. Land it on the target it was heading for and record
-    // that instead.
-    //
-    // Best effort by definition — whatever failed may well fail again, and
-    // `land` only commits once the move has actually succeeded, so a second
-    // failure leaves history untouched rather than claiming something false.
-    // The original error is what propagates either way.
     if result.is_err() {
         if let Some(stranded) = flight.take() {
             if let Err(err) = land(backend, engine, stranded) {
@@ -1077,46 +1056,33 @@ fn animated_pipeline(
     result.map(|()| outcome)
 }
 
-/// The pipeline proper. Hands its in-flight window back through `flight` so
-/// [`animated_pipeline`] can reconcile it if any step fails, and its verdict
-/// back through `outcome` so a caller can tell a real move from the two ways
-/// an action legitimately does nothing.
 #[allow(clippy::too_many_arguments)]
 fn run_animated_pipeline(
     backend: &dyn WindowBackend,
     engine: &mut Engine,
     request: ActionRequest,
-    params: AnimationParams,
+    animation: AnimationConfig,
     pacer: &mut dyn Pacer,
     next: &mut dyn FnMut() -> Option<ActionRequest>,
     observe: &mut dyn FnMut(ActionReport),
     flight: &mut Option<Flight>,
     outcome: &mut ActionOutcome,
 ) -> tile_platform::Result<()> {
-    // Only the first action can be exact. Anything that preempts it mid-flight
-    // came from a hotkey, so it keeps the ordinary repeat-to-cycle behaviour.
     let mut pending = Some(request);
 
     loop {
         if let Some(request) = pending.take() {
-            let action = request.action;
-            // Read everything fallible *before* touching the engine. Committing
-            // first and then failing on one of these would leave history and
-            // the cycle claiming the old target was applied while the window is
-            // still mid-flight.
+            let target_action = request.target;
             let focused = backend.focused_window()?;
             let screens = backend.screens()?;
 
             let Some(window) = focused else {
-                // Nothing to plan against, but a window already in flight
-                // must not be abandoned mid-air just because focus went
-                // somewhere unmovable.
-                log::debug!("ignoring {action}: no movable focused window");
+                log::debug!("ignoring {target_action}: no movable focused window");
                 if flight.is_none() {
                     *outcome = ActionOutcome::NoWindow;
                 }
                 observe(ActionReport {
-                    action,
+                    target: target_action,
                     outcome: ActionOutcome::NoWindow,
                     screen: None,
                 });
@@ -1127,24 +1093,10 @@ fn run_animated_pipeline(
             };
             let mut window = window;
 
-            // A flight that is about to be superseded has to be committed
-            // *before* the next plan, not after. `Engine::plan` reads the cycle
-            // state that `commit` writes, so committing afterwards leaves the
-            // plan one press behind: a third rapid LeftHalf would see the
-            // window at two thirds but a cycle still recorded at a half,
-            // decide the cycle had been broken, and jump back to a half
-            // instead of advancing. Restore has the same problem, seeing no
-            // history while the first move is still in the air.
             if let Some(in_flight) = flight.as_mut() {
                 in_flight.commit_to(engine);
             }
 
-            // A window that is mid-flight reports an interpolated frame that
-            // means nothing to the engine — it is neither where the window was
-            // nor where it is going. Plan against the destination instead, so
-            // a second press sees exactly the world it would have seen if the
-            // first move had already landed. This is what keeps size cycling
-            // (½ → ⅔ → ⅓) working on a fast double-press.
             if let Some(in_flight) = &flight {
                 if in_flight.id == window.id {
                     window.frame = in_flight.animator.target();
@@ -1154,9 +1106,6 @@ fn run_animated_pipeline(
             match engine.plan_request(request, &window, &screens) {
                 Plan::Move { id, target } => {
                     *outcome = ActionOutcome::Moved;
-                    // An action aimed at a *different* window must not leave
-                    // the current one stranded halfway. Land it on its exact
-                    // target first before moving on.
                     if let Some(previous) = flight.take() {
                         if previous.id == id {
                             *flight = Some(previous);
@@ -1165,47 +1114,37 @@ fn run_animated_pipeline(
                         }
                     }
 
+                    let params = params_for_target(animation, &screens, target);
                     match flight.as_mut() {
                         Some(in_flight) => {
-                            // Retarget without resetting velocity: the window
-                            // bends towards the new frame instead of stopping
-                            // dead and starting again. The superseded action
-                            // was committed above, so this flight now belongs
-                            // to the new one.
                             in_flight.animator.retarget(target);
-                            in_flight.action = action;
+                            in_flight.params = params;
+                            in_flight.target = target_action;
                             in_flight.window = window;
                             in_flight.committed = false;
                         }
                         None => {
-                            *flight =
-                                Some(Flight::begin(backend, id, action, window, target, params)?);
+                            *flight = Some(Flight::begin(
+                                backend,
+                                id,
+                                target_action,
+                                window,
+                                target,
+                                params,
+                            )?);
                         }
                     }
 
-                    // Only now is the move a fact rather than a plan: the
-                    // window was found, planned against, and successfully
-                    // opened for animation — three real round-trips with the
-                    // OS. No pixel has moved yet, which is the point. The
-                    // walkthrough's own little pane sets off at the same
-                    // instant as the window it is describing, rather than
-                    // waiting for it to arrive and then repeating the journey.
-                    //
-                    // The display reported is the one the window is heading
-                    // *for*, not the one it is leaving, so a throw across
-                    // screens moves the miniature with the window.
                     observe(ActionReport {
-                        action,
+                        target: target_action,
                         outcome: ActionOutcome::Moved,
                         screen: screen_index(&screens, target),
                     });
                 }
                 Plan::NoOp(reason) => {
-                    // Nothing to do for this action, but a window already in
-                    // flight must still finish its journey.
-                    log::debug!("no-op for {action}: {reason:?}");
+                    log::debug!("no-op for {target_action}: {reason:?}");
                     observe(ActionReport {
-                        action,
+                        target: target_action,
                         outcome: ActionOutcome::NoOp,
                         screen: screen_index(&screens, window.frame),
                     });
@@ -1214,7 +1153,6 @@ fn run_animated_pipeline(
         }
 
         let Some(in_flight) = flight.as_mut() else {
-            // Nothing pending and nothing moving.
             break;
         };
 
@@ -1223,23 +1161,19 @@ fn run_animated_pipeline(
             in_flight.id,
             &mut in_flight.session,
             &mut in_flight.animator,
-            params,
+            in_flight.params,
             pacer,
             next,
         )? {
             Interruption::Settled(actual) => {
-                // Commit with the frame the window truly ended up with, not
-                // the one that was planned: an app enforcing a minimum size or
-                // size increments will not have honoured the request exactly,
-                // and history and no-op detection need the truth.
                 if let Some(landed) = flight.take() {
                     landed.commit_final(engine, actual);
-                    log::debug!("performed {} on window {}", landed.action, landed.id);
+                    log::debug!("performed {} on window {}", landed.target, landed.id);
                 }
                 break;
             }
             Interruption::Preempted(request) => {
-                log::debug!("{} arrived mid-flight; retargeting", request.action);
+                log::debug!("{} arrived mid-flight; retargeting", request.target);
                 pending = Some(request);
             }
         }
@@ -1257,19 +1191,13 @@ fn land(
 ) -> tile_platform::Result<()> {
     let target = flight.animator.target();
 
-    // As in the pump, prefer the session: it addresses the window directly, so
-    // this still works when focus has already moved on — which is precisely
-    // the situation that gets a flight landed early.
     let actual = match flight.session.as_mut() {
         Some(open) => open.finish(target)?,
         None => backend.set_window_frame(flight.id, target)?,
     };
 
-    // Commit with the true frame. `commit_final` reconciles correctly whether
-    // or not this flight was already committed at its target when it was
-    // superseded, so the stored original — and therefore Restore — survives.
     flight.commit_final(engine, actual);
-    log::debug!("landed {} on window {}", flight.action, flight.id);
+    log::debug!("landed {} on window {}", flight.target, flight.id);
     Ok(())
 }
 
@@ -1282,7 +1210,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use tile_core::{AnimationConfig, Hotkey, KeyCode, Modifiers, Screen};
+    use tile_core::{AnimationConfig, Corner, Hotkey, KeyCode, Modifiers, Screen, ShortcutGroup};
 
     use super::*;
 
@@ -1318,6 +1246,8 @@ mod tests {
         via_session: Rc<RefCell<Vec<Rect>>>,
         /// Whether the last frame was landed through `AnimationSession::finish`.
         finished_via_session: Rc<RefCell<bool>>,
+        /// Reported display refresh rate in Hz.
+        refresh_rate_hz: Option<u32>,
     }
 
     impl FakeBackend {
@@ -1332,6 +1262,7 @@ mod tests {
                 fail_after: None,
                 via_session: Rc::new(RefCell::new(Vec::new())),
                 finished_via_session: Rc::new(RefCell::new(false)),
+                refresh_rate_hz: Some(90),
             }
         }
 
@@ -1414,6 +1345,7 @@ mod tests {
                 work_area: Rect::new(0.0, 0.0, 1920.0, 1080.0),
                 scale_factor: 1.0,
                 is_primary: true,
+                refresh_rate_hz: self.refresh_rate_hz,
             }])
         }
 
@@ -1493,38 +1425,29 @@ mod tests {
             animation: AnimationConfig {
                 enabled: true,
                 duration_ms: 140,
-                fps: 90,
             },
             ..Default::default()
         };
         Engine::new(config)
     }
 
-    /// The frame rates a rate-sensitive test has to hold at.
-    ///
-    /// Every platform cap Tile ships, resolved against the configured rate,
-    /// plus the configurable floor. Running all of them from one host is what
-    /// stops a frame-rate-dependent assertion passing here and failing on
-    /// another platform's CI runner — which it did, twice, before this existed.
+    fn animation_config() -> AnimationConfig {
+        AnimationConfig {
+            enabled: true,
+            duration_ms: 340,
+        }
+    }
+
     fn rates_to_cover() -> Vec<u32> {
-        let configured = params().fps;
         let mut rates: Vec<u32> = animate::ALL_FPS_CAPS
             .iter()
-            .map(|cap| cap.map_or(configured, |cap| configured.min(cap)))
+            .map(|cap| cap.map_or(90, |cap| 90u32.min(cap)))
             .collect();
-        // The lowest rate `Config::normalize` will hand over, where a single
-        // frame covers most of the journey.
         rates.push(tile_core::config::MIN_ANIMATION_FPS);
+        rates.push(120);
         rates.sort_unstable();
         rates.dedup();
         rates
-    }
-
-    fn params() -> AnimationParams {
-        AnimationParams {
-            duration_ms: 340,
-            fps: 90,
-        }
     }
 
     /// A pacer that never sleeps and always reports the nominal interval.
@@ -1576,7 +1499,7 @@ mod tests {
             &backend,
             &mut engine,
             WindowAction::LeftHalf,
-            params(),
+            animation_config(),
             &mut FixedPacer,
             &mut || None,
             &mut |_| {},
@@ -1596,10 +1519,6 @@ mod tests {
 
     #[test]
     fn a_third_press_mid_flight_keeps_advancing_the_cycle() {
-        // The commit has to happen *before* the next plan. When it lagged one
-        // press behind, a third rapid LeftHalf saw the window at two thirds
-        // but a cycle still recorded at a half, concluded the cycle had been
-        // broken, and jumped back to a half instead of advancing.
         let backend = FakeBackend::new();
         let mut engine = engine_with_animation();
 
@@ -1607,7 +1526,7 @@ mod tests {
             &backend,
             &mut engine,
             WindowAction::LeftHalf,
-            params(),
+            animation_config(),
             &mut FixedPacer,
             &mut after_frames(2, vec![WindowAction::LeftHalf, WindowAction::LeftHalf]),
             &mut |_| {},
@@ -1632,15 +1551,15 @@ mod tests {
 
         let mut queued = vec![
             ActionRequest::composed(WindowAction::LeftHalf),
-            ActionRequest::from(WindowAction::TopLeft),
-            ActionRequest::composed(WindowAction::TopLeft),
+            ActionRequest::from(Corner::TopLeft),
+            ActionRequest::composed(Corner::TopLeft),
         ];
         let mut frame = 0usize;
         animated_pipeline(
             &backend,
             &mut engine,
             WindowAction::LeftHalf,
-            params(),
+            animation_config(),
             &mut FixedPacer,
             &mut || {
                 frame += 1;
@@ -1656,7 +1575,7 @@ mod tests {
             &backend,
             &mut engine,
             WindowAction::LeftHalf,
-            params(),
+            animation_config(),
             &mut FixedPacer,
             &mut || None,
             &mut |_| {},
@@ -1667,10 +1586,6 @@ mod tests {
 
     #[test]
     fn losing_focus_mid_flight_still_lands_the_window() {
-        // A preempting action arrives, but by the time it is planned there is
-        // no movable focused window. The flight must not simply be dropped:
-        // that leaves the window on its last intermediate frame with its
-        // action never committed.
         let backend = FakeBackend::new();
         let mut engine = engine_with_animation();
 
@@ -1679,14 +1594,13 @@ mod tests {
             &backend,
             &mut engine,
             WindowAction::LeftHalf,
-            params(),
+            animation_config(),
             &mut FixedPacer,
             &mut || {
                 frame += 1;
                 if frame == 2 {
-                    // Focus disappears at the same moment as the next press.
                     *backend.focus_lost.borrow_mut() = true;
-                    Some(WindowAction::TopHalf.into())
+                    Some(WindowAction::Maximize.into())
                 } else {
                     None
                 }
@@ -1695,16 +1609,14 @@ mod tests {
         )
         .unwrap();
 
-        // The window finished on the target it was already heading for.
         assert_eq!(backend.last_frame(), Rect::new(0.0, 0.0, 960.0, 1080.0));
 
-        // ...and the move was committed, so Restore still works.
         *backend.focus_lost.borrow_mut() = false;
         animated_pipeline(
             &backend,
             &mut engine,
             WindowAction::Restore,
-            params(),
+            animation_config(),
             &mut FixedPacer,
             &mut || None,
             &mut |_| {},
@@ -1715,28 +1627,21 @@ mod tests {
 
     #[test]
     fn the_animation_starts_from_the_frame_left_by_the_restore() {
-        // Opening the session is what leaves a maximized or full-screen
-        // window, and that moves the window. Starting the animator from the
-        // pre-restore rectangle would make the first frame jump.
         let restored = Rect::new(300.0, 300.0, 500.0, 400.0);
         let planned_against = Rect::new(100.0, 100.0, 400.0, 300.0);
 
-        // Run at every rate a platform cap can produce, plus the configurable
-        // floor. How far a single frame travels depends on the rate, so a test
-        // that inspects the first frame has to hold at all of them.
         for fps in rates_to_cover() {
-            let backend = FakeBackend::with_restore_to(restored);
+            let mut backend = FakeBackend::with_restore_to(restored);
+            backend.refresh_rate_hz = Some(fps);
             let mut engine = engine_with_animation();
-            let params = AnimationParams {
-                duration_ms: 340,
-                fps,
-            };
+            let anim = animation_config();
+            let params = anim.params(Some(fps));
 
             animated_pipeline(
                 &backend,
                 &mut engine,
                 WindowAction::LeftHalf,
-                params,
+                anim,
                 &mut FixedPacer,
                 &mut || None,
                 &mut |_| {},
@@ -1746,16 +1651,6 @@ mod tests {
             let frames = backend.via_session.borrow();
             let first = *frames.first().expect("no frame was applied");
 
-            // Predict the first frame from each candidate origin using the
-            // animator directly, which is deterministic, and assert the
-            // observed frame matches the restored one exactly.
-            //
-            // This is deliberately not a distance tolerance. How far a single
-            // frame travels depends on the frame rate — at 15fps the first
-            // frame is already most of the way there — so any threshold that
-            // separates the two origins at one rate fails at another. An
-            // earlier version of this test did exactly that and passed on
-            // Windows while failing on macOS's 45fps cap.
             let interval = animate::effective_interval(params);
             let target = Rect::new(0.0, 0.0, 960.0, 1080.0);
             let from_restored = Animator::new(restored, target, params).step(interval);
@@ -1767,8 +1662,7 @@ mod tests {
             );
             assert_ne!(
                 from_restored, from_planned,
-                "at {fps}fps the two origins are indistinguishable, so this \
-                 test proves nothing"
+                "at {fps}fps the two origins are indistinguishable"
             );
             assert_eq!(*frames.last().unwrap(), target);
         }
@@ -1776,9 +1670,6 @@ mod tests {
 
     #[test]
     fn the_final_frame_lands_through_the_session() {
-        // `set_window_frame` identifies the window by focus on macOS, so the
-        // last frame has to go through the session's retained handle instead —
-        // otherwise a click elsewhere mid-animation strands the window.
         let backend = FakeBackend::with_restore_to(Rect::new(300.0, 300.0, 500.0, 400.0));
         let mut engine = engine_with_animation();
 
@@ -1786,7 +1677,7 @@ mod tests {
             &backend,
             &mut engine,
             WindowAction::LeftHalf,
-            params(),
+            animation_config(),
             &mut FixedPacer,
             &mut || None,
             &mut |_| {},
@@ -1797,17 +1688,11 @@ mod tests {
             *backend.finished_via_session.borrow(),
             "the final frame did not go through the session"
         );
-        // Nothing went through the focus-dependent path at all.
         assert!(backend.frames.borrow().is_empty());
     }
 
     #[test]
     fn an_action_on_another_window_lands_the_first_one() {
-        // The different-window preemption path: the flight in progress must be
-        // finalized and committed before the new window is planned, or it is
-        // left on an intermediate frame with no history entry. Every other
-        // test retargets a single window, so this is the only coverage of
-        // `land` being reached through a focus change.
         let backend = FakeBackend::new();
         let mut engine = engine_with_animation();
         let first_original = backend.focused_window().unwrap().unwrap().frame;
@@ -1816,11 +1701,9 @@ mod tests {
             &backend,
             &mut engine,
             WindowAction::LeftHalf,
-            params(),
+            animation_config(),
             &mut FixedPacer,
             &mut || {
-                // Focus moves to a second window at the same moment the next
-                // action arrives.
                 if *backend.focused_id.borrow() == 1 && !backend.frames.borrow().is_empty() {
                     *backend.focused_id.borrow_mut() = 2;
                     Some(WindowAction::RightHalf.into())
@@ -1832,10 +1715,7 @@ mod tests {
         )
         .unwrap();
 
-        // The second window ends on its own target.
         assert_eq!(backend.last_frame(), Rect::new(960.0, 0.0, 960.0, 1080.0));
-
-        // The first window was landed on the left half, not abandoned...
         assert!(
             backend
                 .frames
@@ -1844,17 +1724,11 @@ mod tests {
                 .any(|f| *f == Rect::new(0.0, 0.0, 960.0, 1080.0)),
             "the first window was never landed on its target"
         );
-        // ...and committed, so its Restore point is the pre-Tile frame.
         assert_eq!(engine.history.peek(1), Some(first_original));
     }
 
     #[test]
     fn a_failure_mid_flight_does_not_strand_the_window() {
-        // Accessibility revocation makes intermediate frames fail. The error
-        // must still reach the caller — the permission dialog depends on it —
-        // but the window must not be left on an arbitrary intermediate frame
-        // with no record of the move, or the next action would treat that
-        // rectangle as the user's own placement and make it the Restore point.
         let backend = FakeBackend::failing_after(3);
         let mut engine = engine_with_animation();
         let original = backend.focused_window().unwrap().unwrap().frame;
@@ -1863,7 +1737,7 @@ mod tests {
             &backend,
             &mut engine,
             WindowAction::LeftHalf,
-            params(),
+            animation_config(),
             &mut FixedPacer,
             &mut || None,
             &mut |_| {},
@@ -1874,7 +1748,6 @@ mod tests {
             "the original error must propagate unchanged, got {err}"
         );
 
-        // The window was landed on the target it was heading for.
         assert!(
             *backend.finished_via_session.borrow(),
             "the stranded flight was never landed"
@@ -1883,32 +1756,14 @@ mod tests {
             *backend.via_session.borrow().last().unwrap(),
             Rect::new(0.0, 0.0, 960.0, 1080.0)
         );
-
-        // ...and recorded, so Restore still points at the pre-Tile frame
-        // rather than at wherever the animation happened to stop.
         assert_eq!(engine.history.peek(1), Some(original));
     }
 
     #[test]
     fn a_no_op_after_a_retarget_does_not_corrupt_restore() {
-        // The sequence that used to poison history: an action is committed at
-        // its target when a second press supersedes it, the second is
-        // committed when a third arrives, and the third turns out to be a
-        // no-op — so the flight settles while already marked committed.
-        //
-        // Reconciling that from the flight's original "before" frame no longer
-        // matches the stored `last_applied`, so history inserted a fresh entry
-        // whose original was the mid-flight frame, and Restore returned there
-        // instead of to the pre-Tile position.
         let backend = FakeBackend::new();
-        // `DoNothing` is what makes the third press a no-op rather than a
-        // cycle step.
         let config = Config {
-            animation: AnimationConfig {
-                enabled: true,
-                duration_ms: 340,
-                fps: 90,
-            },
+            animation: animation_config(),
             subsequent_execution_mode: tile_core::SubsequentExecutionMode::DoNothing,
             ..Default::default()
         };
@@ -1919,9 +1774,9 @@ mod tests {
             &backend,
             &mut engine,
             WindowAction::LeftHalf,
-            params(),
+            animation_config(),
             &mut FixedPacer,
-            &mut after_frames(2, vec![WindowAction::TopHalf, WindowAction::TopHalf]),
+            &mut after_frames(2, vec![WindowAction::CenterHalf, WindowAction::CenterHalf]),
             &mut |_| {},
         )
         .unwrap();
@@ -1930,7 +1785,7 @@ mod tests {
             &backend,
             &mut engine,
             WindowAction::Restore,
-            params(),
+            animation_config(),
             &mut FixedPacer,
             &mut || None,
             &mut |_| {},
@@ -1954,7 +1809,7 @@ mod tests {
             &backend,
             &mut engine,
             WindowAction::LeftHalf,
-            params(),
+            animation_config(),
             &mut FixedPacer,
             &mut || None,
             &mut |_| {},
@@ -1964,23 +1819,18 @@ mod tests {
             &backend,
             &mut engine,
             WindowAction::Restore,
-            params(),
+            animation_config(),
             &mut FixedPacer,
             &mut || None,
             &mut |_| {},
         )
         .unwrap();
 
-        // Restore must return the window to where it was before Tile touched
-        // it, not to some frame sampled mid-animation.
         assert_eq!(backend.last_frame(), original);
     }
 
     #[test]
     fn the_committed_frame_is_the_one_the_app_allowed() {
-        // An app with a minimum size does not honour the planned rectangle.
-        // History has to record what actually happened, or Restore and no-op
-        // detection drift out of step with reality.
         let backend = FakeBackend::with_min_size(1200.0, 200.0);
         let mut engine = engine_with_animation();
 
@@ -1988,7 +1838,7 @@ mod tests {
             &backend,
             &mut engine,
             WindowAction::LeftHalf,
-            params(),
+            animation_config(),
             &mut FixedPacer,
             &mut || None,
             &mut |_| {},
@@ -2007,23 +1857,18 @@ mod tests {
             &backend,
             &mut engine,
             WindowAction::LeftHalf,
-            params(),
+            animation_config(),
             &mut FixedPacer,
-            &mut after_frames(2, vec![WindowAction::TopHalf]),
+            &mut after_frames(2, vec![WindowAction::Maximize]),
             &mut |_| {},
         )
         .unwrap();
 
-        // The left half was abandoned in flight; the top half is where the
-        // window actually comes to rest.
-        assert_eq!(backend.last_frame(), Rect::new(0.0, 0.0, 1920.0, 540.0));
+        assert_eq!(backend.last_frame(), Rect::new(0.0, 0.0, 1920.0, 1080.0));
     }
 
     #[test]
     fn a_repeat_arriving_mid_flight_still_advances_the_size_cycle() {
-        // The regression this pipeline exists to avoid: a second press has to
-        // see the world as though the first move had landed, or a fast
-        // double-press sits on the half instead of cycling to two thirds.
         let backend = FakeBackend::new();
         let mut engine = engine_with_animation();
 
@@ -2031,7 +1876,7 @@ mod tests {
             &backend,
             &mut engine,
             WindowAction::LeftHalf,
-            params(),
+            animation_config(),
             &mut FixedPacer,
             &mut after_frames(2, vec![WindowAction::LeftHalf]),
             &mut |_| {},
@@ -2047,45 +1892,33 @@ mod tests {
 
     #[test]
     fn every_press_is_reported_even_when_absorbed_mid_flight() {
-        // The walkthrough counts presses. A burst returns a single verdict —
-        // everything after the first press is swallowed to retarget the
-        // flight — so the observer, not the return value, is what has to see
-        // all three.
         let backend = FakeBackend::new();
         let mut engine = engine_with_animation();
-        let mut seen: Vec<(WindowAction, ActionOutcome)> = Vec::new();
+        let mut seen: Vec<(ActionTarget, ActionOutcome)> = Vec::new();
 
         animated_pipeline(
             &backend,
             &mut engine,
             WindowAction::LeftHalf,
-            params(),
+            animation_config(),
             &mut FixedPacer,
-            &mut after_frames(2, vec![WindowAction::TopHalf, WindowAction::RightHalf]),
-            &mut |report| seen.push((report.action, report.outcome)),
+            &mut after_frames(2, vec![WindowAction::Maximize, WindowAction::RightHalf]),
+            &mut |report| seen.push((report.target, report.outcome)),
         )
         .unwrap();
 
         assert_eq!(
             seen,
             vec![
-                (WindowAction::LeftHalf, ActionOutcome::Moved),
-                (WindowAction::TopHalf, ActionOutcome::Moved),
-                (WindowAction::RightHalf, ActionOutcome::Moved),
+                (WindowAction::LeftHalf.into(), ActionOutcome::Moved),
+                (WindowAction::Maximize.into(), ActionOutcome::Moved),
+                (WindowAction::RightHalf.into(), ActionOutcome::Moved),
             ]
         );
     }
 
     #[test]
     fn a_move_is_reported_before_the_window_starts_travelling() {
-        // Reporting on arrival would leave the walkthrough silent for the
-        // whole animation, then ask it to replay a journey the user has
-        // already watched. The report lands before the first frame, so both
-        // windows move together.
-        //
-        // It is not a guess: by then the window has been found, planned
-        // against, and opened for animation, and a failure later in the pump
-        // still lands the window on this exact target.
         let backend = FakeBackend::new();
         let mut engine = engine_with_animation();
         let mut frames_at_report = None;
@@ -2094,7 +1927,7 @@ mod tests {
             &backend,
             &mut engine,
             WindowAction::LeftHalf,
-            params(),
+            animation_config(),
             &mut FixedPacer,
             &mut || None,
             &mut |_| frames_at_report = Some(backend.frames.borrow().len()),
@@ -2119,9 +1952,9 @@ mod tests {
             &backend,
             &mut engine,
             WindowAction::LeftHalf,
-            params(),
+            animation_config(),
             &mut FixedPacer,
-            &mut after_frames(2, vec![WindowAction::TopHalf, WindowAction::RightHalf]),
+            &mut after_frames(2, vec![WindowAction::Maximize, WindowAction::RightHalf]),
             &mut |_| {},
         )
         .unwrap();
@@ -2147,37 +1980,20 @@ mod tests {
         assert_eq!(backend.last_frame(), Rect::new(0.0, 0.0, 960.0, 1080.0));
     }
 
-    /// A tray item labelled "½" must not cycle to ⅔ when chosen twice, on
-    /// either pipeline.
+    /// Tray menu clicks now cycle on repeats while still carrying menu origin.
     #[test]
-    fn exact_requests_do_not_cycle() {
-        let half = Rect::new(0.0, 0.0, 960.0, 1080.0);
-        let exact = ActionRequest::exact(WindowAction::LeftHalf);
+    fn menu_requests_cycle_on_repeat_clicks() {
+        let menu = ActionRequest::from_menu(WindowAction::LeftHalf);
 
         let backend = FakeBackend::new();
         let mut engine = Engine::new(Config::default());
-        apply_once(&backend, &mut engine, exact, &mut |_| {}).unwrap();
+        apply_once(&backend, &mut engine, menu, &mut |_| {}).unwrap();
+        assert_eq!(backend.last_frame(), Rect::new(0.0, 0.0, 960.0, 1080.0));
         assert_eq!(
-            apply_once(&backend, &mut engine, exact, &mut |_| {}).unwrap(),
-            ActionOutcome::NoOp
+            apply_once(&backend, &mut engine, menu, &mut |_| {}).unwrap(),
+            ActionOutcome::Moved
         );
-        assert_eq!(backend.last_frame(), half);
-
-        let backend = FakeBackend::new();
-        let mut engine = engine_with_animation();
-        for _ in 0..2 {
-            animated_pipeline(
-                &backend,
-                &mut engine,
-                exact,
-                params(),
-                &mut FixedPacer,
-                &mut || None,
-                &mut |_| {},
-            )
-            .unwrap();
-        }
-        assert_eq!(backend.last_frame(), half);
+        assert_eq!(backend.last_frame(), Rect::new(0.0, 0.0, 1280.0, 1080.0));
     }
 
     /// The welcome walkthrough ticks a step off on `Moved` and asks the user
@@ -2261,6 +2077,7 @@ mod tests {
                     work_area: Self::PRIMARY,
                     scale_factor: 1.0,
                     is_primary: true,
+                    refresh_rate_hz: Some(60),
                 },
                 Screen {
                     id: "left".into(),
@@ -2268,6 +2085,7 @@ mod tests {
                     work_area: Self::LEFT,
                     scale_factor: 1.0,
                     is_primary: false,
+                    refresh_rate_hz: Some(120),
                 },
             ])
         }
@@ -2386,6 +2204,7 @@ mod tests {
         fn apply(
             &mut self,
             _bindings: &[HotkeyBinding],
+            _compose_modifiers: Option<Modifiers>,
         ) -> tile_platform::Result<HotkeyApplyReport> {
             self.applies.fetch_add(1, Ordering::Relaxed);
             Ok(HotkeyApplyReport::default())
@@ -2608,20 +2427,20 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A chord held by another action is only moved when the user chose
-    /// Replace; otherwise nothing is written, applied, or taken.
+    /// A key held by another action in the same modifier group is only moved
+    /// when the user chose Replace; otherwise nothing is written or applied.
     #[test]
-    fn binding_a_taken_shortcut_needs_replace() {
+    fn binding_a_taken_key_needs_replace() {
         let dir =
             std::env::temp_dir().join(format!("tile-taken-{}-{}", std::process::id(), line!()));
         std::fs::create_dir_all(&dir).unwrap();
 
         let (state, applies) = state_counting_applies(&dir, false);
         let before = state.config();
-        let hk = before.binding(WindowAction::LeftHalf).unwrap();
+        let left_key = before.key(WindowAction::LeftHalf).unwrap();
 
         let err = state
-            .set_binding(WindowAction::Center, Some(hk), &[])
+            .set_key(WindowAction::CenterHalf, Some(left_key), &[])
             .unwrap_err();
         assert_eq!(
             err.kind,
@@ -2630,10 +2449,12 @@ mod tests {
         assert_eq!(state.config(), before);
         assert_eq!(applies.load(Ordering::Relaxed), 0);
 
-        // Approval to replace one action does not cover a different holder,
-        // such as one that took the chord while the user was being asked.
         let err = state
-            .set_binding(WindowAction::Center, Some(hk), &[WindowAction::RightHalf])
+            .set_key(
+                WindowAction::CenterHalf,
+                Some(left_key),
+                &[WindowAction::RightHalf],
+            )
             .unwrap_err();
         assert_eq!(
             err.kind,
@@ -2642,17 +2463,56 @@ mod tests {
         assert_eq!(state.config(), before);
 
         let config = state
-            .set_binding(WindowAction::Center, Some(hk), &[WindowAction::LeftHalf])
+            .set_key(
+                WindowAction::CenterHalf,
+                Some(left_key),
+                &[WindowAction::LeftHalf],
+            )
             .unwrap();
-        assert_eq!(config.binding(WindowAction::Center), Some(hk));
-        assert_eq!(config.binding(WindowAction::LeftHalf), None);
+        assert_eq!(config.key(WindowAction::CenterHalf), Some(left_key));
+        assert_eq!(config.key(WindowAction::LeftHalf), None);
         assert_eq!(applies.load(Ordering::Relaxed), 1);
 
-        // Clearing, or rebinding a chord to its own action, is never a conflict.
+        // Clearing or rebinding the same key to its own action is never a conflict.
         state
-            .set_binding(WindowAction::Center, Some(hk), &[])
+            .set_key(WindowAction::CenterHalf, Some(left_key), &[])
             .unwrap();
-        state.set_binding(WindowAction::Center, None, &[]).unwrap();
+        state.set_key(WindowAction::CenterHalf, None, &[]).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn group_modifiers_reject_empty_or_colliding_and_persist_valid_changes() {
+        let dir = reset_test_dir(line!());
+        let state = state_with_orientation(&dir, false);
+
+        // Empty modifier is rejected.
+        let err = state
+            .set_group_modifiers(ShortcutGroup::Placement, Modifiers::NONE)
+            .unwrap_err();
+        assert_eq!(
+            err.kind,
+            crate::settings_error::SettingsErrorKind::InvalidShortcut
+        );
+
+        // Matching modifiers while both groups bind arrow keys is rejected.
+        let base = state.config().placement_modifiers;
+        let err = state
+            .set_group_modifiers(ShortcutGroup::Displays, base)
+            .unwrap_err();
+        assert_eq!(
+            err.kind,
+            crate::settings_error::SettingsErrorKind::InvalidShortcut
+        );
+
+        // Distinct custom modifier succeeds and persists.
+        let custom = Modifiers::CONTROL | Modifiers::SHIFT;
+        let saved = state
+            .set_group_modifiers(ShortcutGroup::Placement, custom)
+            .unwrap();
+        assert_eq!(saved.placement_modifiers, custom);
+        assert_eq!(crate::config_store::load_from_dir(&dir).config, saved);
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2665,7 +2525,7 @@ mod tests {
     /// The user's settings as they stood before a reset in these tests.
     fn customised() -> Config {
         let mut config = Config::default();
-        config.set_binding(WindowAction::LeftHalf, None);
+        config.set_key(WindowAction::LeftHalf, None);
         config.gaps.window = 12.0;
         config.launch_on_login = false;
         config.animation.enabled = false;
@@ -2721,46 +2581,6 @@ mod tests {
             state.undo_reset_to_defaults(None).unwrap().is_none(),
             "an undo is used up once taken"
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// Settings ▸ Advanced saves through the same path as every other
-    /// control, so its values persist, reset to defaults, and come back on
-    /// undo.
-    #[test]
-    fn advanced_settings_persist_reset_and_undo() {
-        use tile_core::AdvancedSetting;
-
-        let dir = reset_test_dir(line!());
-        let state = state_with_orientation(&dir, false);
-        state
-            .update_config(|config| config.set_advanced(AdvancedSetting::MoveStep(32.0)))
-            .unwrap();
-        let saved = state
-            .update_config(|config| {
-                config.set_advanced(AdvancedSetting::AlmostMaximizeWidth(1.5));
-                config.set_advanced(AdvancedSetting::AnimationFps(60));
-            })
-            .unwrap();
-        assert_eq!(saved.move_step, 32.0);
-        assert_eq!(saved.almost_maximize_width, 1.0, "clamped, not defaulted");
-        assert_eq!(saved.animation.fps, 60);
-        assert_eq!(crate::config_store::load_from_dir(&dir).config, saved);
-
-        let defaults = Config::default();
-        let reset = state.reset_to_defaults(default_login()).unwrap();
-        assert_eq!(reset.move_step, defaults.move_step);
-        assert_eq!(reset.almost_maximize_width, defaults.almost_maximize_width);
-        assert_eq!(reset.animation.fps, defaults.animation.fps);
-
-        let restored = state
-            .undo_reset_to_defaults(None)
-            .unwrap()
-            .expect("nothing changed since the reset");
-        assert_eq!(restored.move_step, 32.0);
-        assert_eq!(restored.almost_maximize_width, 1.0);
-        assert_eq!(restored.animation.fps, 60);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3096,6 +2916,7 @@ mod tests {
         fn apply(
             &mut self,
             _bindings: &[HotkeyBinding],
+            _compose_modifiers: Option<Modifiers>,
         ) -> tile_platform::Result<HotkeyApplyReport> {
             self.results
                 .pop_front()

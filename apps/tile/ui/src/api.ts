@@ -3,7 +3,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import {
   AccessibilityHelp,
-  AdvancedSetting,
   BuildInfo,
   Config,
   ConfigRecovery,
@@ -12,7 +11,9 @@ import {
   GrantStep,
   Hotkey,
   HotkeyStatus,
+  KeyCode,
   PermissionStatus,
+  ShortcutGroup,
   SubsequentExecutionMode,
   UpdateStatus,
   WelcomeStatus,
@@ -36,15 +37,21 @@ export const revealConfigBackup = (): Promise<void> =>
   invoke("reveal_config_backup");
 
 /**
- * Binds `hotkey` to `action`. Rejects with `shortcutTaken` if another action
- * uses it, unless that action is in `replace` (the holders the user agreed
- * to replace), which unbinds it in the same write.
+ * Assigns `key` to `action` under its group's modifier. Rejects with
+ * `shortcutTaken` if another action uses the resulting chord, unless that
+ * action is listed in `replace`, which clears it in the same write.
  */
-export const setBinding = (
+export const setKey = (
   action: WindowAction,
-  hotkey: Hotkey | null,
+  key: KeyCode | null,
   replace: WindowAction[] = [],
-): Promise<Config> => invoke("set_binding", { action, hotkey, replace });
+): Promise<Config> => invoke("set_key", { action, key, replace });
+
+/** Updates the modifier combination shared by `group`. */
+export const setGroupModifiers = (
+  group: ShortcutGroup,
+  modifiers: number,
+): Promise<Config> => invoke("set_group_modifiers", { group, modifiers });
 
 export const setGaps = (gaps: Gaps): Promise<Config> =>
   invoke("set_gaps", { gaps });
@@ -59,10 +66,6 @@ export const setAnimation = (enabled: boolean): Promise<Config> =>
 
 export const setAnimationDuration = (durationMs: number): Promise<Config> =>
   invoke("set_animation_duration", { durationMs });
-
-/** Sets one Settings ▸ Advanced knob; the backend clamps it. */
-export const setAdvanced = (setting: AdvancedSetting): Promise<Config> =>
-  invoke("set_advanced", { setting });
 
 export const setLaunchOnLogin = (enabled: boolean): Promise<Config> =>
   invoke("set_launch_on_login", { enabled });

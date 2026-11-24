@@ -148,13 +148,12 @@ body {
     animation: about-fade-in 240ms ease-out both;
   }
 
-  .all-shortcuts__summary::before,
-  .binding-group__summary::before,
   .settings-group__summary::before {
     transition: transform 120ms ease;
   }
 
-  .binding__key {
+  .binding__key,
+  .modifier-toggle {
     transition: background-color 120ms ease, border-color 120ms ease;
   }
 }
@@ -285,20 +284,98 @@ body {
   font-size: 12px;
 }
 
-.shortcut-subsection {
-  margin-bottom: 12px;
+.shortcut-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 
-.shortcut-subsection__title {
+.shortcut-group {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.shortcut-group__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 14px;
+  padding: 13px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.shortcut-group__heading {
+  min-width: 0;
+  flex: 1 1 200px;
+}
+
+.shortcut-group__title {
   margin: 0;
   font-size: 13px;
   font-weight: 650;
 }
 
-.shortcut-subsection__description {
-  margin: 3px 0 8px;
+.shortcut-group__description {
+  margin: 3px 0 0;
   color: var(--text-dim);
   font-size: 12px;
+}
+
+.modifier-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.modifier-picker__label {
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.modifier-picker__select {
+  min-width: 11rem;
+}
+
+.modifier-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.modifier-toggle {
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.modifier-toggle:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.modifier-toggle--active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+}
+
+.modifier-toggle:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
 }
 
 .bindings {
@@ -307,147 +384,7 @@ body {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-}
-
-.bindings--active {
   gap: 0;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-}
-
-.bindings--active .binding {
-  border-bottom: 1px solid var(--border);
-}
-
-.bindings--active .binding:last-child {
-  border-bottom: none;
-}
-
-.shortcut-empty {
-  padding: 14px;
-  color: var(--text-dim);
-  font-size: 13px;
-}
-
-.all-shortcuts {
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-}
-
-.all-shortcuts__summary {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 13px 14px;
-  color: var(--text);
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 650;
-  list-style: none;
-  user-select: none;
-}
-
-.all-shortcuts__summary::-webkit-details-marker {
-  display: none;
-}
-
-.all-shortcuts__summary::before {
-  width: 8px;
-  height: 8px;
-  flex: 0 0 8px;
-  border-right: 1.5px solid var(--text-dim);
-  border-bottom: 1.5px solid var(--text-dim);
-  transform: translateY(2px) rotate(-45deg);
-  content: "";
-}
-
-.all-shortcuts[open] > .all-shortcuts__summary {
-  border-bottom: 1px solid var(--border);
-}
-
-.all-shortcuts[open] > .all-shortcuts__summary::before {
-  transform: translateY(-1px) rotate(45deg);
-}
-
-.all-shortcuts__count {
-  margin-left: auto;
-  color: var(--text-dim);
-  font-size: 12px;
-  font-weight: 400;
-}
-
-.all-shortcuts > .bindings {
-  padding: 12px;
-}
-
-.binding-group {
-  list-style: none;
-}
-
-.binding-group__disclosure {
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-}
-
-.binding-group__summary {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 13px 14px;
-  line-height: 1.2;
-  color: var(--text);
-  cursor: pointer;
-  list-style: none;
-  user-select: none;
-}
-
-.binding-group__summary::-webkit-details-marker {
-  display: none;
-}
-
-.binding-group__summary::before {
-  display: block;
-  width: 8px;
-  height: 8px;
-  flex: 0 0 8px;
-  border-right: 1.5px solid var(--text-dim);
-  border-bottom: 1.5px solid var(--text-dim);
-  transform-origin: center;
-  transform: translateY(2px) rotate(-45deg);
-  content: "";
-}
-
-.binding-group__disclosure[open] .binding-group__summary {
-  border-bottom: 1px solid var(--border);
-}
-
-.binding-group__disclosure[open] .binding-group__summary::before {
-  transform: translateY(-1px) rotate(45deg);
-}
-
-.binding-group__title {
-  font-size: 13px;
-  font-weight: 650;
-}
-
-.binding-group__count {
-  margin-left: auto;
-  color: var(--text-dim);
-  font-size: 12px;
-}
-
-.binding-group__list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  overflow: hidden;
 }
 
 .binding {
@@ -455,7 +392,7 @@ body {
   grid-template-columns: 1fr auto;
   align-items: center;
   gap: 8px;
-  padding: 12px 14px;
+  padding: 11px 14px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -474,8 +411,15 @@ body {
   min-width: 0;
 }
 
+.binding__prefix {
+  color: var(--text-dim);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .binding__key {
-  min-width: 9rem;
+  min-width: 6.5rem;
   overflow-wrap: anywhere;
   padding: 6px 10px;
   font: inherit;
@@ -531,6 +475,26 @@ body {
 }
 
 .binding__note--info {
+  color: var(--text-dim);
+}
+
+.corner-hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 10px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  font-size: 12px;
+}
+
+.corner-hint__label {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.corner-hint__text {
   color: var(--text-dim);
 }
 
@@ -735,40 +699,6 @@ select {
 .panel--warning {
   background: var(--warning-bg);
   border-color: var(--warning-border);
-}
-
-/* One search over every setting, at the top of the window. It stays in reach
-   while the page scrolls under it. */
-.settings-search {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  display: grid;
-  gap: 10px;
-  margin: -12px 0 -8px;
-  padding: 12px 0 8px;
-  background: var(--bg);
-}
-
-.settings-search__input {
-  width: 100%;
-  padding: 7px 10px;
-  font: inherit;
-  color: var(--text);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-}
-
-.settings-search__empty {
-  margin: 0;
-  color: var(--text-dim);
-}
-
-/* Set by the settings search; kept apart from `hidden`, which the screens
-   own. */
-[data-search-hidden] {
-  display: none !important;
 }
 
 /* The welcome screen: its own window, and the only place Tile teaches its
@@ -1468,12 +1398,14 @@ fieldset:disabled {
     min-width: 0;
   }
 
-  .binding-group__summary {
-    align-items: flex-start;
+  .modifier-picker {
+    width: 100%;
+    justify-content: space-between;
   }
 
-  .binding-group__count {
-    text-align: right;
+  .modifier-picker__select {
+    min-width: 0;
+    flex: 1;
   }
 
   .field__grid {
