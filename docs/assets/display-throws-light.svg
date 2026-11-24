@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 418" width="840" height="418" role="img" aria-label="Tile moving windows between displays diagram">
+  <title>Tile moving windows between displays diagram</title>
+  <desc>Moving a tiled window to an adjacent display preserves its exact tile slot, such as keeping a left third on a smaller screen. Moving an unslotted floating window maps its relative position and size proportionally by work-area fractions so it stays inside bounds across mixed resolutions and DPI.</desc>
+  <defs>
+    <filter id="dt-light-float" x="-18%" y="-18%" width="136%" height="146%">
+      <feDropShadow dx="0" dy="4" stdDeviation="3.5" flood-color="#000000" flood-opacity="0.28"/>
+    </filter>
+    <filter id="dt-light-snap" x="-10%" y="-10%" width="120%" height="126%">
+      <feDropShadow dx="0" dy="1.5" stdDeviation="1.4" flood-color="#000000" flood-opacity="0.14"/>
+    </filter>
+    <clipPath id="dt-light-slot-r-pane-clip"><rect x="643" y="97" width="56.67" height="104" rx="4.5"/></clipPath>
+    <clipPath id="dt-light-flt-r-pane-clip"><rect x="717.8" y="289.56" width="81.6" height="74.88" rx="4.5"/></clipPath>
+  </defs>
+  <rect x="0.5" y="0.5" width="839" height="417" rx="10" fill="#ffffff" stroke="#dfe3e8" stroke-width="1"/>
+  <text x="24" y="34" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="13.5" font-weight="600" fill="#1f2937">Moving between displays</text>
+  <g>
+    <rect x="740" y="18" width="76" height="24" rx="5" fill="#cfd5de"/>
+    <rect x="740.5" y="17.5" width="75" height="23" rx="5" fill="#f1f3f6" stroke="#dfe3e8" stroke-width="1"/>
+    <text x="778" y="32.91" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="600" fill="#1f2937">← → ↑ ↓</text>
+  </g>
+  <text x="732" y="33" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#667085">+</text>
+  <g>
+    <rect x="652" y="18" width="72" height="24" rx="5" fill="#cfd5de"/>
+    <rect x="652.5" y="17.5" width="71" height="23" rx="5" fill="#f1f3f6" stroke="#dfe3e8" stroke-width="1"/>
+    <text x="688" y="32.91" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="600" fill="#1f2937">Win+Alt</text>
+  </g>
+  <text x="646" y="33" text-anchor="end" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#667085">Windows</text>
+  <text x="588" y="33" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="12" fill="#667085">·</text>
+  <g>
+    <rect x="521" y="18" width="58" height="24" rx="5" fill="#cfd5de"/>
+    <rect x="521.5" y="17.5" width="57" height="23" rx="5" fill="#f1f3f6" stroke="#dfe3e8" stroke-width="1"/>
+    <text x="550" y="32.91" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="600" fill="#1f2937">⌃⌘⌥</text>
+  </g>
+  <text x="515" y="33" text-anchor="end" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#667085">macOS</text>
+  <line x1="24" y1="54" x2="816" y2="54" stroke="#dfe3e8" stroke-width="1"/>
+  <text x="24" y="114" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#1f2937">Recognised slot</text>
+  <text x="24" y="135" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="12" fill="#667085">Keeps the exact tile slot on arrival —</text>
+  <text x="24" y="153" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="12" fill="#667085">a left third stays a left third,</text>
+  <text x="24" y="171" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="12" fill="#667085">resized to fit the target display.</text>
+  <rect x="324.5" y="74.5" width="231" height="129" rx="7" fill="#f1f3f6" stroke="#dfe3e8" stroke-width="1"/>
+  <rect x="327.75" y="77.75" width="73.83" height="122.5" rx="4.5" fill="none" stroke="#667085" stroke-opacity="0.55" stroke-width="1.25" stroke-dasharray="4 3"/>
+  <text x="364.67" y="143.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#667085">⅓</text>
+  <rect x="640.5" y="94.5" width="175" height="109" rx="7" fill="#f1f3f6" stroke="#dfe3e8" stroke-width="1"/>
+  <g filter="url(#dt-light-snap)">
+    <rect x="643" y="97" width="56.67" height="104" rx="4.5" fill="#d3e0fb"/>
+    <g clip-path="url(#dt-light-slot-r-pane-clip)">
+      <rect x="643" y="97" width="56.67" height="7" fill="#a3bdf7"/>
+      <line x1="643" y1="104" x2="699.67" y2="104" stroke="#9eb6e9" stroke-width="1"/>
+    </g>
+    <rect x="643.5" y="97.5" width="55.67" height="103" rx="4.5" fill="none" stroke="#8ba9e9" stroke-width="1"/>
+  </g>
+  <text x="671.33" y="157" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#1d4ed8">⅓</text>
+  <g>
+    <rect x="584" y="122" width="28" height="22" rx="5" fill="#1d4ed8"/>
+    <rect x="584.5" y="121.5" width="27" height="21" rx="5" fill="#2563eb" stroke="#2563eb" stroke-width="1"/>
+    <text x="598" y="136.08" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#ffffff">→</text>
+  </g>
+  <g fill="none" stroke="#667085" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="568" y1="153" x2="628" y2="153"/>
+    <path d="M 622.5 149.2 L 628 153 L 622.5 156.8"/>
+  </g>
+  <text x="440" y="222" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#667085">4K display · Left ⅓</text>
+  <text x="728" y="222" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#667085">1080p display · Left ⅓</text>
+  <line x1="24" y1="234" x2="816" y2="234" stroke="#dfe3e8" stroke-width="1"/>
+  <text x="24" y="286" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#1f2937">Floating window</text>
+  <text x="24" y="307" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="12" fill="#667085">Unslotted windows map proportionally</text>
+  <text x="24" y="325" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="12" fill="#667085">by work-area fractions — never</text>
+  <text x="24" y="343" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="12" fill="#667085">overflowing across mixed DPI.</text>
+  <rect x="324.5" y="252.5" width="231" height="129" rx="7" fill="#f1f3f6" stroke="#dfe3e8" stroke-width="1"/>
+  <rect x="427.19" y="273.11" width="106.98" height="87.78" rx="4.5" fill="none" stroke="#667085" stroke-opacity="0.55" stroke-width="1.25" stroke-dasharray="4 3"/>
+  <rect x="640.5" y="272.5" width="175" height="109" rx="7" fill="#f1f3f6" stroke="#dfe3e8" stroke-width="1"/>
+  <g filter="url(#dt-light-float)">
+    <rect x="717.8" y="289.56" width="81.6" height="74.88" rx="4.5" fill="#d3e0fb"/>
+    <g clip-path="url(#dt-light-flt-r-pane-clip)">
+      <rect x="717.8" y="289.56" width="81.6" height="7" fill="#a3bdf7"/>
+      <line x1="717.8" y1="296.56" x2="799.4" y2="296.56" stroke="#9eb6e9" stroke-width="1"/>
+    </g>
+    <rect x="718.3" y="290.06" width="80.6" height="73.88" rx="4.5" fill="none" stroke="#8ba9e9" stroke-width="1"/>
+  </g>
+  <g>
+    <rect x="584" y="300" width="28" height="22" rx="5" fill="#1d4ed8"/>
+    <rect x="584.5" y="299.5" width="27" height="21" rx="5" fill="#2563eb" stroke="#2563eb" stroke-width="1"/>
+    <text x="598" y="314.08" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#ffffff">→</text>
+  </g>
+  <g fill="none" stroke="#667085" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="568" y1="331" x2="628" y2="331"/>
+    <path d="M 622.5 327.2 L 628 331 L 622.5 334.8"/>
+  </g>
+  <text x="440" y="400" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#667085">4K display · 48% × 72%</text>
+  <text x="728" y="400" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#667085">1080p display · 48% × 72%</text>
+</svg>
