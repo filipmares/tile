@@ -1,569 +1,138 @@
-//! The set of window actions Tile can perform, and the pure geometry that
-//! turns an action into a target rectangle.
+//! The set of window actions Tile can perform, composed corner placements, and
+//! the pure geometry that turns them into target rectangles.
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
-use crate::config::{Gaps, SharedEdges, SizeOptions};
+use crate::config::{Gaps, SharedEdges};
 use crate::geometry::{Direction, Rect};
 
-/// The family a [`WindowAction`] belongs to.
+/// The shortcut group a [`WindowAction`] belongs to.
 ///
-/// Families exist purely for presentation: the settings window renders one
-/// group per family, which keeps ~45 actions navigable instead of dumping them
-/// into one flat list.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum WindowFamily {
-    Halves,
+/// Each group carries its own configurable modifier combination — the **base
+/// modifier** for [`ShortcutGroup::Placement`] and the **display modifier** for
+/// [`ShortcutGroup::Displays`] — combined with each action's key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ShortcutGroup {
+    Placement,
     Displays,
-    Corners,
-    HorizontalThirds,
-    VerticalThirds,
-    Fourths,
-    CornerThirds,
-    Sixths,
-    Ninths,
-    Sizing,
-    Move,
-    Resize,
-    HalveDouble,
 }
 
-impl WindowFamily {
-    /// Families in the order they should appear in the UI.
-    pub const ALL: [WindowFamily; 13] = [
-        WindowFamily::Halves,
-        WindowFamily::Displays,
-        WindowFamily::Corners,
-        WindowFamily::HorizontalThirds,
-        WindowFamily::VerticalThirds,
-        WindowFamily::Fourths,
-        WindowFamily::CornerThirds,
-        WindowFamily::Sixths,
-        WindowFamily::Ninths,
-        WindowFamily::Sizing,
-        WindowFamily::Move,
-        WindowFamily::Resize,
-        WindowFamily::HalveDouble,
-    ];
+impl ShortcutGroup {
+    /// Groups in the order they appear in Settings.
+    pub const ALL: [ShortcutGroup; 2] = [ShortcutGroup::Placement, ShortcutGroup::Displays];
 
-    /// Human-readable heading for menus and the settings window.
+    /// Human-readable heading for the settings window.
     pub const fn label(self) -> &'static str {
         match self {
-            WindowFamily::Halves => "Halves",
-            WindowFamily::Displays => "Displays",
-            WindowFamily::Corners => "Corners",
-            WindowFamily::HorizontalThirds => "Horizontal Thirds",
-            WindowFamily::VerticalThirds => "Vertical Thirds",
-            WindowFamily::Fourths => "Fourths",
-            WindowFamily::CornerThirds => "Corner Thirds",
-            WindowFamily::Sixths => "Sixths",
-            WindowFamily::Ninths => "Ninths",
-            WindowFamily::Sizing => "Size & Position",
-            WindowFamily::Move => "Move",
-            WindowFamily::Resize => "Resize",
-            WindowFamily::HalveDouble => "Halve & Double",
+            ShortcutGroup::Placement => "Window placement",
+            ShortcutGroup::Displays => "Displays",
         }
     }
 
-    /// The actions belonging to this family, in UI order.
+    /// The actions belonging to this group, in UI order.
     pub fn actions(self) -> impl Iterator<Item = WindowAction> {
         WindowAction::ALL
             .iter()
             .copied()
-            .filter(move |a| a.family() == self)
+            .filter(move |a| a.group() == self)
     }
 }
 
-/// Every window action supported by Tile.
+/// Every bindable window action supported by Tile.
 ///
-/// New variants are additive: a variant only needs a `target_rect` arm, an
-/// [`WindowAction::ALL`] entry, an [`WindowAction::id`], an
-/// [`WindowAction::label`] and a [`WindowAction::family`]. Default hotkeys are
-/// optional — most of the catalogue ships unbound.
+/// Fractional widths are reached by repeating a placement shortcut through the
+/// size cycle, and corners are reached through single-hold corner composition —
+/// neither has its own bindable action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum WindowAction {
     LeftHalf,
     RightHalf,
-    TopHalf,
-    BottomHalf,
-    PreviousDisplay,
-    NextDisplay,
+    Maximize,
+    Restore,
+    CenterHalf,
     DisplayLeft,
     DisplayRight,
     DisplayUp,
     DisplayDown,
-    TopLeft,
-    TopRight,
-    BottomLeft,
-    BottomRight,
-    FirstThird,
-    CenterThird,
-    LastThird,
-    FirstTwoThirds,
-    LastTwoThirds,
-    CenterTwoThirds,
-    TopVerticalThird,
-    MiddleVerticalThird,
-    BottomVerticalThird,
-    TopVerticalTwoThirds,
-    BottomVerticalTwoThirds,
-    FirstFourth,
-    SecondFourth,
-    ThirdFourth,
-    LastFourth,
-    FirstThreeFourths,
-    LastThreeFourths,
-    CenterThreeFourths,
-    TopLeftThird,
-    TopRightThird,
-    BottomLeftThird,
-    BottomRightThird,
-    TopLeftSixth,
-    TopCenterSixth,
-    TopRightSixth,
-    BottomLeftSixth,
-    BottomCenterSixth,
-    BottomRightSixth,
-    TopLeftNinth,
-    TopCenterNinth,
-    TopRightNinth,
-    MiddleLeftNinth,
-    MiddleCenterNinth,
-    MiddleRightNinth,
-    BottomLeftNinth,
-    BottomCenterNinth,
-    BottomRightNinth,
-    Maximize,
-    AlmostMaximize,
-    MaximizeHeight,
-    CenterHalf,
-    CenterHalfBack,
-    Center,
-    Restore,
-    MoveLeft,
-    MoveRight,
-    MoveUp,
-    MoveDown,
-    Larger,
-    Smaller,
-    LargerWidth,
-    SmallerWidth,
-    LargerHeight,
-    SmallerHeight,
-    DoubleWidthLeft,
-    DoubleWidthRight,
-    DoubleHeightUp,
-    DoubleHeightDown,
-    HalveWidthLeft,
-    HalveWidthRight,
-    HalveHeightUp,
-    HalveHeightDown,
-    FirstDisplay,
-    SecondDisplay,
-    ThirdDisplay,
-    FourthDisplay,
 }
 
 impl WindowAction {
-    /// All actions, grouped by [`WindowFamily`] in the order they appear in
-    /// the UI.
-    pub const ALL: [WindowAction; 80] = [
-        // Halves
+    /// All bindable actions, grouped by [`ShortcutGroup`] in UI order.
+    pub const ALL: [WindowAction; 9] = [
+        // Window placement
         WindowAction::LeftHalf,
         WindowAction::RightHalf,
-        WindowAction::TopHalf,
-        WindowAction::BottomHalf,
+        WindowAction::Maximize,
+        WindowAction::Restore,
+        WindowAction::CenterHalf,
         // Displays
         WindowAction::DisplayLeft,
         WindowAction::DisplayRight,
         WindowAction::DisplayUp,
         WindowAction::DisplayDown,
-        WindowAction::PreviousDisplay,
-        WindowAction::NextDisplay,
-        WindowAction::FirstDisplay,
-        WindowAction::SecondDisplay,
-        WindowAction::ThirdDisplay,
-        WindowAction::FourthDisplay,
-        // Corners
-        WindowAction::TopLeft,
-        WindowAction::TopRight,
-        WindowAction::BottomLeft,
-        WindowAction::BottomRight,
-        // Horizontal thirds
-        WindowAction::FirstThird,
-        WindowAction::CenterThird,
-        WindowAction::LastThird,
-        WindowAction::FirstTwoThirds,
-        WindowAction::LastTwoThirds,
-        WindowAction::CenterTwoThirds,
-        // Vertical thirds
-        WindowAction::TopVerticalThird,
-        WindowAction::MiddleVerticalThird,
-        WindowAction::BottomVerticalThird,
-        WindowAction::TopVerticalTwoThirds,
-        WindowAction::BottomVerticalTwoThirds,
-        // Fourths
-        WindowAction::FirstFourth,
-        WindowAction::SecondFourth,
-        WindowAction::ThirdFourth,
-        WindowAction::LastFourth,
-        WindowAction::FirstThreeFourths,
-        WindowAction::LastThreeFourths,
-        WindowAction::CenterThreeFourths,
-        // Corner thirds
-        WindowAction::TopLeftThird,
-        WindowAction::TopRightThird,
-        WindowAction::BottomLeftThird,
-        WindowAction::BottomRightThird,
-        // Sixths
-        WindowAction::TopLeftSixth,
-        WindowAction::TopCenterSixth,
-        WindowAction::TopRightSixth,
-        WindowAction::BottomLeftSixth,
-        WindowAction::BottomCenterSixth,
-        WindowAction::BottomRightSixth,
-        // Ninths
-        WindowAction::TopLeftNinth,
-        WindowAction::TopCenterNinth,
-        WindowAction::TopRightNinth,
-        WindowAction::MiddleLeftNinth,
-        WindowAction::MiddleCenterNinth,
-        WindowAction::MiddleRightNinth,
-        WindowAction::BottomLeftNinth,
-        WindowAction::BottomCenterNinth,
-        WindowAction::BottomRightNinth,
-        // Sizing
-        WindowAction::Maximize,
-        WindowAction::AlmostMaximize,
-        WindowAction::MaximizeHeight,
-        WindowAction::CenterHalf,
-        WindowAction::CenterHalfBack,
-        WindowAction::Center,
-        WindowAction::Restore,
-        // Move
-        WindowAction::MoveLeft,
-        WindowAction::MoveRight,
-        WindowAction::MoveUp,
-        WindowAction::MoveDown,
-        // Resize
-        WindowAction::Larger,
-        WindowAction::Smaller,
-        WindowAction::LargerWidth,
-        WindowAction::SmallerWidth,
-        WindowAction::LargerHeight,
-        WindowAction::SmallerHeight,
-        // Halve & double
-        WindowAction::DoubleWidthLeft,
-        WindowAction::DoubleWidthRight,
-        WindowAction::DoubleHeightUp,
-        WindowAction::DoubleHeightDown,
-        WindowAction::HalveWidthLeft,
-        WindowAction::HalveWidthRight,
-        WindowAction::HalveHeightUp,
-        WindowAction::HalveHeightDown,
     ];
 
     /// Stable machine-readable identifier, also used as the JSON config key.
     ///
-    /// These strings are the config format's keys. Once published they are
-    /// effectively permanent: never rename or renumber an existing one.
+    /// Preserved from v1 configs so saved keys remain stable across versions.
     pub const fn id(self) -> &'static str {
         match self {
             WindowAction::LeftHalf => "left-half",
             WindowAction::RightHalf => "right-half",
-            WindowAction::TopHalf => "top-half",
-            WindowAction::BottomHalf => "bottom-half",
-            WindowAction::PreviousDisplay => "previous-display",
-            WindowAction::NextDisplay => "next-display",
+            WindowAction::Maximize => "maximize",
+            WindowAction::Restore => "restore",
+            WindowAction::CenterHalf => "center-half",
             WindowAction::DisplayLeft => "display-left",
             WindowAction::DisplayRight => "display-right",
             WindowAction::DisplayUp => "display-up",
             WindowAction::DisplayDown => "display-down",
-            WindowAction::TopLeft => "top-left",
-            WindowAction::TopRight => "top-right",
-            WindowAction::BottomLeft => "bottom-left",
-            WindowAction::BottomRight => "bottom-right",
-            WindowAction::FirstThird => "first-third",
-            WindowAction::CenterThird => "center-third",
-            WindowAction::LastThird => "last-third",
-            WindowAction::FirstTwoThirds => "first-two-thirds",
-            WindowAction::LastTwoThirds => "last-two-thirds",
-            WindowAction::CenterTwoThirds => "center-two-thirds",
-            WindowAction::TopVerticalThird => "top-vertical-third",
-            WindowAction::MiddleVerticalThird => "middle-vertical-third",
-            WindowAction::BottomVerticalThird => "bottom-vertical-third",
-            WindowAction::TopVerticalTwoThirds => "top-vertical-two-thirds",
-            WindowAction::BottomVerticalTwoThirds => "bottom-vertical-two-thirds",
-            WindowAction::FirstFourth => "first-fourth",
-            WindowAction::SecondFourth => "second-fourth",
-            WindowAction::ThirdFourth => "third-fourth",
-            WindowAction::LastFourth => "last-fourth",
-            WindowAction::FirstThreeFourths => "first-three-fourths",
-            WindowAction::LastThreeFourths => "last-three-fourths",
-            WindowAction::CenterThreeFourths => "center-three-fourths",
-            WindowAction::TopLeftThird => "top-left-third",
-            WindowAction::TopRightThird => "top-right-third",
-            WindowAction::BottomLeftThird => "bottom-left-third",
-            WindowAction::BottomRightThird => "bottom-right-third",
-            WindowAction::TopLeftSixth => "top-left-sixth",
-            WindowAction::TopCenterSixth => "top-center-sixth",
-            WindowAction::TopRightSixth => "top-right-sixth",
-            WindowAction::BottomLeftSixth => "bottom-left-sixth",
-            WindowAction::BottomCenterSixth => "bottom-center-sixth",
-            WindowAction::BottomRightSixth => "bottom-right-sixth",
-            WindowAction::TopLeftNinth => "top-left-ninth",
-            WindowAction::TopCenterNinth => "top-center-ninth",
-            WindowAction::TopRightNinth => "top-right-ninth",
-            WindowAction::MiddleLeftNinth => "middle-left-ninth",
-            WindowAction::MiddleCenterNinth => "middle-center-ninth",
-            WindowAction::MiddleRightNinth => "middle-right-ninth",
-            WindowAction::BottomLeftNinth => "bottom-left-ninth",
-            WindowAction::BottomCenterNinth => "bottom-center-ninth",
-            WindowAction::BottomRightNinth => "bottom-right-ninth",
-            WindowAction::Maximize => "maximize",
-            WindowAction::AlmostMaximize => "almost-maximize",
-            WindowAction::MaximizeHeight => "maximize-height",
-            WindowAction::CenterHalf => "center-half",
-            WindowAction::CenterHalfBack => "center-half-back",
-            WindowAction::Center => "center",
-            WindowAction::Restore => "restore",
-            WindowAction::MoveLeft => "move-left",
-            WindowAction::MoveRight => "move-right",
-            WindowAction::MoveUp => "move-up",
-            WindowAction::MoveDown => "move-down",
-            WindowAction::Larger => "larger",
-            WindowAction::Smaller => "smaller",
-            WindowAction::LargerWidth => "larger-width",
-            WindowAction::SmallerWidth => "smaller-width",
-            WindowAction::LargerHeight => "larger-height",
-            WindowAction::SmallerHeight => "smaller-height",
-            WindowAction::DoubleWidthLeft => "double-width-left",
-            WindowAction::DoubleWidthRight => "double-width-right",
-            WindowAction::DoubleHeightUp => "double-height-up",
-            WindowAction::DoubleHeightDown => "double-height-down",
-            WindowAction::HalveWidthLeft => "halve-width-left",
-            WindowAction::HalveWidthRight => "halve-width-right",
-            WindowAction::HalveHeightUp => "halve-height-up",
-            WindowAction::HalveHeightDown => "halve-height-down",
-            WindowAction::FirstDisplay => "first-display",
-            WindowAction::SecondDisplay => "second-display",
-            WindowAction::ThirdDisplay => "third-display",
-            WindowAction::FourthDisplay => "fourth-display",
         }
     }
 
     /// Human-readable label for menus and the settings window.
     pub const fn label(self) -> &'static str {
         match self {
-            WindowAction::LeftHalf => "Left Half",
-            WindowAction::RightHalf => "Right Half",
-            WindowAction::TopHalf => "Top Half",
-            WindowAction::BottomHalf => "Bottom Half",
-            WindowAction::PreviousDisplay => "Previous Display",
-            WindowAction::NextDisplay => "Next Display",
+            WindowAction::LeftHalf => "Left",
+            WindowAction::RightHalf => "Right",
+            WindowAction::Maximize => "Maximize",
+            WindowAction::Restore => "Restore",
+            WindowAction::CenterHalf => "Center Column",
             WindowAction::DisplayLeft => "Display Left",
             WindowAction::DisplayRight => "Display Right",
             WindowAction::DisplayUp => "Display Above",
             WindowAction::DisplayDown => "Display Below",
-            WindowAction::TopLeft => "Top Left",
-            WindowAction::TopRight => "Top Right",
-            WindowAction::BottomLeft => "Bottom Left",
-            WindowAction::BottomRight => "Bottom Right",
-            WindowAction::FirstThird => "First Third",
-            WindowAction::CenterThird => "Center Third",
-            WindowAction::LastThird => "Last Third",
-            WindowAction::FirstTwoThirds => "First Two Thirds",
-            WindowAction::LastTwoThirds => "Last Two Thirds",
-            WindowAction::CenterTwoThirds => "Center Two Thirds",
-            WindowAction::TopVerticalThird => "Top Vertical Third",
-            WindowAction::MiddleVerticalThird => "Middle Vertical Third",
-            WindowAction::BottomVerticalThird => "Bottom Vertical Third",
-            WindowAction::TopVerticalTwoThirds => "Top Vertical Two Thirds",
-            WindowAction::BottomVerticalTwoThirds => "Bottom Vertical Two Thirds",
-            WindowAction::FirstFourth => "First Fourth",
-            WindowAction::SecondFourth => "Second Fourth",
-            WindowAction::ThirdFourth => "Third Fourth",
-            WindowAction::LastFourth => "Last Fourth",
-            WindowAction::FirstThreeFourths => "First Three Fourths",
-            WindowAction::LastThreeFourths => "Last Three Fourths",
-            WindowAction::CenterThreeFourths => "Center Three Fourths",
-            WindowAction::TopLeftThird => "Top Left Third",
-            WindowAction::TopRightThird => "Top Right Third",
-            WindowAction::BottomLeftThird => "Bottom Left Third",
-            WindowAction::BottomRightThird => "Bottom Right Third",
-            WindowAction::TopLeftSixth => "Top Left Sixth",
-            WindowAction::TopCenterSixth => "Top Center Sixth",
-            WindowAction::TopRightSixth => "Top Right Sixth",
-            WindowAction::BottomLeftSixth => "Bottom Left Sixth",
-            WindowAction::BottomCenterSixth => "Bottom Center Sixth",
-            WindowAction::BottomRightSixth => "Bottom Right Sixth",
-            WindowAction::TopLeftNinth => "Top Left Ninth",
-            WindowAction::TopCenterNinth => "Top Center Ninth",
-            WindowAction::TopRightNinth => "Top Right Ninth",
-            WindowAction::MiddleLeftNinth => "Middle Left Ninth",
-            WindowAction::MiddleCenterNinth => "Middle Center Ninth",
-            WindowAction::MiddleRightNinth => "Middle Right Ninth",
-            WindowAction::BottomLeftNinth => "Bottom Left Ninth",
-            WindowAction::BottomCenterNinth => "Bottom Center Ninth",
-            WindowAction::BottomRightNinth => "Bottom Right Ninth",
-            WindowAction::Maximize => "Maximize",
-            WindowAction::AlmostMaximize => "Almost Maximize",
-            WindowAction::MaximizeHeight => "Maximize Height",
-            WindowAction::CenterHalf => "Center Half",
-            WindowAction::CenterHalfBack => "Center Half (Previous Size)",
-            WindowAction::Center => "Center",
-            WindowAction::Restore => "Restore",
-            WindowAction::MoveLeft => "Move Left",
-            WindowAction::MoveRight => "Move Right",
-            WindowAction::MoveUp => "Move Up",
-            WindowAction::MoveDown => "Move Down",
-            WindowAction::Larger => "Larger",
-            WindowAction::Smaller => "Smaller",
-            WindowAction::LargerWidth => "Larger Width",
-            WindowAction::SmallerWidth => "Smaller Width",
-            WindowAction::LargerHeight => "Larger Height",
-            WindowAction::SmallerHeight => "Smaller Height",
-            WindowAction::DoubleWidthLeft => "Double Width Left",
-            WindowAction::DoubleWidthRight => "Double Width Right",
-            WindowAction::DoubleHeightUp => "Double Height Up",
-            WindowAction::DoubleHeightDown => "Double Height Down",
-            WindowAction::HalveWidthLeft => "Halve Width Left",
-            WindowAction::HalveWidthRight => "Halve Width Right",
-            WindowAction::HalveHeightUp => "Halve Height Up",
-            WindowAction::HalveHeightDown => "Halve Height Down",
-            WindowAction::FirstDisplay => "First Display",
-            WindowAction::SecondDisplay => "Second Display",
-            WindowAction::ThirdDisplay => "Third Display",
-            WindowAction::FourthDisplay => "Fourth Display",
         }
     }
 
-    /// The presentation family this action belongs to.
-    pub const fn family(self) -> WindowFamily {
+    /// Which modifier group owns this action.
+    pub const fn group(self) -> ShortcutGroup {
         match self {
             WindowAction::LeftHalf
             | WindowAction::RightHalf
-            | WindowAction::TopHalf
-            | WindowAction::BottomHalf => WindowFamily::Halves,
-            WindowAction::PreviousDisplay
-            | WindowAction::NextDisplay
-            | WindowAction::DisplayLeft
+            | WindowAction::Maximize
+            | WindowAction::Restore
+            | WindowAction::CenterHalf => ShortcutGroup::Placement,
+            WindowAction::DisplayLeft
             | WindowAction::DisplayRight
             | WindowAction::DisplayUp
-            | WindowAction::DisplayDown => WindowFamily::Displays,
-            WindowAction::TopLeft
-            | WindowAction::TopRight
-            | WindowAction::BottomLeft
-            | WindowAction::BottomRight => WindowFamily::Corners,
-            WindowAction::FirstThird
-            | WindowAction::CenterThird
-            | WindowAction::LastThird
-            | WindowAction::FirstTwoThirds
-            | WindowAction::LastTwoThirds
-            | WindowAction::CenterTwoThirds => WindowFamily::HorizontalThirds,
-            WindowAction::TopVerticalThird
-            | WindowAction::MiddleVerticalThird
-            | WindowAction::BottomVerticalThird
-            | WindowAction::TopVerticalTwoThirds
-            | WindowAction::BottomVerticalTwoThirds => WindowFamily::VerticalThirds,
-            WindowAction::FirstFourth
-            | WindowAction::SecondFourth
-            | WindowAction::ThirdFourth
-            | WindowAction::LastFourth
-            | WindowAction::FirstThreeFourths
-            | WindowAction::LastThreeFourths
-            | WindowAction::CenterThreeFourths => WindowFamily::Fourths,
-            WindowAction::TopLeftThird
-            | WindowAction::TopRightThird
-            | WindowAction::BottomLeftThird
-            | WindowAction::BottomRightThird => WindowFamily::CornerThirds,
-            WindowAction::TopLeftSixth
-            | WindowAction::TopCenterSixth
-            | WindowAction::TopRightSixth
-            | WindowAction::BottomLeftSixth
-            | WindowAction::BottomCenterSixth
-            | WindowAction::BottomRightSixth => WindowFamily::Sixths,
-            WindowAction::TopLeftNinth
-            | WindowAction::TopCenterNinth
-            | WindowAction::TopRightNinth
-            | WindowAction::MiddleLeftNinth
-            | WindowAction::MiddleCenterNinth
-            | WindowAction::MiddleRightNinth
-            | WindowAction::BottomLeftNinth
-            | WindowAction::BottomCenterNinth
-            | WindowAction::BottomRightNinth => WindowFamily::Ninths,
-            WindowAction::Maximize
-            | WindowAction::AlmostMaximize
-            | WindowAction::MaximizeHeight
-            | WindowAction::CenterHalf
-            | WindowAction::CenterHalfBack
-            | WindowAction::Center
-            | WindowAction::Restore => WindowFamily::Sizing,
-            WindowAction::MoveLeft
-            | WindowAction::MoveRight
-            | WindowAction::MoveUp
-            | WindowAction::MoveDown => WindowFamily::Move,
-            WindowAction::Larger
-            | WindowAction::Smaller
-            | WindowAction::LargerWidth
-            | WindowAction::SmallerWidth
-            | WindowAction::LargerHeight
-            | WindowAction::SmallerHeight => WindowFamily::Resize,
-            WindowAction::DoubleWidthLeft
-            | WindowAction::DoubleWidthRight
-            | WindowAction::DoubleHeightUp
-            | WindowAction::DoubleHeightDown
-            | WindowAction::HalveWidthLeft
-            | WindowAction::HalveWidthRight
-            | WindowAction::HalveHeightUp
-            | WindowAction::HalveHeightDown => WindowFamily::HalveDouble,
-            WindowAction::FirstDisplay
-            | WindowAction::SecondDisplay
-            | WindowAction::ThirdDisplay
-            | WindowAction::FourthDisplay => WindowFamily::Displays,
+            | WindowAction::DisplayDown => ShortcutGroup::Displays,
         }
     }
 
-    /// `Restore` is handled by the window-history layer rather than by pure
+    /// `Restore` is handled by the window-history layer rather than pure
     /// geometry, so it has no computable target rectangle.
     pub const fn uses_history(self) -> bool {
         matches!(self, WindowAction::Restore)
     }
 
-    /// Throws that pick another display rather than a rectangle on this one.
-    ///
-    /// Covers directional throws, relative throws ([`WindowAction::NextDisplay`]
-    /// and [`WindowAction::PreviousDisplay`]), and the absolute ones that name a
-    /// display by its position in [`crate::Screen::geometrically_ordered`].
-    /// All of them resolve their destination from the whole screen list, so
-    /// like [`WindowAction::uses_history`] they have no computable
-    /// [`WindowAction::target_rect`] and are handled by [`crate::Engine::plan`].
+    /// Directional display throws pick another display rather than a rectangle
+    /// on the current one.
     pub const fn moves_display(self) -> bool {
-        matches!(
-            self,
-            WindowAction::PreviousDisplay
-                | WindowAction::NextDisplay
-                | WindowAction::DisplayLeft
-                | WindowAction::DisplayRight
-                | WindowAction::DisplayUp
-                | WindowAction::DisplayDown
-                | WindowAction::FirstDisplay
-                | WindowAction::SecondDisplay
-                | WindowAction::ThirdDisplay
-                | WindowAction::FourthDisplay
-        )
-    }
-
-    /// Step through geometrically ordered screens: `-1` previous, `+1` next.
-    pub const fn display_step(self) -> i32 {
-        match self {
-            WindowAction::PreviousDisplay => -1,
-            WindowAction::NextDisplay => 1,
-            _ => 0,
-        }
+        self.display_direction().is_some()
     }
 
     pub const fn display_direction(self) -> Option<Direction> {
@@ -576,159 +145,16 @@ impl WindowAction {
         }
     }
 
-    /// Whether this action's rectangle is derived from the window's *current*
-    /// frame rather than naming a fixed region of the work area.
-    ///
-    /// These actions are not "slots": asked for a target they reproduce
-    /// something based on where the window already is, so they cannot be used
-    /// to recognise a window's position and rebuild it on another display.
-    /// [`crate::Engine`] skips them when matching a slot across a display
-    /// move, which is what lets a genuinely free-floating window fall through
-    /// to proportional mapping.
-    ///
-    /// [`WindowAction::Center`] and [`WindowAction::MaximizeHeight`] keep the
-    /// window's size or horizontal position; every incremental move, resize
-    /// and halve/double is by definition relative to the current frame.
-    pub const fn depends_on_current_frame(self) -> bool {
-        matches!(
-            self,
-            WindowAction::Center
-                | WindowAction::MaximizeHeight
-                | WindowAction::MoveLeft
-                | WindowAction::MoveRight
-                | WindowAction::MoveUp
-                | WindowAction::MoveDown
-                | WindowAction::Larger
-                | WindowAction::Smaller
-                | WindowAction::LargerWidth
-                | WindowAction::SmallerWidth
-                | WindowAction::LargerHeight
-                | WindowAction::SmallerHeight
-                | WindowAction::DoubleWidthLeft
-                | WindowAction::DoubleWidthRight
-                | WindowAction::DoubleHeightUp
-                | WindowAction::DoubleHeightDown
-                | WindowAction::HalveWidthLeft
-                | WindowAction::HalveWidthRight
-                | WindowAction::HalveHeightUp
-                | WindowAction::HalveHeightDown
-        )
-    }
-
-    /// Whether holding this action's shortcut should repeat it.
-    ///
-    /// Only incremental move and resize actions repeat while held. Placement,
-    /// cycling, restore, display movement and halve/double actions require one
-    /// physical press per operation.
-    pub const fn repeats_while_held(self) -> bool {
-        matches!(
-            self,
-            WindowAction::MoveLeft
-                | WindowAction::MoveRight
-                | WindowAction::MoveUp
-                | WindowAction::MoveDown
-                | WindowAction::Larger
-                | WindowAction::Smaller
-                | WindowAction::LargerWidth
-                | WindowAction::SmallerWidth
-                | WindowAction::LargerHeight
-                | WindowAction::SmallerHeight
-        )
-    }
-
-    /// The display this action names outright, as an index into
-    /// [`crate::Screen::geometrically_ordered`].
-    ///
-    /// Absolute rather than relative, so "second display" means the same
-    /// screen every time regardless of where the window currently is — which
-    /// is the whole point of having them alongside next/previous. An index
-    /// past the end of the list means that display is not plugged in.
-    pub const fn display_index(self) -> Option<usize> {
-        match self {
-            WindowAction::FirstDisplay => Some(0),
-            WindowAction::SecondDisplay => Some(1),
-            WindowAction::ThirdDisplay => Some(2),
-            WindowAction::FourthDisplay => Some(3),
-            _ => None,
-        }
-    }
-
-    /// Whether repeatedly pressing this action's shortcut cycles it through
-    /// [`crate::CycleSize`]s rather than doing nothing.
-    ///
-    /// Only actions with an unambiguous "grow from this anchor" reading cycle:
-    /// the four halves, the four quarter corners, and `CenterHalf`. The first
-    /// eight match Rectangle, whose `cooperativeResizeSide` is defined for
-    /// exactly those. An explicitly-sized action such as `FirstThird` does not
-    /// cycle, because its size *is* the request — a user who presses "first
-    /// third" twice wants a first third, not a first half.
-    ///
-    /// `CenterHalf` is Tile's own addition and anchors to the screen's centre
-    /// line rather than an edge, growing symmetrically in both directions. It
-    /// is what puts the whole centred column — center half, two thirds, third
-    /// and quarter — behind a single shortcut, which is why the centred
-    /// actions need no letter bindings of their own.
+    /// Whether repeatedly invoking this action steps through [`crate::CycleSize`]s.
     pub const fn cycles(self) -> bool {
         matches!(
             self,
-            WindowAction::LeftHalf
-                | WindowAction::RightHalf
-                | WindowAction::TopHalf
-                | WindowAction::BottomHalf
-                | WindowAction::TopLeft
-                | WindowAction::TopRight
-                | WindowAction::BottomLeft
-                | WindowAction::BottomRight
-                | WindowAction::CenterHalf
-                | WindowAction::CenterHalfBack
+            WindowAction::LeftHalf | WindowAction::RightHalf | WindowAction::CenterHalf
         )
     }
 
-    /// The action whose rectangles define this action's cycle.
-    ///
-    /// `CenterHalfBack` walks the *same* sequence as [`WindowAction::CenterHalf`],
-    /// just in the other direction, so both must resolve to one anchor. That is
-    /// what lets multiple bindings share a single cycle without starting a
-    /// second, independent sequence.
-    pub const fn cycle_anchor(self) -> WindowAction {
-        match self {
-            WindowAction::CenterHalfBack => WindowAction::CenterHalf,
-            other => other,
-        }
-    }
-
-    /// The full-height side a corner sits on: `LeftHalf` for the left
-    /// corners, `RightHalf` for the right ones.
-    pub const fn corner_side(self) -> Option<WindowAction> {
-        match self {
-            WindowAction::TopLeft | WindowAction::BottomLeft => Some(WindowAction::LeftHalf),
-            WindowAction::TopRight | WindowAction::BottomRight => Some(WindowAction::RightHalf),
-            _ => None,
-        }
-    }
-
-    /// Whether this action walks its cycle towards the *previous* size rather
-    /// than the next one.
-    pub const fn cycles_backwards(self) -> bool {
-        matches!(self, WindowAction::CenterHalfBack)
-    }
-
     /// This action's rectangle resized to `fraction` of the work area along
-    /// its cycle axis, keeping the edge the action is anchored to.
-    ///
-    /// `LeftHalf` at ⅓ is a left third; `BottomRight` at ⅔ is a two-thirds
-    /// wide, half-height block in the bottom-right corner. Passing `0.5`
-    /// reproduces [`WindowAction::target_rect`] exactly, which is what makes
-    /// the first press of a shortcut the first step of its own cycle.
-    ///
-    /// Corners cycle **horizontally**, matching Rectangle's default
-    /// `cornerCycleExpansionAxis`; the vertical variant would be a per-user
-    /// setting rather than a different function.
-    ///
-    /// `CenterHalf` is the one action anchored to the centre rather than an
-    /// edge: it keeps `fraction` of the width centred, so ⅓ is exactly
-    /// `CenterThird` and ⅔ exactly `CenterTwoThirds`. Returns `None` for
-    /// actions that do not cycle.
+    /// its cycle axis. Passing `0.5` reproduces [`WindowAction::target_rect`].
     pub fn cycle_rect(
         self,
         work_area: Rect,
@@ -736,27 +162,17 @@ impl WindowAction {
         main_screen: bool,
         fraction: f64,
     ) -> Option<Rect> {
-        let a = work_area;
-        // A fraction outside (0, 1] cannot describe a slice of the screen; a
-        // hand-edited config must not be able to produce an empty window.
         if !(fraction.is_finite() && fraction > 0.0 && fraction <= 1.0) {
             return None;
         }
         let f = fraction;
         let rect = match self {
-            WindowAction::LeftHalf => grid(a, gaps, main_screen, (0.0, f), (0.0, 1.0)),
-            WindowAction::RightHalf => grid(a, gaps, main_screen, (1.0 - f, 1.0), (0.0, 1.0)),
-            WindowAction::TopHalf => grid(a, gaps, main_screen, (0.0, 1.0), (0.0, f)),
-            WindowAction::BottomHalf => grid(a, gaps, main_screen, (0.0, 1.0), (1.0 - f, 1.0)),
-            WindowAction::TopLeft => grid(a, gaps, main_screen, (0.0, f), (0.0, 0.5)),
-            WindowAction::TopRight => grid(a, gaps, main_screen, (1.0 - f, 1.0), (0.0, 0.5)),
-            WindowAction::BottomLeft => grid(a, gaps, main_screen, (0.0, f), (0.5, 1.0)),
-            WindowAction::BottomRight => grid(a, gaps, main_screen, (1.0 - f, 1.0), (0.5, 1.0)),
-            // Centred on the screen's vertical axis, so it grows by f/2 on each
-            // side rather than from an edge. `CenterHalfBack` shares the
-            // rectangles and differs only in which way it walks them.
-            WindowAction::CenterHalf | WindowAction::CenterHalfBack => grid(
-                a,
+            WindowAction::LeftHalf => grid(work_area, gaps, main_screen, (0.0, f), (0.0, 1.0)),
+            WindowAction::RightHalf => {
+                grid(work_area, gaps, main_screen, (1.0 - f, 1.0), (0.0, 1.0))
+            }
+            WindowAction::CenterHalf => grid(
+                work_area,
                 gaps,
                 main_screen,
                 ((1.0 - f) / 2.0, (1.0 + f) / 2.0),
@@ -767,379 +183,272 @@ impl WindowAction {
         Some(rect.rounded())
     }
 
-    /// Computes the destination rectangle for this action within `work_area`.
-    ///
-    /// `gaps` describes the window gap and the per-side screen-edge gaps;
-    /// `main_screen` is whether `work_area` belongs to the primary display,
-    /// which matters when [`Gaps::main_screen_only`] is set. Returns `None` for
-    /// actions that are not expressible as pure geometry (currently only
-    /// [`WindowAction::Restore`]).
-    pub fn target_rect(
-        self,
-        work_area: Rect,
-        gaps: &Gaps,
-        current: Rect,
-        main_screen: bool,
-        sizes: SizeOptions,
-    ) -> Option<Rect> {
-        let a = work_area;
-
+    /// Computes the default destination rectangle for this action within
+    /// `work_area`. Returns `None` for history (`Restore`) and display throws.
+    pub fn target_rect(self, work_area: Rect, gaps: &Gaps, main_screen: bool) -> Option<Rect> {
         let rect = match self {
-            WindowAction::LeftHalf => grid(a, gaps, main_screen, (0.0, 0.5), (0.0, 1.0)),
-            WindowAction::RightHalf => grid(a, gaps, main_screen, (0.5, 1.0), (0.0, 1.0)),
-            WindowAction::TopHalf => grid(a, gaps, main_screen, (0.0, 1.0), (0.0, 0.5)),
-            WindowAction::BottomHalf => grid(a, gaps, main_screen, (0.0, 1.0), (0.5, 1.0)),
-            WindowAction::TopLeft => grid(a, gaps, main_screen, (0.0, 0.5), (0.0, 0.5)),
-            WindowAction::TopRight => grid(a, gaps, main_screen, (0.5, 1.0), (0.0, 0.5)),
-            WindowAction::BottomLeft => grid(a, gaps, main_screen, (0.0, 0.5), (0.5, 1.0)),
-            WindowAction::BottomRight => grid(a, gaps, main_screen, (0.5, 1.0), (0.5, 1.0)),
-            WindowAction::FirstThird => grid(a, gaps, main_screen, (0.0, 1.0 / 3.0), (0.0, 1.0)),
-            WindowAction::CenterThird => {
-                grid(a, gaps, main_screen, (1.0 / 3.0, 2.0 / 3.0), (0.0, 1.0))
+            WindowAction::LeftHalf => grid(work_area, gaps, main_screen, (0.0, 0.5), (0.0, 1.0)),
+            WindowAction::RightHalf => grid(work_area, gaps, main_screen, (0.5, 1.0), (0.0, 1.0)),
+            WindowAction::CenterHalf => {
+                grid(work_area, gaps, main_screen, (0.25, 0.75), (0.0, 1.0))
             }
-            WindowAction::LastThird => grid(a, gaps, main_screen, (2.0 / 3.0, 1.0), (0.0, 1.0)),
-            WindowAction::FirstTwoThirds => {
-                grid(a, gaps, main_screen, (0.0, 2.0 / 3.0), (0.0, 1.0))
-            }
-            WindowAction::LastTwoThirds => grid(a, gaps, main_screen, (1.0 / 3.0, 1.0), (0.0, 1.0)),
-            WindowAction::CenterTwoThirds => {
-                grid(a, gaps, main_screen, (1.0 / 6.0, 5.0 / 6.0), (0.0, 1.0))
-            }
-            WindowAction::TopVerticalThird => {
-                grid(a, gaps, main_screen, (0.0, 1.0), (0.0, 1.0 / 3.0))
-            }
-            WindowAction::MiddleVerticalThird => {
-                grid(a, gaps, main_screen, (0.0, 1.0), (1.0 / 3.0, 2.0 / 3.0))
-            }
-            WindowAction::BottomVerticalThird => {
-                grid(a, gaps, main_screen, (0.0, 1.0), (2.0 / 3.0, 1.0))
-            }
-            WindowAction::TopVerticalTwoThirds => {
-                grid(a, gaps, main_screen, (0.0, 1.0), (0.0, 2.0 / 3.0))
-            }
-            WindowAction::BottomVerticalTwoThirds => {
-                grid(a, gaps, main_screen, (0.0, 1.0), (1.0 / 3.0, 1.0))
-            }
-            WindowAction::FirstFourth => grid(a, gaps, main_screen, (0.0, 1.0 / 4.0), (0.0, 1.0)),
-            WindowAction::SecondFourth => {
-                grid(a, gaps, main_screen, (1.0 / 4.0, 1.0 / 2.0), (0.0, 1.0))
-            }
-            WindowAction::ThirdFourth => {
-                grid(a, gaps, main_screen, (1.0 / 2.0, 3.0 / 4.0), (0.0, 1.0))
-            }
-            WindowAction::LastFourth => grid(a, gaps, main_screen, (3.0 / 4.0, 1.0), (0.0, 1.0)),
-            WindowAction::FirstThreeFourths => {
-                grid(a, gaps, main_screen, (0.0, 3.0 / 4.0), (0.0, 1.0))
-            }
-            WindowAction::LastThreeFourths => {
-                grid(a, gaps, main_screen, (1.0 / 4.0, 1.0), (0.0, 1.0))
-            }
-            WindowAction::CenterThreeFourths => {
-                grid(a, gaps, main_screen, (1.0 / 8.0, 7.0 / 8.0), (0.0, 1.0))
-            }
-            // "Corner thirds" are Rectangle's two-thirds-width, half-height
-            // corner blocks. Unlike the quarter corners they deliberately
-            // overlap in the centre third, so this family does not tile.
-            WindowAction::TopLeftThird => grid(a, gaps, main_screen, (0.0, 2.0 / 3.0), (0.0, 0.5)),
-            WindowAction::TopRightThird => grid(a, gaps, main_screen, (1.0 / 3.0, 1.0), (0.0, 0.5)),
-            WindowAction::BottomLeftThird => {
-                grid(a, gaps, main_screen, (0.0, 2.0 / 3.0), (0.5, 1.0))
-            }
-            WindowAction::BottomRightThird => {
-                grid(a, gaps, main_screen, (1.0 / 3.0, 1.0), (0.5, 1.0))
-            }
-            WindowAction::TopLeftSixth => grid(a, gaps, main_screen, (0.0, 1.0 / 3.0), (0.0, 0.5)),
-            WindowAction::TopCenterSixth => {
-                grid(a, gaps, main_screen, (1.0 / 3.0, 2.0 / 3.0), (0.0, 0.5))
-            }
-            WindowAction::TopRightSixth => grid(a, gaps, main_screen, (2.0 / 3.0, 1.0), (0.0, 0.5)),
-            WindowAction::BottomLeftSixth => {
-                grid(a, gaps, main_screen, (0.0, 1.0 / 3.0), (0.5, 1.0))
-            }
-            WindowAction::BottomCenterSixth => {
-                grid(a, gaps, main_screen, (1.0 / 3.0, 2.0 / 3.0), (0.5, 1.0))
-            }
-            WindowAction::BottomRightSixth => {
-                grid(a, gaps, main_screen, (2.0 / 3.0, 1.0), (0.5, 1.0))
-            }
-            WindowAction::TopLeftNinth => {
-                grid(a, gaps, main_screen, (0.0, 1.0 / 3.0), (0.0, 1.0 / 3.0))
-            }
-            WindowAction::TopCenterNinth => grid(
-                a,
-                gaps,
-                main_screen,
-                (1.0 / 3.0, 2.0 / 3.0),
-                (0.0, 1.0 / 3.0),
-            ),
-            WindowAction::TopRightNinth => {
-                grid(a, gaps, main_screen, (2.0 / 3.0, 1.0), (0.0, 1.0 / 3.0))
-            }
-            WindowAction::MiddleLeftNinth => grid(
-                a,
-                gaps,
-                main_screen,
-                (0.0, 1.0 / 3.0),
-                (1.0 / 3.0, 2.0 / 3.0),
-            ),
-            WindowAction::MiddleCenterNinth => grid(
-                a,
-                gaps,
-                main_screen,
-                (1.0 / 3.0, 2.0 / 3.0),
-                (1.0 / 3.0, 2.0 / 3.0),
-            ),
-            WindowAction::MiddleRightNinth => grid(
-                a,
-                gaps,
-                main_screen,
-                (2.0 / 3.0, 1.0),
-                (1.0 / 3.0, 2.0 / 3.0),
-            ),
-            WindowAction::BottomLeftNinth => {
-                grid(a, gaps, main_screen, (0.0, 1.0 / 3.0), (2.0 / 3.0, 1.0))
-            }
-            WindowAction::BottomCenterNinth => grid(
-                a,
-                gaps,
-                main_screen,
-                (1.0 / 3.0, 2.0 / 3.0),
-                (2.0 / 3.0, 1.0),
-            ),
-            WindowAction::BottomRightNinth => {
-                grid(a, gaps, main_screen, (2.0 / 3.0, 1.0), (2.0 / 3.0, 1.0))
-            }
-            WindowAction::Maximize => grid(a, gaps, main_screen, (0.0, 1.0), (0.0, 1.0)),
-            WindowAction::CenterHalf | WindowAction::CenterHalfBack => {
-                grid(a, gaps, main_screen, (0.25, 0.75), (0.0, 1.0))
-            }
-            WindowAction::MaximizeHeight => {
-                // Keep the window's current horizontal position and width, but
-                // stretch it to the full work-area height. The vertical extent
-                // is taken from a full-height grid cell so the top and bottom
-                // screen-edge gaps are applied by the gap helper rather than
-                // open-coded here.
-                let full = grid(a, gaps, main_screen, (0.0, 1.0), (0.0, 1.0));
-                Rect::new(current.x, full.y, current.width, full.height)
-            }
-            WindowAction::AlmostMaximize => {
-                // A centred box occupying a configurable fraction of the work
-                // area (defaulting to Rectangle's 0.9 x 0.9). Like Center and
-                // Maximize's sibling size variants it ignores gaps.
-                let w = a.width * sizes.almost_maximize_width;
-                let h = a.height * sizes.almost_maximize_height;
-                return Some(
-                    Rect::new(a.x + (a.width - w) / 2.0, a.y + (a.height - h) / 2.0, w, h)
-                        .rounded(),
-                );
-            }
-            WindowAction::Center => {
-                // Centering preserves the window's current size, clamped to the
-                // work area so it can never end up larger than the screen. It
-                // deliberately ignores gaps, matching Rectangle.
-                let w = current.width.min(a.width);
-                let h = current.height.min(a.height);
-                return Some(
-                    Rect::new(a.x + (a.width - w) / 2.0, a.y + (a.height - h) / 2.0, w, h)
-                        .rounded(),
-                );
-            }
-            WindowAction::Restore => return None,
-            // The display actions depend on the whole screen list, which this
-            // function does not have; `Engine::plan` handles them.
-            WindowAction::NextDisplay
-            | WindowAction::PreviousDisplay
+            WindowAction::Maximize => grid(work_area, gaps, main_screen, (0.0, 1.0), (0.0, 1.0)),
+            WindowAction::Restore
             | WindowAction::DisplayLeft
             | WindowAction::DisplayRight
             | WindowAction::DisplayUp
-            | WindowAction::DisplayDown
-            | WindowAction::FirstDisplay
-            | WindowAction::SecondDisplay
-            | WindowAction::ThirdDisplay
-            | WindowAction::FourthDisplay => return None,
-
-            // Incremental moves slide the window by a fixed step without
-            // changing its size, stopping flush against the work area rather
-            // than travelling off the edge of it. Rectangle's `moveLeft` jumps
-            // straight to the edge instead; a step is what makes the action
-            // *incremental*, which is what this family is for, and repeated
-            // presses still end flush at the edge.
-            WindowAction::MoveLeft => moved(current, a, -sizes.move_step, 0.0),
-            WindowAction::MoveRight => moved(current, a, sizes.move_step, 0.0),
-            WindowAction::MoveUp => moved(current, a, 0.0, -sizes.move_step),
-            WindowAction::MoveDown => moved(current, a, 0.0, sizes.move_step),
-
-            WindowAction::Larger => resized(current, a, sizes.size_step, sizes.size_step, sizes),
-            WindowAction::Smaller => resized(current, a, -sizes.size_step, -sizes.size_step, sizes),
-            WindowAction::LargerWidth => resized(current, a, sizes.width_step, 0.0, sizes),
-            WindowAction::SmallerWidth => resized(current, a, -sizes.width_step, 0.0, sizes),
-            WindowAction::LargerHeight => resized(current, a, 0.0, sizes.size_step, sizes),
-            WindowAction::SmallerHeight => resized(current, a, 0.0, -sizes.size_step, sizes),
-
-            // Halving and doubling keep the edge named by the action: "double
-            // width left" grows leftwards from the window's right edge, and
-            // "halve width left" keeps the left half. Same convention as
-            // Rectangle's `HalfOrDoubleDimensionCalculation`.
-            WindowAction::DoubleWidthLeft => scaled(
-                current,
-                a,
-                Rect::new(
-                    current.x - current.width,
-                    current.y,
-                    current.width * 2.0,
-                    current.height,
-                ),
-                sizes,
-            ),
-            WindowAction::DoubleWidthRight => scaled(
-                current,
-                a,
-                Rect::new(current.x, current.y, current.width * 2.0, current.height),
-                sizes,
-            ),
-            WindowAction::DoubleHeightUp => scaled(
-                current,
-                a,
-                Rect::new(
-                    current.x,
-                    current.y - current.height,
-                    current.width,
-                    current.height * 2.0,
-                ),
-                sizes,
-            ),
-            WindowAction::DoubleHeightDown => scaled(
-                current,
-                a,
-                Rect::new(current.x, current.y, current.width, current.height * 2.0),
-                sizes,
-            ),
-            WindowAction::HalveWidthLeft => scaled(
-                current,
-                a,
-                Rect::new(current.x, current.y, current.width / 2.0, current.height),
-                sizes,
-            ),
-            WindowAction::HalveWidthRight => scaled(
-                current,
-                a,
-                Rect::new(
-                    current.x + current.width / 2.0,
-                    current.y,
-                    current.width / 2.0,
-                    current.height,
-                ),
-                sizes,
-            ),
-            WindowAction::HalveHeightUp => scaled(
-                current,
-                a,
-                Rect::new(current.x, current.y, current.width, current.height / 2.0),
-                sizes,
-            ),
-            WindowAction::HalveHeightDown => scaled(
-                current,
-                a,
-                Rect::new(
-                    current.x,
-                    current.y + current.height / 2.0,
-                    current.width,
-                    current.height / 2.0,
-                ),
-                sizes,
-            ),
+            | WindowAction::DisplayDown => return None,
         };
-
         Some(rect.rounded())
     }
 }
 
-/// How close to a work-area edge a window has to be to count as flush against
-/// it, in the backend's own unit. Matches Rectangle's 5-unit default.
-///
-/// Being flush is what anchors an incremental resize: a window against the
-/// right edge grows leftwards rather than sliding off the screen.
-const EDGE_TOLERANCE: f64 = 5.0;
-
-/// Slides `current` by `(dx, dy)`, clamped so it stays wholly inside `area`.
-fn moved(current: Rect, area: Rect, dx: f64, dy: f64) -> Rect {
-    Rect::new(
-        current.x + dx,
-        current.y + dy,
-        current.width,
-        current.height,
-    )
-    .clamped_within(area)
+impl fmt::Display for WindowAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.id())
+    }
 }
 
-/// Grows or shrinks `current` by `(dw, dh)`, anchored to whichever work-area
-/// edges it is already flush against and otherwise centred, then clamped into
-/// `area`.
+/// A half-height corner placement reached through [`crate::CornerComposer`].
 ///
-/// Anchoring is the point. Centring the change reads correctly for a floating
-/// window, but a window already flush against the right edge would be pushed
-/// off it — so an edge the window is touching stays put, exactly as
-/// Rectangle's "curtain" resize does. A window flush against *both* opposing
-/// edges spans the work area on that axis and simply keeps doing so.
-///
-/// Returns `current` unchanged when the result would be smaller than the
-/// configured minimum, so repeated presses can never shrink a window away.
-fn resized(current: Rect, area: Rect, dw: f64, dh: f64, sizes: SizeOptions) -> Rect {
-    let against_left = (current.x - area.x).abs() <= EDGE_TOLERANCE;
-    let against_right = (current.max_x() - area.max_x()).abs() <= EDGE_TOLERANCE;
-    let against_top = (current.y - area.y).abs() <= EDGE_TOLERANCE;
-    let against_bottom = (current.max_y() - area.max_y()).abs() <= EDGE_TOLERANCE;
-
-    let width = (current.width + dw).min(area.width);
-    let height = (current.height + dh).min(area.height);
-
-    let x = match (against_left, against_right) {
-        // Flush against both edges the window spans the work area on this
-        // axis; shrinking it should leave it centred rather than pinned to one
-        // side. (Growing cannot move it, since the width is capped above.)
-        (true, true) => current.x + (current.width - width) / 2.0,
-        (true, false) => current.x,
-        (false, true) => current.max_x() - width,
-        (false, false) => current.x - (width - current.width) / 2.0,
-    };
-    let y = match (against_top, against_bottom) {
-        (true, true) => current.y + (current.height - height) / 2.0,
-        (true, false) => current.y,
-        (false, true) => current.max_y() - height,
-        (false, false) => current.y - (height - current.height) / 2.0,
-    };
-
-    let resized = Rect::new(x, y, width, height);
-    guard_minimum(current, resized, area, sizes)
+/// Corners are not bindable actions; they are composed from a side placement
+/// followed by the maximize or restore key while holding the base modifier, and
+/// cycle horizontally through the configured size cycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Corner {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
 }
 
-/// Applies an already-computed halve or double rectangle, clamping it into
-/// `area` and refusing the change when it would leave the window below the
-/// configured minimum.
-fn scaled(current: Rect, area: Rect, target: Rect, sizes: SizeOptions) -> Rect {
-    guard_minimum(current, target, area, sizes)
+impl Corner {
+    pub const ALL: [Corner; 4] = [
+        Corner::TopLeft,
+        Corner::TopRight,
+        Corner::BottomLeft,
+        Corner::BottomRight,
+    ];
+
+    pub const fn id(self) -> &'static str {
+        match self {
+            Corner::TopLeft => "top-left",
+            Corner::TopRight => "top-right",
+            Corner::BottomLeft => "bottom-left",
+            Corner::BottomRight => "bottom-right",
+        }
+    }
+
+    /// The full-height side this corner sits on.
+    pub const fn side(self) -> WindowAction {
+        match self {
+            Corner::TopLeft | Corner::BottomLeft => WindowAction::LeftHalf,
+            Corner::TopRight | Corner::BottomRight => WindowAction::RightHalf,
+        }
+    }
+
+    /// This corner's rectangle at `fraction` of the work-area width, keeping
+    /// its half height.
+    pub fn cycle_rect(
+        self,
+        work_area: Rect,
+        gaps: &Gaps,
+        main_screen: bool,
+        fraction: f64,
+    ) -> Option<Rect> {
+        if !(fraction.is_finite() && fraction > 0.0 && fraction <= 1.0) {
+            return None;
+        }
+        let f = fraction;
+        let rect = match self {
+            Corner::TopLeft => grid(work_area, gaps, main_screen, (0.0, f), (0.0, 0.5)),
+            Corner::TopRight => grid(work_area, gaps, main_screen, (1.0 - f, 1.0), (0.0, 0.5)),
+            Corner::BottomLeft => grid(work_area, gaps, main_screen, (0.0, f), (0.5, 1.0)),
+            Corner::BottomRight => grid(work_area, gaps, main_screen, (1.0 - f, 1.0), (0.5, 1.0)),
+        };
+        Some(rect.rounded())
+    }
+
+    pub fn target_rect(self, work_area: Rect, gaps: &Gaps, main_screen: bool) -> Rect {
+        self.cycle_rect(work_area, gaps, main_screen, 0.5)
+            .expect("0.5 is always a valid cycle fraction")
+    }
 }
 
-/// Clamps `target` into `area`, unless doing so would shrink the window below
-/// the configured minimum on an axis it is shrinking on — in which case the
-/// window is left exactly where it is.
-///
-/// The guard is deliberately one-sided. Only a *reducing* change can be
-/// refused, so a wide, short window can still be made taller even while its
-/// height is below the floor; and only the axis actually shrinking is
-/// considered, so a width change is never blocked by the height. This is what
-/// stops repeated presses from shrinking a window away, without leaving an
-/// already-small window unresizable. Mirrors Rectangle's
-/// `resizedWindowRectIsTooSmall`, applied per axis.
-fn guard_minimum(current: Rect, target: Rect, area: Rect, sizes: SizeOptions) -> Rect {
-    let min_width = (area.width * sizes.minimum_width).max(1.0);
-    let min_height = (area.height * sizes.minimum_height).max(1.0);
-    let too_narrow = target.width < current.width && target.width < min_width;
-    let too_short = target.height < current.height && target.height < min_height;
-    if too_narrow || too_short {
-        current
-    } else {
-        target.clamped_within(area)
+impl fmt::Display for Corner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.id())
+    }
+}
+
+/// Either a bindable [`WindowAction`] or a composed [`Corner`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ActionTarget {
+    Action(WindowAction),
+    Corner(Corner),
+}
+
+impl ActionTarget {
+    pub const fn id(self) -> &'static str {
+        match self {
+            ActionTarget::Action(action) => action.id(),
+            ActionTarget::Corner(corner) => corner.id(),
+        }
+    }
+
+    pub const fn as_action(self) -> Option<WindowAction> {
+        match self {
+            ActionTarget::Action(action) => Some(action),
+            ActionTarget::Corner(_) => None,
+        }
+    }
+
+    pub const fn uses_history(self) -> bool {
+        matches!(self, ActionTarget::Action(action) if action.uses_history())
+    }
+
+    pub const fn moves_display(self) -> bool {
+        matches!(self, ActionTarget::Action(action) if action.moves_display())
+    }
+
+    pub const fn display_direction(self) -> Option<Direction> {
+        match self {
+            ActionTarget::Action(action) => action.display_direction(),
+            ActionTarget::Corner(_) => None,
+        }
+    }
+
+    pub const fn cycles(self) -> bool {
+        match self {
+            ActionTarget::Action(action) => action.cycles(),
+            ActionTarget::Corner(_) => true,
+        }
+    }
+
+    /// The full-height side this target belongs to when participating in
+    /// corner composition (`LeftHalf` / `RightHalf` or their corners).
+    pub const fn composition_side(self) -> Option<WindowAction> {
+        match self {
+            ActionTarget::Action(action @ (WindowAction::LeftHalf | WindowAction::RightHalf)) => {
+                Some(action)
+            }
+            ActionTarget::Corner(corner) => Some(corner.side()),
+            _ => None,
+        }
+    }
+
+    pub fn cycle_rect(
+        self,
+        work_area: Rect,
+        gaps: &Gaps,
+        main_screen: bool,
+        fraction: f64,
+    ) -> Option<Rect> {
+        match self {
+            ActionTarget::Action(action) => {
+                action.cycle_rect(work_area, gaps, main_screen, fraction)
+            }
+            ActionTarget::Corner(corner) => {
+                corner.cycle_rect(work_area, gaps, main_screen, fraction)
+            }
+        }
+    }
+
+    pub fn target_rect(self, work_area: Rect, gaps: &Gaps, main_screen: bool) -> Option<Rect> {
+        match self {
+            ActionTarget::Action(action) => action.target_rect(work_area, gaps, main_screen),
+            ActionTarget::Corner(corner) => Some(corner.target_rect(work_area, gaps, main_screen)),
+        }
+    }
+}
+
+impl From<WindowAction> for ActionTarget {
+    fn from(action: WindowAction) -> Self {
+        ActionTarget::Action(action)
+    }
+}
+
+impl From<Corner> for ActionTarget {
+    fn from(corner: Corner) -> Self {
+        ActionTarget::Corner(corner)
+    }
+}
+
+impl fmt::Display for ActionTarget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.id())
+    }
+}
+
+impl Serialize for ActionTarget {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.id())
+    }
+}
+
+/// A placement or display-move request delivered by a hotkey or the tray menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ActionRequest {
+    pub target: ActionTarget,
+    /// A vertical step composed on a side (`Top ↔ Full ↔ Bottom`) — see
+    /// [`crate::CornerComposer`]. Keeps the width the window already has on
+    /// that side instead of starting at a half.
+    pub composed: bool,
+    /// Originated from the tray/menu-bar menu, so failures surface a brief
+    /// notice rather than staying silent like a hotkey. Menu clicks still cycle
+    /// on repeats.
+    pub from_menu: bool,
+}
+
+impl ActionRequest {
+    pub fn composed(target: impl Into<ActionTarget>) -> Self {
+        Self {
+            target: target.into(),
+            composed: true,
+            from_menu: false,
+        }
+    }
+
+    pub const fn from_menu(action: WindowAction) -> Self {
+        Self {
+            target: ActionTarget::Action(action),
+            composed: false,
+            from_menu: true,
+        }
+    }
+}
+
+impl From<WindowAction> for ActionRequest {
+    fn from(action: WindowAction) -> Self {
+        Self {
+            target: ActionTarget::Action(action),
+            composed: false,
+            from_menu: false,
+        }
+    }
+}
+
+impl From<Corner> for ActionRequest {
+    fn from(corner: Corner) -> Self {
+        Self {
+            target: ActionTarget::Corner(corner),
+            composed: false,
+            from_menu: false,
+        }
+    }
+}
+
+impl From<ActionTarget> for ActionRequest {
+    fn from(target: ActionTarget) -> Self {
+        Self {
+            target,
+            composed: false,
+            from_menu: false,
+        }
     }
 }
 
@@ -1166,56 +475,6 @@ fn grid(area: Rect, gaps: &Gaps, main_screen: bool, cols: (f64, f64), rows: (f64
     gaps.apply(raw, shared, main_screen)
 }
 
-impl fmt::Display for WindowAction {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.id())
-    }
-}
-
-/// An action to perform, and whether it must land exactly where it says.
-///
-/// Hotkeys are never exact: repeating one is how a window cycles through
-/// sizes. A tray menu item names a size in its label, so it is exact — see
-/// [`crate::Engine::plan_exact`]. Both travel on one channel, so the hotkey
-/// backends send this type directly and the two sources stay in arrival order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ActionRequest {
-    pub action: WindowAction,
-    pub exact: bool,
-    /// A vertical step composed on a side (`Top ↔ Full ↔ Bottom`) — see
-    /// [`crate::CornerComposer`]. The target keeps the width the window
-    /// already has on that side instead of starting at a half.
-    pub composed: bool,
-}
-
-impl ActionRequest {
-    pub const fn exact(action: WindowAction) -> Self {
-        Self {
-            action,
-            exact: true,
-            composed: false,
-        }
-    }
-
-    pub const fn composed(action: WindowAction) -> Self {
-        Self {
-            action,
-            exact: false,
-            composed: true,
-        }
-    }
-}
-
-impl From<WindowAction> for ActionRequest {
-    fn from(action: WindowAction) -> Self {
-        Self {
-            action,
-            exact: false,
-            composed: false,
-        }
-    }
-}
-
 /// Error returned when parsing an unknown action identifier.
 #[derive(Debug, thiserror::Error)]
 #[error("unknown window action: {0}")]
@@ -1238,1082 +497,145 @@ mod tests {
     use super::*;
 
     const AREA: Rect = Rect::new(0.0, 0.0, 1920.0, 1040.0);
-    const CURRENT: Rect = Rect::new(300.0, 300.0, 800.0, 600.0);
-    const NO_GAPS: Gaps = Gaps {
-        window: 0.0,
-        edge_top: 0.0,
-        edge_bottom: 0.0,
-        edge_left: 0.0,
-        edge_right: 0.0,
-        skip_top_edge: false,
-        main_screen_only: false,
-    };
-
-    /// A work area with a non-zero origin, simulating a taskbar on the left
-    /// edge of a secondary monitor.
-    const OFFSET_AREA: Rect = Rect::new(1980.0, 30.0, 1860.0, 1010.0);
-
-    /// A 10px window gap with 20px screen-edge gaps on every side, to exercise
-    /// the screen-edge vs shared-edge distinction.
-    const GAPPY: Gaps = Gaps {
-        window: 10.0,
-        edge_top: 20.0,
-        edge_bottom: 20.0,
-        edge_left: 20.0,
-        edge_right: 20.0,
-        skip_top_edge: false,
-        main_screen_only: false,
-    };
-
-    fn rect(action: WindowAction, area: Rect, gaps: &Gaps) -> Rect {
-        action
-            .target_rect(area, gaps, CURRENT, true, SizeOptions::default())
-            .unwrap()
-    }
-
-    /// Asserts that `members` exactly cover `area`: no gaps between them, no
-    /// overflow past the edges, and no overlap. Because [`Rect::rounded`] keeps
-    /// complementary edges flush, this holds even on odd pixel dimensions.
-    fn assert_tiles_exactly(members: &[Rect], area: Rect) {
-        let mut sum = 0.0;
-        for (i, m) in members.iter().enumerate() {
-            assert!(
-                m.x >= area.x && m.y >= area.y,
-                "member {m:?} starts before area {area:?}"
-            );
-            assert!(
-                m.max_x() <= area.max_x() && m.max_y() <= area.max_y(),
-                "member {m:?} overflows area {area:?}"
-            );
-            sum += m.width * m.height;
-            for n in &members[i + 1..] {
-                assert_eq!(
-                    m.intersection_area(n),
-                    0.0,
-                    "members overlap: {m:?} and {n:?}"
-                );
-            }
-        }
-        assert_eq!(
-            sum,
-            area.width * area.height,
-            "members leave a seam or overflow {area:?}"
-        );
-    }
 
     #[test]
-    fn halves_tile_the_work_area_exactly() {
-        let l = rect(WindowAction::LeftHalf, AREA, &NO_GAPS);
-        let r = rect(WindowAction::RightHalf, AREA, &NO_GAPS);
-        assert_eq!(l, Rect::new(0.0, 0.0, 960.0, 1040.0));
-        assert_eq!(r, Rect::new(960.0, 0.0, 960.0, 1040.0));
-        assert_eq!(l.max_x(), r.x);
-        assert_eq!(l.width + r.width, AREA.width);
-    }
-
-    #[test]
-    fn odd_width_halves_leave_no_seam_and_no_overflow() {
-        let area = Rect::new(0.0, 0.0, 1367.0, 768.0);
-        let l = rect(WindowAction::LeftHalf, area, &NO_GAPS);
-        let r = rect(WindowAction::RightHalf, area, &NO_GAPS);
-        assert_eq!(l.max_x(), r.x);
-        assert_eq!(r.max_x(), area.max_x());
-    }
-
-    #[test]
-    fn work_area_offset_is_respected() {
-        // Simulates a taskbar on the left and a second monitor origin.
-        let area = Rect::new(1920.0 + 60.0, 30.0, 1860.0, 1010.0);
-        let l = rect(WindowAction::LeftHalf, area, &NO_GAPS);
-        assert_eq!(l.x, 1980.0);
-        assert_eq!(l.y, 30.0);
-        assert_eq!(l.width, 930.0);
-    }
-
-    #[test]
-    fn maximize_fills_work_area() {
-        let m = rect(WindowAction::Maximize, AREA, &NO_GAPS);
-        assert_eq!(m, AREA);
-    }
-
-    #[test]
-    fn corners_are_exact_quarters() {
-        let tl = rect(WindowAction::TopLeft, AREA, &NO_GAPS);
-        let tr = rect(WindowAction::TopRight, AREA, &NO_GAPS);
-        let bl = rect(WindowAction::BottomLeft, AREA, &NO_GAPS);
-        let br = rect(WindowAction::BottomRight, AREA, &NO_GAPS);
-        assert_eq!(tl, Rect::new(0.0, 0.0, 960.0, 520.0));
-        assert_eq!(tr, Rect::new(960.0, 0.0, 960.0, 520.0));
-        assert_eq!(bl, Rect::new(0.0, 520.0, 960.0, 520.0));
-        assert_eq!(br, Rect::new(960.0, 520.0, 960.0, 520.0));
-        // Adjacent corners share an edge exactly.
-        assert_eq!(tl.max_x(), tr.x);
-        assert_eq!(tl.max_y(), bl.y);
-        assert_eq!(br.x, bl.max_x());
-        assert_eq!(br.y, tr.max_y());
+    fn halves_tile_the_work_area_without_seam_even_on_odd_width() {
+        let odd = Rect::new(0.0, 0.0, 1367.0, 768.0);
+        let left = WindowAction::LeftHalf
+            .target_rect(odd, &Gaps::default(), true)
+            .unwrap();
+        let right = WindowAction::RightHalf
+            .target_rect(odd, &Gaps::default(), true)
+            .unwrap();
+        assert_eq!(left.x, odd.x);
+        assert_eq!(left.max_x(), right.x);
+        assert_eq!(right.max_x(), odd.max_x());
+        assert_eq!(left.height, odd.height);
     }
 
     #[test]
     fn corners_tile_with_no_seam_on_odd_dimensions() {
-        let area = Rect::new(0.0, 0.0, 1367.0, 769.0);
-        let members = [
-            rect(WindowAction::TopLeft, area, &NO_GAPS),
-            rect(WindowAction::TopRight, area, &NO_GAPS),
-            rect(WindowAction::BottomLeft, area, &NO_GAPS),
-            rect(WindowAction::BottomRight, area, &NO_GAPS),
-        ];
-        assert_tiles_exactly(&members, area);
-    }
+        let odd = Rect::new(100.0, 40.0, 1367.0, 769.0);
+        let tl = Corner::TopLeft.target_rect(odd, &Gaps::default(), true);
+        let tr = Corner::TopRight.target_rect(odd, &Gaps::default(), true);
+        let bl = Corner::BottomLeft.target_rect(odd, &Gaps::default(), true);
+        let br = Corner::BottomRight.target_rect(odd, &Gaps::default(), true);
 
-    #[test]
-    fn corners_respect_work_area_offset() {
-        let tl = rect(WindowAction::TopLeft, OFFSET_AREA, &NO_GAPS);
-        assert_eq!(tl, Rect::new(1980.0, 30.0, 930.0, 505.0));
-        let br = rect(WindowAction::BottomRight, OFFSET_AREA, &NO_GAPS);
-        assert_eq!(br.max_x(), OFFSET_AREA.max_x());
-        assert_eq!(br.max_y(), OFFSET_AREA.max_y());
-    }
-
-    #[test]
-    fn corners_apply_screen_and_shared_edge_gaps() {
-        let tl = rect(WindowAction::TopLeft, AREA, &GAPPY);
-        let tr = rect(WindowAction::TopRight, AREA, &GAPPY);
-        let bl = rect(WindowAction::BottomLeft, AREA, &GAPPY);
-        // Outer edges get the full 20px screen gap.
-        assert_eq!(tl.x, 20.0);
-        assert_eq!(tl.y, 20.0);
-        // Shared inner edges are separated by exactly one window gap.
-        assert_eq!(tr.x - tl.max_x(), GAPPY.window);
-        assert_eq!(bl.y - tl.max_y(), GAPPY.window);
-        assert_eq!(tr.max_x(), AREA.width - 20.0);
-    }
-
-    #[test]
-    fn horizontal_thirds_are_exact() {
-        let first = rect(WindowAction::FirstThird, AREA, &NO_GAPS);
-        let center = rect(WindowAction::CenterThird, AREA, &NO_GAPS);
-        let last = rect(WindowAction::LastThird, AREA, &NO_GAPS);
-        assert_eq!(first, Rect::new(0.0, 0.0, 640.0, 1040.0));
-        assert_eq!(center, Rect::new(640.0, 0.0, 640.0, 1040.0));
-        assert_eq!(last, Rect::new(1280.0, 0.0, 640.0, 1040.0));
-        // Adjacent thirds share an edge exactly.
-        assert_eq!(first.max_x(), center.x);
-        assert_eq!(center.max_x(), last.x);
-
-        // Two-thirds spans and their complementary third.
-        let first_two = rect(WindowAction::FirstTwoThirds, AREA, &NO_GAPS);
-        let last_two = rect(WindowAction::LastTwoThirds, AREA, &NO_GAPS);
-        let center_two = rect(WindowAction::CenterTwoThirds, AREA, &NO_GAPS);
-        assert_eq!(first_two, Rect::new(0.0, 0.0, 1280.0, 1040.0));
-        assert_eq!(last_two, Rect::new(640.0, 0.0, 1280.0, 1040.0));
-        assert_eq!(center_two, Rect::new(320.0, 0.0, 1280.0, 1040.0));
-        // FirstTwoThirds is exactly FirstThird + CenterThird.
-        assert_eq!(first_two.max_x(), last.x);
-    }
-
-    #[test]
-    fn horizontal_thirds_tile_with_no_seam_on_odd_width() {
-        let area = Rect::new(0.0, 0.0, 1367.0, 769.0);
-        let members = [
-            rect(WindowAction::FirstThird, area, &NO_GAPS),
-            rect(WindowAction::CenterThird, area, &NO_GAPS),
-            rect(WindowAction::LastThird, area, &NO_GAPS),
-        ];
-        assert_tiles_exactly(&members, area);
-    }
-
-    #[test]
-    fn horizontal_thirds_respect_offset_and_gaps() {
-        let first = rect(WindowAction::FirstThird, OFFSET_AREA, &NO_GAPS);
-        assert_eq!(first.x, OFFSET_AREA.x);
-        assert_eq!(first.y, OFFSET_AREA.y);
-        let last = rect(WindowAction::LastThird, OFFSET_AREA, &NO_GAPS);
-        assert_eq!(last.max_x(), OFFSET_AREA.max_x());
-
-        // Gaps: outer edges get the screen gap; the seam is one window gap.
-        let first = rect(WindowAction::FirstThird, AREA, &GAPPY);
-        let center = rect(WindowAction::CenterThird, AREA, &GAPPY);
-        assert_eq!(first.x, 20.0);
-        assert_eq!(first.y, 20.0);
-        assert_eq!(first.max_y(), AREA.height - 20.0);
-        assert_eq!(center.x - first.max_x(), GAPPY.window);
-    }
-
-    #[test]
-    fn vertical_thirds_are_exact() {
-        let top = rect(WindowAction::TopVerticalThird, AREA, &NO_GAPS);
-        let middle = rect(WindowAction::MiddleVerticalThird, AREA, &NO_GAPS);
-        let bottom = rect(WindowAction::BottomVerticalThird, AREA, &NO_GAPS);
-        assert_eq!(top, Rect::new(0.0, 0.0, 1920.0, 347.0));
-        assert_eq!(middle.x, 0.0);
-        assert_eq!(middle.width, 1920.0);
-        assert_eq!(bottom.max_y(), AREA.height);
-        // Adjacent vertical thirds share a horizontal edge exactly.
-        assert_eq!(top.max_y(), middle.y);
-        assert_eq!(middle.max_y(), bottom.y);
-
-        let top_two = rect(WindowAction::TopVerticalTwoThirds, AREA, &NO_GAPS);
-        let bottom_two = rect(WindowAction::BottomVerticalTwoThirds, AREA, &NO_GAPS);
-        assert_eq!(top_two.y, 0.0);
-        assert_eq!(top_two.max_y(), bottom.y);
-        assert_eq!(bottom_two.y, middle.y);
-        assert_eq!(bottom_two.max_y(), AREA.height);
-    }
-
-    #[test]
-    fn vertical_thirds_tile_with_no_seam_on_odd_height() {
-        let area = Rect::new(0.0, 0.0, 1367.0, 769.0);
-        let members = [
-            rect(WindowAction::TopVerticalThird, area, &NO_GAPS),
-            rect(WindowAction::MiddleVerticalThird, area, &NO_GAPS),
-            rect(WindowAction::BottomVerticalThird, area, &NO_GAPS),
-        ];
-        assert_tiles_exactly(&members, area);
-    }
-
-    #[test]
-    fn vertical_thirds_respect_offset_and_gaps() {
-        let top = rect(WindowAction::TopVerticalThird, OFFSET_AREA, &NO_GAPS);
-        assert_eq!(top.x, OFFSET_AREA.x);
-        assert_eq!(top.y, OFFSET_AREA.y);
-        assert_eq!(top.width, OFFSET_AREA.width);
-
-        let top = rect(WindowAction::TopVerticalThird, AREA, &GAPPY);
-        let middle = rect(WindowAction::MiddleVerticalThird, AREA, &GAPPY);
-        // Left/right are screen edges; the seam between rows is one window gap.
-        assert_eq!(top.x, 20.0);
-        assert_eq!(top.max_x(), AREA.width - 20.0);
-        assert_eq!(top.y, 20.0);
-        assert_eq!(middle.y - top.max_y(), GAPPY.window);
-    }
-
-    #[test]
-    fn fourths_are_exact() {
-        let first = rect(WindowAction::FirstFourth, AREA, &NO_GAPS);
-        let second = rect(WindowAction::SecondFourth, AREA, &NO_GAPS);
-        let third = rect(WindowAction::ThirdFourth, AREA, &NO_GAPS);
-        let last = rect(WindowAction::LastFourth, AREA, &NO_GAPS);
-        assert_eq!(first, Rect::new(0.0, 0.0, 480.0, 1040.0));
-        assert_eq!(second, Rect::new(480.0, 0.0, 480.0, 1040.0));
-        assert_eq!(third, Rect::new(960.0, 0.0, 480.0, 1040.0));
-        assert_eq!(last, Rect::new(1440.0, 0.0, 480.0, 1040.0));
-        assert_eq!(first.max_x(), second.x);
-        assert_eq!(second.max_x(), third.x);
-        assert_eq!(third.max_x(), last.x);
-
-        let first_three = rect(WindowAction::FirstThreeFourths, AREA, &NO_GAPS);
-        let last_three = rect(WindowAction::LastThreeFourths, AREA, &NO_GAPS);
-        let center_three = rect(WindowAction::CenterThreeFourths, AREA, &NO_GAPS);
-        assert_eq!(first_three, Rect::new(0.0, 0.0, 1440.0, 1040.0));
-        assert_eq!(last_three, Rect::new(480.0, 0.0, 1440.0, 1040.0));
-        assert_eq!(center_three, Rect::new(240.0, 0.0, 1440.0, 1040.0));
-        // FirstThreeFourths ends where LastFourth begins.
-        assert_eq!(first_three.max_x(), last.x);
-    }
-
-    #[test]
-    fn fourths_tile_with_no_seam_on_odd_width() {
-        let area = Rect::new(0.0, 0.0, 1367.0, 769.0);
-        let members = [
-            rect(WindowAction::FirstFourth, area, &NO_GAPS),
-            rect(WindowAction::SecondFourth, area, &NO_GAPS),
-            rect(WindowAction::ThirdFourth, area, &NO_GAPS),
-            rect(WindowAction::LastFourth, area, &NO_GAPS),
-        ];
-        assert_tiles_exactly(&members, area);
-    }
-
-    #[test]
-    fn fourths_respect_offset_and_gaps() {
-        let first = rect(WindowAction::FirstFourth, OFFSET_AREA, &NO_GAPS);
-        assert_eq!(first.x, OFFSET_AREA.x);
-        assert_eq!(first.y, OFFSET_AREA.y);
-        let last = rect(WindowAction::LastFourth, OFFSET_AREA, &NO_GAPS);
-        assert_eq!(last.max_x(), OFFSET_AREA.max_x());
-
-        let first = rect(WindowAction::FirstFourth, AREA, &GAPPY);
-        let second = rect(WindowAction::SecondFourth, AREA, &GAPPY);
-        assert_eq!(first.x, 20.0);
-        assert_eq!(first.y, 20.0);
-        assert_eq!(second.x - first.max_x(), GAPPY.window);
-    }
-
-    #[test]
-    fn corner_thirds_are_two_thirds_by_half_blocks() {
-        let tl = rect(WindowAction::TopLeftThird, AREA, &NO_GAPS);
-        let tr = rect(WindowAction::TopRightThird, AREA, &NO_GAPS);
-        let bl = rect(WindowAction::BottomLeftThird, AREA, &NO_GAPS);
-        let br = rect(WindowAction::BottomRightThird, AREA, &NO_GAPS);
-        assert_eq!(tl, Rect::new(0.0, 0.0, 1280.0, 520.0));
-        assert_eq!(tr, Rect::new(640.0, 0.0, 1280.0, 520.0));
-        assert_eq!(bl, Rect::new(0.0, 520.0, 1280.0, 520.0));
-        assert_eq!(br, Rect::new(640.0, 520.0, 1280.0, 520.0));
-        // Left-anchored pair shares the horizontal mid-line.
+        assert_eq!(tl.max_x(), tr.x);
+        assert_eq!(bl.max_x(), br.x);
         assert_eq!(tl.max_y(), bl.y);
         assert_eq!(tr.max_y(), br.y);
-        // The family intentionally overlaps in the centre third.
-        assert!(tl.intersection_area(&tr) > 0.0);
-    }
-
-    #[test]
-    fn corner_thirds_respect_offset_and_gaps() {
-        let tr = rect(WindowAction::TopRightThird, OFFSET_AREA, &NO_GAPS);
-        assert_eq!(tr.max_x(), OFFSET_AREA.max_x());
-        assert_eq!(tr.y, OFFSET_AREA.y);
-
-        let tl = rect(WindowAction::TopLeftThird, AREA, &GAPPY);
-        // Left and top are screen edges; right and bottom are shared.
-        assert_eq!(tl.x, 20.0);
-        assert_eq!(tl.y, 20.0);
-        assert_eq!(tl.width, 1280.0 - 20.0 - GAPPY.window / 2.0);
-        assert_eq!(tl.height, 520.0 - 20.0 - GAPPY.window / 2.0);
-    }
-
-    #[test]
-    fn sixths_are_exact() {
-        let tl = rect(WindowAction::TopLeftSixth, AREA, &NO_GAPS);
-        let tc = rect(WindowAction::TopCenterSixth, AREA, &NO_GAPS);
-        let tr = rect(WindowAction::TopRightSixth, AREA, &NO_GAPS);
-        let bl = rect(WindowAction::BottomLeftSixth, AREA, &NO_GAPS);
-        let bc = rect(WindowAction::BottomCenterSixth, AREA, &NO_GAPS);
-        let br = rect(WindowAction::BottomRightSixth, AREA, &NO_GAPS);
-        assert_eq!(tl, Rect::new(0.0, 0.0, 640.0, 520.0));
-        assert_eq!(tc, Rect::new(640.0, 0.0, 640.0, 520.0));
-        assert_eq!(tr, Rect::new(1280.0, 0.0, 640.0, 520.0));
-        assert_eq!(bl, Rect::new(0.0, 520.0, 640.0, 520.0));
-        assert_eq!(bc, Rect::new(640.0, 520.0, 640.0, 520.0));
-        assert_eq!(br, Rect::new(1280.0, 520.0, 640.0, 520.0));
-        // Adjacent cells share edges exactly.
-        assert_eq!(tl.max_x(), tc.x);
-        assert_eq!(tl.max_y(), bl.y);
-    }
-
-    #[test]
-    fn sixths_tile_with_no_seam_on_odd_dimensions() {
-        let area = Rect::new(0.0, 0.0, 1367.0, 769.0);
-        let members = [
-            rect(WindowAction::TopLeftSixth, area, &NO_GAPS),
-            rect(WindowAction::TopCenterSixth, area, &NO_GAPS),
-            rect(WindowAction::TopRightSixth, area, &NO_GAPS),
-            rect(WindowAction::BottomLeftSixth, area, &NO_GAPS),
-            rect(WindowAction::BottomCenterSixth, area, &NO_GAPS),
-            rect(WindowAction::BottomRightSixth, area, &NO_GAPS),
-        ];
-        assert_tiles_exactly(&members, area);
-    }
-
-    #[test]
-    fn sixths_respect_offset_and_gaps() {
-        let br = rect(WindowAction::BottomRightSixth, OFFSET_AREA, &NO_GAPS);
-        assert_eq!(br.max_x(), OFFSET_AREA.max_x());
-        assert_eq!(br.max_y(), OFFSET_AREA.max_y());
-
-        let tl = rect(WindowAction::TopLeftSixth, AREA, &GAPPY);
-        let tc = rect(WindowAction::TopCenterSixth, AREA, &GAPPY);
-        let bl = rect(WindowAction::BottomLeftSixth, AREA, &GAPPY);
-        assert_eq!(tl.x, 20.0);
-        assert_eq!(tl.y, 20.0);
-        assert_eq!(tc.x - tl.max_x(), GAPPY.window);
-        assert_eq!(bl.y - tl.max_y(), GAPPY.window);
-    }
-
-    #[test]
-    fn ninths_are_exact() {
-        let tl = rect(WindowAction::TopLeftNinth, AREA, &NO_GAPS);
-        let mc = rect(WindowAction::MiddleCenterNinth, AREA, &NO_GAPS);
-        let br = rect(WindowAction::BottomRightNinth, AREA, &NO_GAPS);
-        assert_eq!(tl, Rect::new(0.0, 0.0, 640.0, 347.0));
-        assert_eq!(mc, Rect::new(640.0, 347.0, 640.0, 346.0));
-        assert_eq!(br, Rect::new(1280.0, 693.0, 640.0, 347.0));
-        // The centre cell is flush with its neighbours.
-        assert_eq!(tl.max_x(), mc.x);
-        assert_eq!(tl.max_y(), mc.y);
-        assert_eq!(mc.max_x(), br.x);
-        assert_eq!(mc.max_y(), br.y);
-    }
-
-    #[test]
-    fn ninths_tile_with_no_seam_on_odd_dimensions() {
-        let area = Rect::new(0.0, 0.0, 1367.0, 769.0);
-        let members: Vec<Rect> = [
-            WindowAction::TopLeftNinth,
-            WindowAction::TopCenterNinth,
-            WindowAction::TopRightNinth,
-            WindowAction::MiddleLeftNinth,
-            WindowAction::MiddleCenterNinth,
-            WindowAction::MiddleRightNinth,
-            WindowAction::BottomLeftNinth,
-            WindowAction::BottomCenterNinth,
-            WindowAction::BottomRightNinth,
-        ]
-        .iter()
-        .map(|a| rect(*a, area, &NO_GAPS))
-        .collect();
-        assert_tiles_exactly(&members, area);
-    }
-
-    #[test]
-    fn ninths_respect_offset_and_gaps() {
-        let br = rect(WindowAction::BottomRightNinth, OFFSET_AREA, &NO_GAPS);
-        assert_eq!(br.max_x(), OFFSET_AREA.max_x());
-        assert_eq!(br.max_y(), OFFSET_AREA.max_y());
-        let tl = rect(WindowAction::TopLeftNinth, OFFSET_AREA, &NO_GAPS);
-        assert_eq!(tl.x, OFFSET_AREA.x);
-        assert_eq!(tl.y, OFFSET_AREA.y);
-
-        // The centre cell is bounded by shared edges on all four sides.
-        let mc = rect(WindowAction::MiddleCenterNinth, AREA, &GAPPY);
-        let ml = rect(WindowAction::MiddleLeftNinth, AREA, &GAPPY);
-        assert_eq!(mc.x - ml.max_x(), GAPPY.window);
-    }
-
-    #[test]
-    fn uniform_gap_insets_every_screen_edge() {
-        // A uniform gap (window == edges) behaves like the old scalar for
-        // Maximize: every screen edge is inset by the same amount.
-        let m = rect(WindowAction::Maximize, AREA, &Gaps::uniform(10.0));
-        assert_eq!(m, Rect::new(10.0, 10.0, 1900.0, 1020.0));
+        assert_eq!(tr.max_x(), odd.max_x());
+        assert_eq!(br.max_y(), odd.max_y());
     }
 
     #[test]
     fn adjacent_halves_are_separated_by_exactly_one_window_gap() {
-        // Window gap 10, screen-edge gaps 20 on every side.
         let gaps = Gaps {
-            window: 10.0,
-            edge_top: 20.0,
-            edge_bottom: 20.0,
+            window: 12.0,
             edge_left: 20.0,
             edge_right: 20.0,
-            ..NO_GAPS
-        };
-        let l = rect(WindowAction::LeftHalf, AREA, &gaps);
-        let r = rect(WindowAction::RightHalf, AREA, &gaps);
-
-        // Full edge gap on the outer edges.
-        assert_eq!(l.x, 20.0);
-        assert_eq!(l.y, 20.0);
-        assert_eq!(r.max_x(), AREA.width - 20.0);
-        // Exactly one window gap between the two halves, not two.
-        assert_eq!(r.x - l.max_x(), gaps.window);
-    }
-
-    #[test]
-    fn skip_top_edge_drops_only_the_top_screen_gap() {
-        let gaps = Gaps {
-            window: 0.0,
-            edge_top: 20.0,
-            edge_bottom: 20.0,
-            edge_left: 20.0,
-            edge_right: 20.0,
-            skip_top_edge: true,
+            edge_top: 10.0,
+            edge_bottom: 10.0,
+            skip_top_edge: false,
             main_screen_only: false,
         };
-        let m = rect(WindowAction::Maximize, AREA, &gaps);
-        assert_eq!(m.y, 0.0, "top gap is skipped");
-        assert_eq!(m.max_y(), AREA.height - 20.0, "bottom gap still applies");
-        assert_eq!(m.x, 20.0);
+        let left = WindowAction::LeftHalf
+            .target_rect(AREA, &gaps, true)
+            .unwrap();
+        let right = WindowAction::RightHalf
+            .target_rect(AREA, &gaps, true)
+            .unwrap();
+        assert_eq!(left.x, 20.0);
+        assert_eq!(right.x - left.max_x(), 12.0);
+        assert_eq!(AREA.max_x() - right.max_x(), 20.0);
     }
 
     #[test]
-    fn main_screen_only_suppresses_edge_gaps_off_primary() {
+    fn skip_top_edge_and_main_screen_only_apply_per_edge() {
         let gaps = Gaps {
             window: 10.0,
-            edge_top: 20.0,
-            edge_bottom: 20.0,
-            edge_left: 20.0,
-            edge_right: 20.0,
-            skip_top_edge: false,
+            edge_top: 16.0,
+            edge_bottom: 16.0,
+            edge_left: 16.0,
+            edge_right: 16.0,
+            skip_top_edge: true,
             main_screen_only: true,
         };
-        // On a secondary display, screen-edge gaps vanish but the window gap
-        // between two halves is preserved.
-        let l = WindowAction::LeftHalf
-            .target_rect(AREA, &gaps, CURRENT, false, SizeOptions::default())
+        let main = WindowAction::LeftHalf
+            .target_rect(AREA, &gaps, true)
             .unwrap();
-        let r = WindowAction::RightHalf
-            .target_rect(AREA, &gaps, CURRENT, false, SizeOptions::default())
+        assert_eq!(main.y, 0.0);
+        assert_eq!(main.x, 16.0);
+
+        let secondary = WindowAction::LeftHalf
+            .target_rect(AREA, &gaps, false)
             .unwrap();
-        assert_eq!(l.x, 0.0);
-        assert_eq!(l.y, 0.0);
-        assert_eq!(r.max_x(), AREA.width);
-        assert_eq!(r.x - l.max_x(), gaps.window);
+        assert_eq!(secondary.x, 0.0);
+        assert_eq!(secondary.y, 0.0);
+        // Shared edge still keeps half the window gap on secondary screens.
+        assert_eq!(secondary.width, 960.0 - 5.0);
     }
 
     #[test]
-    fn gaps_never_shrink_a_window_below_zero() {
-        let tiny = Rect::new(0.0, 0.0, 10.0, 10.0);
-        let m = WindowAction::Maximize
-            .target_rect(
-                tiny,
-                &Gaps::uniform(50.0),
-                CURRENT,
-                true,
-                SizeOptions::default(),
-            )
-            .unwrap();
-        assert!(m.width >= 0.0);
-        assert!(m.height >= 0.0);
-    }
-
-    #[test]
-    fn center_preserves_size_and_centers() {
-        let c = rect(WindowAction::Center, AREA, &NO_GAPS);
-        assert_eq!(c.width, 800.0);
-        assert_eq!(c.height, 600.0);
-        assert_eq!(c.center(), AREA.center());
-    }
-
-    #[test]
-    fn center_clamps_oversized_windows() {
-        let huge = Rect::new(0.0, 0.0, 5000.0, 5000.0);
-        let c = WindowAction::Center
-            .target_rect(AREA, &NO_GAPS, huge, true, SizeOptions::default())
-            .unwrap();
-        assert_eq!(c, AREA);
-    }
-
-    #[test]
-    fn almost_maximize_defaults_to_ninety_percent_centered() {
-        let am = rect(WindowAction::AlmostMaximize, AREA, &NO_GAPS);
-        assert_eq!(am, Rect::new(96.0, 52.0, 1728.0, 936.0));
-        assert_eq!(am.center(), AREA.center());
-        // It ignores gaps, exactly like Center.
-        assert_eq!(rect(WindowAction::AlmostMaximize, AREA, &GAPPY), am);
-    }
-
-    #[test]
-    fn almost_maximize_respects_offset_and_configured_fractions() {
-        let am = rect(WindowAction::AlmostMaximize, OFFSET_AREA, &NO_GAPS);
-        // Centred within the offset work area, to within a pixel of rounding.
-        assert!((am.center().0 - OFFSET_AREA.center().0).abs() <= 1.0);
-        assert!((am.center().1 - OFFSET_AREA.center().1).abs() <= 1.0);
-        assert!(am.x >= OFFSET_AREA.x && am.max_x() <= OFFSET_AREA.max_x());
-        assert!(am.y >= OFFSET_AREA.y && am.max_y() <= OFFSET_AREA.max_y());
-
-        let sizes = SizeOptions {
-            almost_maximize_width: 0.5,
-            almost_maximize_height: 0.5,
-            ..SizeOptions::default()
-        };
-        let half = WindowAction::AlmostMaximize
-            .target_rect(AREA, &NO_GAPS, CURRENT, true, sizes)
-            .unwrap();
-        assert_eq!(half, Rect::new(480.0, 260.0, 960.0, 520.0));
-    }
-
-    #[test]
-    fn maximize_height_keeps_width_and_fills_height() {
-        let mh = rect(WindowAction::MaximizeHeight, AREA, &NO_GAPS);
-        assert_eq!(mh.x, CURRENT.x);
-        assert_eq!(mh.width, CURRENT.width);
-        assert_eq!(mh.y, 0.0);
-        assert_eq!(mh.height, AREA.height);
-
-        // The vertical extent uses the screen-edge gaps from the gap helper.
-        let gappy = rect(WindowAction::MaximizeHeight, AREA, &GAPPY);
-        let full = rect(WindowAction::Maximize, AREA, &GAPPY);
-        assert_eq!(gappy.x, CURRENT.x);
-        assert_eq!(gappy.width, CURRENT.width);
-        assert_eq!(gappy.y, full.y);
-        assert_eq!(gappy.height, full.height);
-    }
-
-    #[test]
-    fn center_half_is_a_centered_vertical_half() {
-        let ch = rect(WindowAction::CenterHalf, AREA, &NO_GAPS);
-        assert_eq!(ch, Rect::new(480.0, 0.0, 960.0, 1040.0));
-        assert_eq!(ch.center().0, AREA.center().0);
-        assert_eq!(ch.y, 0.0);
-        assert_eq!(ch.height, AREA.height);
-    }
-
-    #[test]
-    fn restore_has_no_geometry() {
-        assert!(WindowAction::Restore
-            .target_rect(AREA, &NO_GAPS, CURRENT, true, SizeOptions::default())
-            .is_none());
-        assert!(WindowAction::Restore.uses_history());
-    }
-
-    #[test]
-    fn ids_round_trip_and_are_unique() {
-        let mut ids: Vec<_> = WindowAction::ALL.iter().map(|a| a.id()).collect();
-        ids.sort_unstable();
-        let before = ids.len();
-        ids.dedup();
-        assert_eq!(before, ids.len(), "action ids must be unique");
-
-        for a in WindowAction::ALL {
-            assert_eq!(a.id().parse::<WindowAction>().unwrap(), a);
-        }
-        assert!("nope".parse::<WindowAction>().is_err());
-    }
-
-    #[test]
-    fn serde_repr_matches_id() {
-        // The config format keys and the TS mirror rely on serde's kebab-case
-        // matching id() exactly.
-        for a in WindowAction::ALL {
-            let json = serde_json::to_string(&a).unwrap();
-            assert_eq!(json, format!("\"{}\"", a.id()));
-        }
-    }
-
-    #[test]
-    fn only_incremental_move_and_resize_repeat_while_held() {
-        let repeating: Vec<_> = WindowAction::ALL
-            .into_iter()
-            .filter(|action| action.repeats_while_held())
-            .collect();
-        assert_eq!(
-            repeating,
-            [
-                WindowAction::MoveLeft,
-                WindowAction::MoveRight,
-                WindowAction::MoveUp,
-                WindowAction::MoveDown,
-                WindowAction::Larger,
-                WindowAction::Smaller,
-                WindowAction::LargerWidth,
-                WindowAction::SmallerWidth,
-                WindowAction::LargerHeight,
-                WindowAction::SmallerHeight,
-            ]
-        );
-    }
-
-    #[test]
-    fn a_half_fraction_reproduces_the_actions_own_rectangle() {
-        // This is what makes the first press of a shortcut the first step of
-        // its cycle: no special case is needed anywhere for index zero.
-        for action in WindowAction::ALL.into_iter().filter(|a| a.cycles()) {
-            for (area, gaps) in [(AREA, &NO_GAPS), (OFFSET_AREA, &GAPPY)] {
-                assert_eq!(
-                    action.cycle_rect(area, gaps, true, 0.5),
-                    Some(rect(action, area, gaps)),
-                    "{action} at a half diverges from its own rectangle"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn only_halves_corners_and_center_half_cycle() {
-        let cycling: Vec<&str> = WindowAction::ALL
-            .into_iter()
-            .filter(|a| a.cycles())
-            .map(|a| a.id())
-            .collect();
-        assert_eq!(
-            cycling,
-            [
-                "left-half",
-                "right-half",
-                "top-half",
-                "bottom-half",
-                "top-left",
-                "top-right",
-                "bottom-left",
-                "bottom-right",
-                "center-half",
-                "center-half-back",
-            ]
-        );
-        for action in WindowAction::ALL.into_iter().filter(|a| !a.cycles()) {
-            assert_eq!(
-                action.cycle_rect(AREA, &NO_GAPS, true, 1.0 / 3.0),
-                None,
-                "{action} does not cycle but produced a cycle rectangle"
-            );
-        }
-    }
-
-    #[test]
-    fn cycled_halves_stay_anchored_to_their_edge() {
-        let third = 1.0 / 3.0;
-        assert_eq!(
-            WindowAction::LeftHalf.cycle_rect(AREA, &NO_GAPS, true, third),
-            Some(Rect::new(0.0, 0.0, 640.0, 1040.0))
-        );
-        assert_eq!(
-            WindowAction::RightHalf.cycle_rect(AREA, &NO_GAPS, true, third),
-            Some(Rect::new(1280.0, 0.0, 640.0, 1040.0))
-        );
-        assert_eq!(
-            WindowAction::TopHalf.cycle_rect(AREA, &NO_GAPS, true, third),
-            Some(Rect::new(0.0, 0.0, 1920.0, 347.0))
-        );
-        assert_eq!(
-            WindowAction::BottomHalf.cycle_rect(AREA, &NO_GAPS, true, third),
-            Some(Rect::new(0.0, 693.0, 1920.0, 347.0))
-        );
-    }
-
-    /// The centred cycle is what replaces the old `S`/`W` letter bindings, so
-    /// its steps must land on exactly the same rectangles those actions
-    /// produce — otherwise `Up` would be a near-miss rather than a
-    /// replacement.
-    #[test]
-    fn cycled_center_half_matches_the_explicit_centered_actions() {
-        for (fraction, explicit) in [
-            (1.0 / 3.0, WindowAction::CenterThird),
-            (2.0 / 3.0, WindowAction::CenterTwoThirds),
-            (3.0 / 4.0, WindowAction::CenterThreeFourths),
+    fn cycle_rect_at_half_matches_target_rect_and_anchors_correctly() {
+        let gaps = Gaps::default();
+        for action in [
+            WindowAction::LeftHalf,
+            WindowAction::RightHalf,
+            WindowAction::CenterHalf,
         ] {
             assert_eq!(
-                WindowAction::CenterHalf.cycle_rect(AREA, &NO_GAPS, true, fraction),
-                Some(rect(explicit, AREA, &NO_GAPS)),
-                "centred cycle at {fraction} must equal {explicit}"
+                action.cycle_rect(AREA, &gaps, true, 0.5),
+                action.target_rect(AREA, &gaps, true)
             );
         }
+        assert_eq!(
+            WindowAction::CenterHalf.cycle_rect(AREA, &gaps, true, 1.0 / 3.0),
+            Some(Rect::new(640.0, 0.0, 640.0, 1040.0))
+        );
+        assert_eq!(
+            Corner::BottomRight.cycle_rect(AREA, &gaps, true, 2.0 / 3.0),
+            Some(Rect::new(640.0, 520.0, 1280.0, 520.0))
+        );
+        assert_eq!(
+            WindowAction::LeftHalf.cycle_rect(AREA, &gaps, true, 0.0),
+            None
+        );
+        assert_eq!(
+            WindowAction::LeftHalf.cycle_rect(AREA, &gaps, true, 1.5),
+            None
+        );
+        assert_eq!(
+            WindowAction::Maximize.cycle_rect(AREA, &gaps, true, 0.5),
+            None
+        );
     }
 
     #[test]
-    fn cycled_center_half_stays_centered() {
-        let quarter = WindowAction::CenterHalf
-            .cycle_rect(AREA, &NO_GAPS, true, 1.0 / 4.0)
-            .unwrap();
-        assert_eq!(quarter.width, 480.0);
-        assert_eq!(quarter.height, AREA.height);
-        // Equal margins on both sides is the whole point of a centred anchor.
-        assert_eq!(quarter.x - AREA.x, AREA.max_x() - quarter.max_x());
-    }
-
-    #[test]
-    fn cycled_corners_grow_horizontally_and_keep_their_height() {
-        let two_thirds = 2.0 / 3.0;
-        let half = rect(WindowAction::TopRight, AREA, &NO_GAPS);
-        let grown = WindowAction::TopRight
-            .cycle_rect(AREA, &NO_GAPS, true, two_thirds)
-            .unwrap();
-        assert_eq!(grown.y, half.y);
-        assert_eq!(grown.height, half.height);
-        assert_eq!(grown.max_x(), half.max_x());
-        assert_eq!(grown.width, 1280.0);
-    }
-
-    #[test]
-    fn a_full_width_cycle_step_gets_screen_edge_gaps_on_both_sides() {
-        // At a fraction of 1 there is no neighbour, so both horizontal edges
-        // are screen edges rather than shared ones.
-        let full = WindowAction::LeftHalf
-            .cycle_rect(AREA, &GAPPY, true, 1.0)
-            .unwrap();
-        assert_eq!(full.x, 20.0);
-        assert_eq!(full.max_x(), AREA.max_x() - 20.0);
-    }
-
-    #[test]
-    fn an_unusable_fraction_yields_no_rectangle() {
-        for bad in [0.0, -0.5, 1.5, f64::NAN, f64::INFINITY] {
+    fn ids_round_trip_and_serde_matches_id() {
+        let mut seen = std::collections::HashSet::new();
+        for action in WindowAction::ALL {
+            assert!(seen.insert(action.id()));
+            assert_eq!(WindowAction::from_str(action.id()).unwrap(), action);
             assert_eq!(
-                WindowAction::LeftHalf.cycle_rect(AREA, &NO_GAPS, true, bad),
-                None,
-                "fraction {bad} should not produce a rectangle"
+                serde_json::to_string(&action).unwrap(),
+                format!("\"{}\"", action.id())
             );
         }
-    }
-
-    // ---------------------------------------------------------------------
-    // Incremental move and resize
-    // ---------------------------------------------------------------------
-
-    /// A 30-unit step with a 25% floor: the shipped defaults.
-    const STEPS: SizeOptions = SizeOptions {
-        almost_maximize_width: 0.9,
-        almost_maximize_height: 0.9,
-        size_step: 30.0,
-        width_step: 30.0,
-        move_step: 30.0,
-        minimum_width: 0.25,
-        minimum_height: 0.25,
-    };
-
-    fn adjust(action: WindowAction, current: Rect, area: Rect) -> Rect {
-        action
-            .target_rect(area, &NO_GAPS, current, true, STEPS)
-            .unwrap()
+        assert!(WindowAction::from_str("first-third").is_err());
     }
 
     #[test]
-    fn moves_slide_the_window_by_one_step_without_resizing() {
-        let start = Rect::new(500.0, 400.0, 800.0, 600.0);
-        for (action, expected) in [
-            (
-                WindowAction::MoveLeft,
-                Rect::new(470.0, 400.0, 800.0, 600.0),
-            ),
-            (
-                WindowAction::MoveRight,
-                Rect::new(530.0, 400.0, 800.0, 600.0),
-            ),
-            (WindowAction::MoveUp, Rect::new(500.0, 370.0, 800.0, 600.0)),
-            (
-                WindowAction::MoveDown,
-                Rect::new(500.0, 430.0, 800.0, 600.0),
-            ),
+    fn display_actions_and_restore_have_no_target_rect() {
+        for action in [
+            WindowAction::Restore,
+            WindowAction::DisplayLeft,
+            WindowAction::DisplayRight,
+            WindowAction::DisplayUp,
+            WindowAction::DisplayDown,
         ] {
-            assert_eq!(adjust(action, start, AREA), expected, "{action}");
+            assert!(action.target_rect(AREA, &Gaps::default(), true).is_none());
         }
-    }
-
-    #[test]
-    fn a_move_stops_flush_against_the_work_area_and_never_leaves_it() {
-        // Repeatedly nudging left ends flush at the edge and stays there.
-        let mut win = Rect::new(20.0, 20.0, 400.0, 300.0);
-        for _ in 0..10 {
-            win = adjust(WindowAction::MoveLeft, win, AREA);
-            assert!(win.x >= AREA.x, "moved past the left edge: {win:?}");
-        }
-        assert_eq!(win, Rect::new(0.0, 20.0, 400.0, 300.0));
-
-        // And the same on the far side, where the *right* edge is the limit.
-        let mut win = Rect::new(1400.0, 700.0, 400.0, 300.0);
-        for _ in 0..20 {
-            win = adjust(WindowAction::MoveRight, win, AREA);
-            win = adjust(WindowAction::MoveDown, win, AREA);
-        }
-        assert_eq!(win.max_x(), AREA.max_x());
-        assert_eq!(win.max_y(), AREA.max_y());
-        assert_eq!((win.width, win.height), (400.0, 300.0));
-    }
-
-    #[test]
-    fn a_move_respects_an_offset_work_area() {
-        let win = Rect::new(OFFSET_AREA.x, OFFSET_AREA.y, 400.0, 300.0);
-        // Already flush against the top-left of a taskbar-offset work area, so
-        // there is nowhere further up or left to go.
-        assert_eq!(adjust(WindowAction::MoveLeft, win, OFFSET_AREA), win);
-        assert_eq!(adjust(WindowAction::MoveUp, win, OFFSET_AREA), win);
-    }
-
-    #[test]
-    fn a_floating_window_resizes_around_its_centre() {
-        let start = Rect::new(500.0, 400.0, 800.0, 600.0);
-        let larger = adjust(WindowAction::Larger, start, AREA);
-        assert_eq!(larger, Rect::new(485.0, 385.0, 830.0, 630.0));
-        assert_eq!(larger.center(), start.center());
-
-        let smaller = adjust(WindowAction::Smaller, start, AREA);
-        assert_eq!(smaller, Rect::new(515.0, 415.0, 770.0, 570.0));
-        assert_eq!(smaller.center(), start.center());
-    }
-
-    /// The behaviour the issue singles out: a window flush against a screen
-    /// edge grows away from that edge rather than being pushed through it.
-    #[test]
-    fn a_flush_window_resizes_from_its_anchored_edge() {
-        // A right half: the right edge is pinned, so growing extends leftwards.
-        let right_half = rect(WindowAction::RightHalf, AREA, &NO_GAPS);
-        let grown = adjust(WindowAction::LargerWidth, right_half, AREA);
-        assert_eq!(grown.max_x(), right_half.max_x());
-        assert_eq!(grown.width, right_half.width + 30.0);
-
-        // A left half: the left edge is pinned instead.
-        let left_half = rect(WindowAction::LeftHalf, AREA, &NO_GAPS);
-        let grown = adjust(WindowAction::LargerWidth, left_half, AREA);
-        assert_eq!(grown.x, left_half.x);
-        assert_eq!(grown.width, left_half.width + 30.0);
-
-        // A bottom half is pinned at the bottom.
-        let bottom = rect(WindowAction::BottomHalf, AREA, &NO_GAPS);
-        let grown = adjust(WindowAction::LargerHeight, bottom, AREA);
-        assert_eq!(grown.max_y(), bottom.max_y());
-        assert_eq!(grown.height, bottom.height + 30.0);
-    }
-
-    #[test]
-    fn width_and_height_resizes_touch_only_their_own_axis() {
-        let start = Rect::new(500.0, 400.0, 800.0, 600.0);
-        for action in [WindowAction::LargerWidth, WindowAction::SmallerWidth] {
-            let out = adjust(action, start, AREA);
-            assert_eq!((out.y, out.height), (start.y, start.height), "{action}");
-        }
-        for action in [WindowAction::LargerHeight, WindowAction::SmallerHeight] {
-            let out = adjust(action, start, AREA);
-            assert_eq!((out.x, out.width), (start.x, start.width), "{action}");
-        }
-    }
-
-    #[test]
-    fn growing_can_never_exceed_the_work_area() {
-        let mut win = Rect::new(500.0, 400.0, 800.0, 600.0);
-        for _ in 0..200 {
-            win = adjust(WindowAction::Larger, win, AREA);
-            assert!(
-                win.x >= AREA.x
-                    && win.y >= AREA.y
-                    && win.max_x() <= AREA.max_x()
-                    && win.max_y() <= AREA.max_y(),
-                "grew outside the work area: {win:?}"
-            );
-        }
-        assert_eq!(win, AREA);
-    }
-
-    #[test]
-    fn shrinking_stops_at_the_configured_minimum() {
-        let mut win = AREA;
-        for _ in 0..200 {
-            win = adjust(WindowAction::Smaller, win, AREA);
-        }
-        // A quarter of the work area on each axis is the floor, and the window
-        // is still a real window rather than a sliver.
-        assert!(win.width >= AREA.width * 0.25, "{win:?}");
-        assert!(win.height >= AREA.height * 0.25, "{win:?}");
-        // One more press changes nothing at all.
-        assert_eq!(adjust(WindowAction::Smaller, win, AREA), win);
-    }
-
-    #[test]
-    fn a_maximized_window_shrinks_towards_its_centre() {
-        let smaller = adjust(WindowAction::Smaller, AREA, AREA);
-        assert_eq!(smaller.width, AREA.width - 30.0);
-        assert_eq!(smaller.height, AREA.height - 30.0);
-        assert_eq!(smaller.center(), AREA.center());
-    }
-
-    #[test]
-    fn halving_keeps_the_named_half() {
-        let start = Rect::new(400.0, 200.0, 1200.0, 800.0);
-        assert_eq!(
-            adjust(WindowAction::HalveWidthLeft, start, AREA),
-            Rect::new(400.0, 200.0, 600.0, 800.0)
-        );
-        assert_eq!(
-            adjust(WindowAction::HalveWidthRight, start, AREA),
-            Rect::new(1000.0, 200.0, 600.0, 800.0)
-        );
-        assert_eq!(
-            adjust(WindowAction::HalveHeightUp, start, AREA),
-            Rect::new(400.0, 200.0, 1200.0, 400.0)
-        );
-        assert_eq!(
-            adjust(WindowAction::HalveHeightDown, start, AREA),
-            Rect::new(400.0, 600.0, 1200.0, 400.0)
-        );
-    }
-
-    #[test]
-    fn doubling_grows_towards_the_named_edge() {
-        let start = Rect::new(600.0, 400.0, 400.0, 300.0);
-        assert_eq!(
-            adjust(WindowAction::DoubleWidthRight, start, AREA),
-            Rect::new(600.0, 400.0, 800.0, 300.0)
-        );
-        assert_eq!(
-            adjust(WindowAction::DoubleWidthLeft, start, AREA),
-            Rect::new(200.0, 400.0, 800.0, 300.0)
-        );
-        assert_eq!(
-            adjust(WindowAction::DoubleHeightDown, start, AREA),
-            Rect::new(600.0, 400.0, 400.0, 600.0)
-        );
-        assert_eq!(
-            adjust(WindowAction::DoubleHeightUp, start, AREA),
-            Rect::new(600.0, 100.0, 400.0, 600.0)
-        );
-    }
-
-    #[test]
-    fn doubling_clamps_to_the_work_area() {
-        // Doubling repeatedly can only ever reach the work area, never pass it.
-        let mut win = Rect::new(1500.0, 800.0, 300.0, 200.0);
-        for _ in 0..10 {
-            win = adjust(WindowAction::DoubleWidthRight, win, AREA);
-            win = adjust(WindowAction::DoubleHeightDown, win, AREA);
-            assert!(
-                win.max_x() <= AREA.max_x() && win.max_y() <= AREA.max_y(),
-                "doubled outside the work area: {win:?}"
-            );
-        }
-        assert_eq!(win, AREA);
-    }
-
-    #[test]
-    fn halving_refuses_to_go_below_the_minimum() {
-        // A quarter-width window cannot be halved again with a 25% floor.
-        let quarter = Rect::new(0.0, 0.0, AREA.width / 4.0, AREA.height);
-        assert_eq!(
-            adjust(WindowAction::HalveWidthLeft, quarter, AREA),
-            quarter,
-            "halving below the minimum must be refused, not clamped"
-        );
-    }
-
-    #[test]
-    fn a_larger_minimum_forbids_more() {
-        let sizes = SizeOptions {
-            minimum_width: 0.5,
-            ..STEPS
-        };
-        let half = rect(WindowAction::LeftHalf, AREA, &NO_GAPS);
-        assert_eq!(
-            WindowAction::SmallerWidth
-                .target_rect(AREA, &NO_GAPS, half, true, sizes)
-                .unwrap(),
-            half
-        );
-    }
-
-    #[test]
-    fn display_actions_have_no_computable_rectangle() {
-        // Their destination depends on the screen list, so `Engine::plan`
-        // owns them; `target_rect` must not guess.
-        for action in WindowAction::ALL.into_iter().filter(|a| a.moves_display()) {
-            assert_eq!(
-                action.target_rect(AREA, &NO_GAPS, CURRENT, true, STEPS),
-                None,
-                "{action} produced a rectangle without a screen list"
-            );
-        }
-    }
-
-    #[test]
-    fn display_actions_have_exactly_one_destination_strategy() {
-        let moving: Vec<&str> = WindowAction::ALL
-            .into_iter()
-            .filter(|a| a.moves_display())
-            .map(|a| a.id())
-            .collect();
-        assert_eq!(
-            moving,
-            [
-                "display-left",
-                "display-right",
-                "display-up",
-                "display-down",
-                "previous-display",
-                "next-display",
-                "first-display",
-                "second-display",
-                "third-display",
-                "fourth-display",
-            ]
-        );
-        for action in WindowAction::ALL.into_iter().filter(|a| a.moves_display()) {
-            let relative = action.display_step() != 0;
-            let absolute = action.display_index().is_some();
-            let directional = action.display_direction().is_some();
-            assert_eq!(
-                usize::from(relative) + usize::from(absolute) + usize::from(directional),
-                1,
-                "{action} must have exactly one destination strategy"
-            );
-        }
-        // And an action that does not move displays claims neither.
-        for action in WindowAction::ALL.into_iter().filter(|a| !a.moves_display()) {
-            assert_eq!(action.display_step(), 0, "{action}");
-            assert_eq!(action.display_index(), None, "{action}");
-            assert_eq!(action.display_direction(), None, "{action}");
-        }
-    }
-
-    #[test]
-    fn the_named_displays_index_in_geometric_order() {
-        assert_eq!(WindowAction::FirstDisplay.display_index(), Some(0));
-        assert_eq!(WindowAction::SecondDisplay.display_index(), Some(1));
-        assert_eq!(WindowAction::ThirdDisplay.display_index(), Some(2));
-        assert_eq!(WindowAction::FourthDisplay.display_index(), Some(3));
     }
 }

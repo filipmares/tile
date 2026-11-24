@@ -63,7 +63,8 @@ use objc2::{class, msg_send, sel};
 use objc2_foundation::NSRect;
 
 use tile_core::{
-    ActionRequest, CornerComposer, Hotkey, Rect, Screen, WindowAction, WindowId, WindowSnapshot,
+    ActionRequest, CornerComposer, Hotkey, Modifiers, Rect, Screen, WindowAction, WindowId,
+    WindowSnapshot,
 };
 
 use crate::{
@@ -240,6 +241,9 @@ mod ffi {
         /// with `kCGEventFlagsChanged` to tell whether a modifier changed
         /// between two hotkey presses; it needs no Input Monitoring access.
         pub fn CGEventSourceSecondsSinceLastEventType(state_id: i32, event_type: u32) -> f64;
+        pub fn CGDisplayCopyDisplayMode(display: u32) -> CFTypeRef;
+        pub fn CGDisplayModeGetRefreshRate(mode: CFTypeRef) -> f64;
+        pub fn CGDisplayModeRelease(mode: CFTypeRef);
     }
 
     /// `kCGEventSourceStateCombinedSessionState`.
@@ -1752,9 +1756,11 @@ fn enumerate_screens() -> Vec<Screen> {
 
             // Prefer the stable NSScreenNumber (survives display relayout);
             // fall back to the enumeration index.
-            let id = display_number(screen, &screen_number_key)
+            let display_id = display_number(screen, &screen_number_key);
+            let id = display_id
                 .map(|n| n.to_string())
                 .unwrap_or_else(|| index.to_string());
+            let refresh_rate_hz = display_refresh_rate_hz(screen, display_id);
 
             result.push(Screen {
                 id,
@@ -1762,10 +1768,41 @@ fn enumerate_screens() -> Vec<Screen> {
                 work_area,
                 scale_factor,
                 is_primary: index == 0,
+                refresh_rate_hz,
             });
         }
         result
     })
+}
+
+/// Queries the display's refresh rate in Hz.
+///
+/// Prefers `NSScreen.maximumFramesPerSecond` (macOS 12+, handles ProMotion
+/// displays where `CGDisplayModeGetRefreshRate` may report 0), falling back to
+/// the active CoreGraphics display mode on older macOS releases.
+///
+/// # Safety
+/// `screen` must be a live `NSScreen` object.
+unsafe fn display_refresh_rate_hz(screen: *mut AnyObject, display_id: Option<u32>) -> Option<u32> {
+    let responds: bool = msg_send![screen, respondsToSelector: sel!(maximumFramesPerSecond)];
+    if responds {
+        let fps: isize = msg_send![screen, maximumFramesPerSecond];
+        if fps > 0 {
+            return u32::try_from(fps).ok();
+        }
+    }
+    let id = display_id?;
+    let mode = ffi::CGDisplayCopyDisplayMode(id);
+    if mode.is_null() {
+        return None;
+    }
+    let rate = ffi::CGDisplayModeGetRefreshRate(mode);
+    ffi::CGDisplayModeRelease(mode);
+    if rate.is_finite() && rate >= 1.0 {
+        Some(rate.round() as u32)
+    } else {
+        None
+    }
 }
 
 /// Reads `screen.deviceDescription[NSScreenNumber]` as a `CGDirectDisplayID`.
@@ -2200,7 +2237,11 @@ impl MacHotkeyBackend {
 }
 
 impl HotkeyBackend for MacHotkeyBackend {
-    fn apply(&mut self, bindings: &[HotkeyBinding]) -> Result<HotkeyApplyReport> {
+    fn apply(
+        &mut self,
+        bindings: &[HotkeyBinding],
+        compose_modifiers: Option<Modifiers>,
+    ) -> Result<HotkeyApplyReport> {
         // SAFETY: `+[NSThread isMainThread]` takes no arguments and returns BOOL.
         let on_main: bool = unsafe { msg_send![class!(NSThread), isMainThread] };
         if !on_main {
@@ -2209,6 +2250,9 @@ impl HotkeyBackend for MacHotkeyBackend {
         self.ensure_handler_installed()?;
         self.ensure_observer_installed();
         let mut registrar = lock_registrar(&self.registrar);
+        if let Ok(mut compose) = registrar.state.compose.lock() {
+            compose.composer.set_base_modifiers(compose_modifiers);
+        }
         let statuses = registrar.register(bindings);
         Ok(registrar.report(statuses))
     }

@@ -1,11 +1,13 @@
-//! User configuration: key bindings and behaviour, persisted as JSON.
+//! User configuration: group modifiers, per-action keys and behaviour,
+//! persisted as JSON.
 
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
+use std::str::FromStr;
 
-use crate::action::WindowAction;
+use crate::action::{ShortcutGroup, WindowAction};
 use crate::animation::AnimationParams;
 use crate::geometry::Rect;
 use crate::hotkey::{Hotkey, KeyCode, Modifiers};
@@ -20,13 +22,6 @@ pub enum ConfigError {
     Parse(#[from] serde_json::Error),
     #[error("{0}")]
     Invalid(String),
-}
-
-/// A conflict between two actions bound to the same hotkey.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Conflict {
-    pub hotkey: Hotkey,
-    pub actions: Vec<WindowAction>,
 }
 
 /// Which edges of a target rectangle are shared with a neighbouring window
@@ -46,10 +41,8 @@ pub struct SharedEdges {
 /// The gap model: a single window gap between adjacent tiled windows plus
 /// independently configurable per-side screen-edge gaps.
 ///
-/// This generalises the original scalar `gap`, which insets every side
-/// uniformly and therefore cannot express "one gap between two windows but a
-/// different gap against the screen edge". A legacy scalar config still loads —
-/// see the custom [`Deserialize`] impl below.
+/// A legacy scalar config (`"gap": 24`) still loads — see the custom
+/// [`Deserialize`] impl below.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Gaps {
@@ -59,10 +52,10 @@ pub struct Gaps {
     pub edge_bottom: f64,
     pub edge_left: f64,
     pub edge_right: f64,
-    /// Drop the top screen-edge gap entirely (Rectangle's `skipGapTopEdge`).
+    /// Drop the top screen-edge gap entirely.
     pub skip_top_edge: bool,
-    /// Apply screen-edge gaps only on the primary display (Rectangle's
-    /// `screenEdgeGapsOnMainScreenOnly`). The window gap always applies.
+    /// Apply screen-edge gaps only on the primary display. The window gap
+    /// always applies.
     pub main_screen_only: bool,
 }
 
@@ -157,9 +150,8 @@ impl Gaps {
     }
 }
 
-/// Accepts either a legacy scalar (`"gap": 24`) or the new object form
+/// Accepts either a legacy scalar (`"gap": 24`) or the object form
 /// (`"gap": { "window": 8, "edgeTop": 0, ... }`), so no saved config breaks.
-/// A number and an object are unambiguous in JSON, which makes this safe.
 impl<'de> Deserialize<'de> for Gaps {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -200,8 +192,6 @@ impl<'de> Deserialize<'de> for Gaps {
                         "edgeRight" => gaps.edge_right = map.next_value()?,
                         "skipTopEdge" => gaps.skip_top_edge = map.next_value()?,
                         "mainScreenOnly" => gaps.main_screen_only = map.next_value()?,
-                        // Ignore unknown keys so a newer config never fails to
-                        // load on an older build.
                         _ => {
                             let _: de::IgnoredAny = map.next_value()?;
                         }
@@ -215,108 +205,6 @@ impl<'de> Deserialize<'de> for Gaps {
     }
 }
 
-/// The default fraction for the [`WindowAction::AlmostMaximize`] size, matching
-/// Rectangle's 90% behaviour.
-fn default_almost_maximize_fraction() -> f64 {
-    0.9
-}
-
-/// Clamps a size fraction into `(0, 1]`, falling back to the default when the
-/// value is not a usable fraction (e.g. zero, negative, NaN, or above 1).
-fn normalize_fraction(value: f64) -> f64 {
-    if value.is_finite() && value > 0.0 && value <= 1.0 {
-        value
-    } else {
-        default_almost_maximize_fraction()
-    }
-}
-
-/// The default step, in the backend's own unit, for one press of an
-/// incremental resize or move. Mirrors Rectangle's `sizeOffset` and
-/// `widthStepSize`, both of which behave as 30 out of the box.
-///
-/// The unit is deliberately whatever the backend reports — physical pixels on
-/// Windows, points on macOS — for the same reason the rest of the crate never
-/// converts between the two. A 30-unit nudge is therefore physically smaller
-/// on a high-DPI Windows display than on a Retina Mac, which is the same
-/// trade-off Rectangle makes and is easily retuned in the config.
-fn default_step() -> f64 {
-    30.0
-}
-
-/// The smallest fraction of the work area an incremental resize may shrink a
-/// window to. Matches Rectangle's `minimumWindowWidth`/`minimumWindowHeight`.
-fn default_minimum_fraction() -> f64 {
-    0.25
-}
-
-/// Upper bound for a resize or move step, so a typo cannot make every press
-/// throw the window across the screen.
-pub const MAX_STEP: f64 = 1000.0;
-
-/// Clamps a step into `[1, MAX_STEP]`, mapping non-finite or non-positive
-/// values to the default. A zero step would make the action a silent no-op.
-fn normalize_step(value: f64) -> f64 {
-    if !value.is_finite() || value < 1.0 {
-        default_step()
-    } else {
-        value.min(MAX_STEP)
-    }
-}
-
-/// Clamps a minimum-size fraction into `(0, 1]`, falling back to the default.
-fn normalize_minimum_fraction(value: f64) -> f64 {
-    if value.is_finite() && value > 0.0 && value <= 1.0 {
-        value
-    } else {
-        default_minimum_fraction()
-    }
-}
-
-/// Smallest size fraction the Advanced settings accept: 1% of the work area.
-/// Hand-edited configs may go lower — [`normalize_fraction`] only rejects
-/// zero and below — but a whole-percent control cannot express that.
-pub const MIN_SIZE_FRACTION: f64 = 0.01;
-
-/// One of the knobs the Settings ▸ Advanced group edits, with its new value.
-///
-/// Each change names a single field so a write from one window never puts
-/// back another field that a different window changed meanwhile. Serialized
-/// as `{ "field": "moveStep", "value": 32 }`; fractions travel as fractions,
-/// not percentages.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "field", content = "value", rename_all = "camelCase")]
-pub enum AdvancedSetting {
-    AlmostMaximizeWidth(f64),
-    AlmostMaximizeHeight(f64),
-    SizeStep(f64),
-    WidthStep(f64),
-    MoveStep(f64),
-    MinimumWindowWidth(f64),
-    MinimumWindowHeight(f64),
-    AnimationFps(u32),
-}
-
-/// Clamps a fraction from the Advanced settings into
-/// `[MIN_SIZE_FRACTION, 1]`, keeping `current` for a non-finite value.
-fn clamp_fraction(value: f64, current: f64) -> f64 {
-    if value.is_finite() {
-        value.clamp(MIN_SIZE_FRACTION, 1.0)
-    } else {
-        current
-    }
-}
-
-/// Clamps a step from the Advanced settings into `[1, MAX_STEP]`, keeping
-/// `current` for a non-finite value.
-fn clamp_step(value: f64, current: f64) -> f64 {
-    if value.is_finite() {
-        value.clamp(1.0, MAX_STEP)
-    } else {
-        current
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Animation
 // ---------------------------------------------------------------------------
@@ -326,35 +214,22 @@ fn default_animation_duration_ms() -> u32 {
     crate::animation::PLATFORM_DEFAULT_DURATION_MS
 }
 
-/// Frames per second the animation aims for.
-///
-/// Above a 60 Hz display's refresh rate, so the motion is smooth on a 60 Hz
-/// panel without the driver having to be phase-locked to it, but well short of
-/// a rate that would spend meaningful CPU pushing frames at another process's
-/// window. Platform backends may cap this further where each frame is
-/// expensive; see the frame pump in the app.
-fn default_animation_fps() -> u32 {
-    90
-}
-
-/// Bounds for the animation duration. Below the lower bound the motion is
-/// indistinguishable from a teleport but still costs frames; above the upper
-/// one the window lags noticeably behind the keypress.
+/// Bounds for the animation duration.
 pub const MIN_ANIMATION_DURATION_MS: u32 = 40;
 pub const MAX_ANIMATION_DURATION_MS: u32 = 1000;
 
-/// Bounds for the animation frame rate. The floor keeps the motion from
-/// looking like a slideshow; the ceiling stops a hand-edited config from
-/// hammering another process's window with thousands of position changes a
-/// second.
+/// Fallback pacing rate when the OS cannot report a display's refresh rate.
+pub const DEFAULT_ANIMATION_FPS: u32 = 60;
+
+/// Safety bounds for OS-reported display refresh rates.
 pub const MIN_ANIMATION_FPS: u32 = 15;
 pub const MAX_ANIMATION_FPS: u32 = 240;
 
 /// How a window travels to its new frame.
 ///
-/// [`AnimationConfig::enabled`] and the duration sit under Settings ▸
-/// Behaviour ▸ Motion; the frame rate is a pacing knob in Settings ▸ Advanced,
-/// alongside the step sizes.
+/// Frame pacing follows the target display's refresh rate automatically rather
+/// than exposing an fps knob in Settings (legacy `"fps"` entries in older
+/// configs are ignored by serde).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AnimationConfig {
@@ -362,28 +237,19 @@ pub struct AnimationConfig {
     pub enabled: bool,
     /// How long the movement takes, end to end, in milliseconds.
     pub duration_ms: u32,
-    /// Frames per second the animation aims to emit.
-    pub fps: u32,
 }
 
 impl Default for AnimationConfig {
     fn default() -> Self {
         Self {
-            // On by default: the animation is what tells the user their
-            // keypress was received and where the window went, and a snap that
-            // teleports is the thing this replaces. It is a single checkbox
-            // away in the settings window for anyone who wants the instant
-            // behaviour back.
             enabled: true,
             duration_ms: default_animation_duration_ms(),
-            fps: default_animation_fps(),
         }
     }
 }
 
 impl AnimationConfig {
-    /// Clamps the tuning knobs, mapping nonsense to the defaults so a
-    /// hand-edited config can never stall or spin the frame pump.
+    /// Clamps the duration, mapping zero to the platform default.
     pub fn normalize(&mut self) {
         if self.duration_ms == 0 {
             self.duration_ms = default_animation_duration_ms();
@@ -391,86 +257,27 @@ impl AnimationConfig {
         self.duration_ms = self
             .duration_ms
             .clamp(MIN_ANIMATION_DURATION_MS, MAX_ANIMATION_DURATION_MS);
-
-        if self.fps == 0 {
-            self.fps = default_animation_fps();
-        }
-        self.fps = self.fps.clamp(MIN_ANIMATION_FPS, MAX_ANIMATION_FPS);
     }
 
-    /// The parameters the animator is driven with.
-    pub fn params(&self) -> AnimationParams {
+    /// The parameters the animator is driven with at `refresh_rate_hz`
+    /// (falling back to [`DEFAULT_ANIMATION_FPS`] when unknown).
+    pub fn params(&self, refresh_rate_hz: Option<u32>) -> AnimationParams {
+        let fps = refresh_rate_hz
+            .filter(|&hz| hz > 0)
+            .unwrap_or(DEFAULT_ANIMATION_FPS)
+            .clamp(MIN_ANIMATION_FPS, MAX_ANIMATION_FPS);
         AnimationParams {
             duration_ms: self.duration_ms,
-            fps: self.fps,
+            fps,
         }
     }
 }
 
-/// Fractions controlling the size-variant actions that resize a window rather
-/// than tile it into the grid, plus the step sizes and floor used by the
-/// incremental resize and move actions.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SizeOptions {
-    /// [`WindowAction::AlmostMaximize`] width as a fraction of the work area,
-    /// in `(0, 1]`.
-    pub almost_maximize_width: f64,
-    /// [`WindowAction::AlmostMaximize`] height as a fraction of the work area,
-    /// in `(0, 1]`.
-    pub almost_maximize_height: f64,
-    /// How much one `Larger`/`Smaller` press changes a window by, in the
-    /// backend's own unit. Rectangle's `sizeOffset`.
-    pub size_step: f64,
-    /// How much one `LargerWidth`/`SmallerWidth` press changes a window's
-    /// width by. Rectangle's `widthStepSize`.
-    pub width_step: f64,
-    /// How far one `MoveLeft`/`MoveRight`/`MoveUp`/`MoveDown` press slides a
-    /// window. Tile-specific; see [`WindowAction::MoveLeft`].
-    pub move_step: f64,
-    /// Smallest width an incremental resize may leave, as a fraction of the
-    /// work area.
-    pub minimum_width: f64,
-    /// Smallest height an incremental resize may leave, as a fraction of the
-    /// work area.
-    pub minimum_height: f64,
-}
-
-impl Default for SizeOptions {
-    fn default() -> Self {
-        Self {
-            almost_maximize_width: default_almost_maximize_fraction(),
-            almost_maximize_height: default_almost_maximize_fraction(),
-            size_step: default_step(),
-            width_step: default_step(),
-            move_step: default_step(),
-            minimum_width: default_minimum_fraction(),
-            minimum_height: default_minimum_fraction(),
-        }
-    }
-}
-
-/// What a *repeated* press of an already-satisfied action does.
-///
-/// This mirrors Rectangle's `subsequentExecutionMode`. Rectangle offers six
-/// values; Tile ships the two that keep a repeat on the current display:
-///
-/// * [`SubsequentExecutionMode::CycleSizes`] — Rectangle's `resize`, the
-///   default there and here: the window cycles through [`Config::cycle_sizes`].
-/// * [`SubsequentExecutionMode::DoNothing`] — Rectangle's `none`: a repeat is
-///   a no-op, which is what Tile did before cycling existed.
-///
-/// Rectangle's remaining values all move the window to another display on a
-/// repeat. Tile deliberately does not: moving between displays is bound to
-/// [`WindowAction::NextDisplay`] and [`WindowAction::PreviousDisplay`] on
-/// their own shortcut instead, which leaves the unmodified arrows free to
-/// cycle. That matters because the thirds and two-thirds ship unbound, so
-/// cycling is the only way to reach them — a repeat that wandered off to
-/// another display would strand every size except the half for anyone with
-/// more than one monitor.
+/// What a *repeated* press of an already-satisfied placement action does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SubsequentExecutionMode {
-    /// Repeating an action walks the window through the configured sizes.
+    /// Repeating an action walks the window through [`Config::cycle_sizes`].
     #[default]
     CycleSizes,
     /// Repeating an action does nothing.
@@ -495,9 +302,6 @@ impl SubsequentExecutionMode {
     }
 }
 
-/// An unknown mode falls back to the default rather than failing the whole
-/// load, so a config written by a newer build (say, one that grows a
-/// `next-display` mode) still opens on an older one.
 impl<'de> Deserialize<'de> for SubsequentExecutionMode {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -509,7 +313,7 @@ impl<'de> Deserialize<'de> for SubsequentExecutionMode {
 }
 
 /// One step of a size cycle, as a fraction of the work area along the axis the
-/// action grows on. Mirrors Rectangle's `CycleSize`.
+/// placement grows on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CycleSize {
@@ -530,12 +334,10 @@ impl CycleSize {
         CycleSize::ThreeQuarters,
     ];
 
-    /// The size a cycle always starts from, matching Rectangle's
-    /// `CycleSize.firstSize`. It is also the size every cycling action's own
-    /// rectangle already has, so the first press lands on it naturally.
+    /// The size a cycle always starts from.
     pub const FIRST: CycleSize = CycleSize::OneHalf;
 
-    /// Stable config identifier. These strings are persisted; never rename one.
+    /// Stable config identifier.
     pub const fn id(self) -> &'static str {
         match self {
             CycleSize::OneQuarter => "one-quarter",
@@ -572,14 +374,10 @@ impl CycleSize {
         CycleSize::ALL.into_iter().find(|s| s.id() == id)
     }
 
-    /// Position in the canonical cycle order: start at [`CycleSize::FIRST`],
-    /// grow to the largest size, then wrap around to the smallest and grow
-    /// back. With every size selected that is ½, ⅔, ¾, ¼, ⅓ — Rectangle's
-    /// `CycleSize.sortedSizes`.
+    /// Canonical cycle order: start at ½, grow to largest, wrap to smallest
+    /// and grow back (½, ⅔, ¾, ¼, ⅓).
     fn cycle_rank(self) -> u8 {
         match self {
-            // Ranked so that FIRST leads, larger sizes follow in ascending
-            // order, then the smaller ones, also ascending.
             CycleSize::OneHalf => 0,
             CycleSize::TwoThirds => 1,
             CycleSize::ThreeQuarters => 2,
@@ -589,8 +387,6 @@ impl CycleSize {
     }
 }
 
-/// An unrecognised entry is dropped rather than failing the load, for the same
-/// forward-compatibility reason as [`SubsequentExecutionMode`].
 impl<'de> Deserialize<'de> for CycleSize {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -610,9 +406,6 @@ where
     Ok(raw.iter().filter_map(|s| CycleSize::from_id(s)).collect())
 }
 
-/// The sizes a repeated shortcut cycles through by default, matching
-/// Rectangle's `CycleSize.defaultSizes` — a half, then two thirds, then a
-/// third.
 fn default_cycle_sizes() -> Vec<CycleSize> {
     vec![
         CycleSize::OneHalf,
@@ -621,68 +414,48 @@ fn default_cycle_sizes() -> Vec<CycleSize> {
     ]
 }
 
+fn default_placement_modifiers() -> Modifiers {
+    BASE_MODIFIERS
+}
+
+fn default_display_modifiers() -> Modifiers {
+    DISPLAY_MODIFIERS
+}
+
 /// Persisted user settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Config {
-    /// Hotkey per action. An action absent from the map, or mapped to `None`,
-    /// is unbound.
-    pub bindings: BTreeMap<WindowAction, Option<Hotkey>>,
+    /// Base modifier held for window-placement actions (`Left`, `Right`,
+    /// `Maximize`, `Restore`, `Center Column`) and corner composition.
+    #[serde(default = "default_placement_modifiers")]
+    pub placement_modifiers: Modifiers,
+    /// Display modifier held for moving windows across displays.
+    #[serde(default = "default_display_modifiers")]
+    pub display_modifiers: Modifiers,
+    /// Key assigned to each action, combined with its group's modifier.
+    /// Absent or `None` means unbound.
+    #[serde(default = "default_keys")]
+    pub keys: BTreeMap<WindowAction, Option<KeyCode>>,
     /// Gap model between windows and against the screen edges. Persisted under
     /// the `gap` key; a legacy scalar value still loads.
     #[serde(rename = "gap")]
     pub gaps: Gaps,
     /// Start Tile when the user logs in.
     pub launch_on_login: bool,
-    /// [`WindowAction::AlmostMaximize`] width as a fraction of the work area.
-    #[serde(default = "default_almost_maximize_fraction")]
-    pub almost_maximize_width: f64,
-    /// [`WindowAction::AlmostMaximize`] height as a fraction of the work area.
-    #[serde(default = "default_almost_maximize_fraction")]
-    pub almost_maximize_height: f64,
-    /// How much one [`WindowAction::Larger`] or [`WindowAction::Smaller`]
-    /// press changes a window by. Rectangle's `sizeOffset`.
-    #[serde(default = "default_step")]
-    pub size_step: f64,
-    /// How much one [`WindowAction::LargerWidth`] or
-    /// [`WindowAction::SmallerWidth`] press changes a window's width by.
-    /// Rectangle's `widthStepSize`.
-    #[serde(default = "default_step")]
-    pub width_step: f64,
-    /// How far one [`WindowAction::MoveLeft`] and friends slide a window.
-    #[serde(default = "default_step")]
-    pub move_step: f64,
-    /// Smallest width an incremental resize may leave, as a fraction of the
-    /// work area. Rectangle's `minimumWindowWidth`.
-    #[serde(default = "default_minimum_fraction")]
-    pub minimum_window_width: f64,
-    /// Smallest height an incremental resize may leave, as a fraction of the
-    /// work area. Rectangle's `minimumWindowHeight`.
-    #[serde(default = "default_minimum_fraction")]
-    pub minimum_window_height: f64,
     /// What a repeated press of an already-satisfied action does.
     #[serde(default)]
     pub subsequent_execution_mode: SubsequentExecutionMode,
-    /// The sizes a repeated press cycles through, in cycle order. An empty
-    /// list disables cycling as surely as
-    /// [`SubsequentExecutionMode::DoNothing`] does.
+    /// The sizes a repeated press cycles through, in cycle order.
     #[serde(
         default = "default_cycle_sizes",
         deserialize_with = "deserialize_cycle_sizes"
     )]
     pub cycle_sizes: Vec<CycleSize>,
-    /// Whether the one-time first-run orientation has already been handed to
-    /// the user. Set when the settings window claims it, not when the user
-    /// dismisses the panel: nothing else writes the config at startup, so
-    /// waiting for a dismissal would show the orientation again to anyone who
-    /// quit without pressing the button. Absent from every config written
-    /// before orientation existed, which is exactly right: those users have
-    /// already found their way around and are recognised as existing by their
-    /// config file's presence.
+    /// Whether the one-time first-run orientation has already been shown.
     #[serde(default)]
     pub orientation_shown: bool,
-    /// How a window travels to its new frame. Absent from configs written
-    /// before animation existed, hence the serde default.
+    /// How a window travels to its new frame.
     #[serde(default)]
     pub animation: AnimationConfig,
 }
@@ -690,16 +463,11 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            bindings: default_bindings(),
+            placement_modifiers: BASE_MODIFIERS,
+            display_modifiers: DISPLAY_MODIFIERS,
+            keys: default_keys(),
             gaps: Gaps::default(),
             launch_on_login: true,
-            almost_maximize_width: default_almost_maximize_fraction(),
-            almost_maximize_height: default_almost_maximize_fraction(),
-            size_step: default_step(),
-            width_step: default_step(),
-            move_step: default_step(),
-            minimum_window_width: default_minimum_fraction(),
-            minimum_window_height: default_minimum_fraction(),
             subsequent_execution_mode: SubsequentExecutionMode::default(),
             cycle_sizes: default_cycle_sizes(),
             orientation_shown: false,
@@ -708,15 +476,21 @@ impl Default for Config {
     }
 }
 
-/// The config file format this build reads and writes. Bump it only when the
-/// on-disk shape changes in a way older builds would misread.
-pub const CONFIG_SCHEMA_VERSION: u32 = 1;
+/// The config file format this build reads and writes.
+///
+/// Bumped to 2 when freeform per-action `bindings` were replaced by the
+/// two-modifier + per-action `keys` layout. Legacy v1 files migrate cleanly
+/// on load without triggering recovery.
+pub const CONFIG_SCHEMA_VERSION: u32 = 2;
 
 /// The version assumed for a config written before `schemaVersion` existed.
 const LEGACY_SCHEMA_VERSION: u32 = 1;
 
 const SCHEMA_VERSION_KEY: &str = "schemaVersion";
 const BINDINGS_KEY: &str = "bindings";
+const KEYS_KEY: &str = "keys";
+const PLACEMENT_MODIFIERS_KEY: &str = "placementModifiers";
+const DISPLAY_MODIFIERS_KEY: &str = "displayModifiers";
 
 /// The result of [`Config::from_json_lenient`]: the best config that could be
 /// recovered from a file, and what had to be given up to get it.
@@ -727,8 +501,11 @@ pub struct LenientConfig {
     /// declared none.
     pub schema_version: u32,
     /// JSON keys that could not be read and fell back to their defaults.
-    /// A dropped binding is reported as `bindings.<action>`.
     pub reset_fields: Vec<String>,
+    /// Benign notes produced while migrating an older config (e.g. retired
+    /// actions dropped or colliding legacy bindings resolved), logged by the
+    /// caller without triggering recovery.
+    pub migration_notes: Vec<String>,
 }
 
 impl LenientConfig {
@@ -755,19 +532,39 @@ fn field_parses(key: &str, value: &serde_json::Value) -> bool {
 }
 
 impl Config {
-    /// Parses configuration from JSON, filling in defaults for missing fields.
+    /// Parses configuration from JSON, migrating legacy v1 `bindings` and
+    /// filling in defaults for missing fields.
     pub fn from_json(json: &str) -> Result<Self, ConfigError> {
-        let mut config: Config = serde_json::from_str(json)?;
-        config.finish_load();
+        let value: serde_json::Value = serde_json::from_str(json)?;
+        let serde_json::Value::Object(mut map) = value else {
+            return Err(ConfigError::Invalid(
+                "configuration is not a JSON object".into(),
+            ));
+        };
+        if let Some(legacy_bindings) = take_legacy_bindings(&mut map) {
+            let mut strict_errors = Vec::new();
+            let mut notes = Vec::new();
+            let migrated =
+                migrate_legacy_bindings(&legacy_bindings, &mut strict_errors, &mut notes)?;
+            if !strict_errors.is_empty() {
+                return Err(ConfigError::Invalid(format!(
+                    "invalid legacy bindings: {}",
+                    strict_errors.join(", ")
+                )));
+            }
+            apply_migrated_to_map(&mut map, migrated);
+        }
+        let mut config: Config = serde_json::from_value(serde_json::Value::Object(map))?;
+        config.normalize();
         Ok(config)
     }
 
     /// Parses configuration from JSON one field at a time, so a single
     /// wrong-typed value resets only that value instead of the whole file.
     ///
-    /// Within `bindings`, only the entries that cannot be read are dropped.
-    /// Unknown keys are ignored. Fails only when the text is not JSON or not
-    /// a JSON object.
+    /// Legacy v1 `bindings` are migrated silently into `placementModifiers`,
+    /// `displayModifiers`, and `keys`, dropping retired actions without
+    /// flagging the file as corrupt.
     pub fn from_json_lenient(json: &str) -> Result<LenientConfig, ConfigError> {
         let value: serde_json::Value = serde_json::from_str(json)?;
         let serde_json::Value::Object(mut map) = value else {
@@ -776,6 +573,7 @@ impl Config {
             ));
         };
         let mut reset_fields = Vec::new();
+        let mut migration_notes = Vec::new();
 
         let schema_version = match map.remove(SCHEMA_VERSION_KEY) {
             None => LEGACY_SCHEMA_VERSION,
@@ -788,19 +586,29 @@ impl Config {
             },
         };
 
+        if let Some(legacy_bindings) = take_legacy_bindings(&mut map) {
+            match migrate_legacy_bindings(&legacy_bindings, &mut reset_fields, &mut migration_notes)
+            {
+                Ok(migrated) => apply_migrated_to_map(&mut map, migrated),
+                Err(_) => {
+                    reset_fields.push(BINDINGS_KEY.to_owned());
+                }
+            }
+        }
+
         let keys: Vec<String> = map.keys().cloned().collect();
         for key in keys {
             if field_parses(&key, &map[&key]) {
                 continue;
             }
-            if key == BINDINGS_KEY {
+            if key == KEYS_KEY {
                 if let Some(serde_json::Value::Object(entries)) = map.get_mut(&key) {
-                    entries.retain(|action, hotkey| {
+                    entries.retain(|action, key_val| {
                         let mut entry = serde_json::Map::new();
-                        entry.insert(action.clone(), hotkey.clone());
-                        let ok = field_parses(BINDINGS_KEY, &serde_json::Value::Object(entry));
+                        entry.insert(action.clone(), key_val.clone());
+                        let ok = field_parses(KEYS_KEY, &serde_json::Value::Object(entry));
                         if !ok {
-                            reset_fields.push(format!("{BINDINGS_KEY}.{action}"));
+                            reset_fields.push(format!("{KEYS_KEY}.{action}"));
                         }
                         ok
                     });
@@ -812,17 +620,13 @@ impl Config {
         }
 
         let mut config: Config = serde_json::from_value(serde_json::Value::Object(map))?;
-        config.finish_load();
+        config.normalize();
         Ok(LenientConfig {
             config,
             schema_version,
             reset_fields,
+            migration_notes,
         })
-    }
-
-    fn finish_load(&mut self) {
-        self.normalize();
-        self.migrate_directional_displays();
     }
 
     /// Serializes the config, always stamped with [`CONFIG_SCHEMA_VERSION`].
@@ -833,133 +637,35 @@ impl Config {
         })?)
     }
 
-    /// Drops invalid bindings and clamps out-of-range values so a hand-edited
-    /// or older config can never put the app into a broken state.
+    /// Normalizes modifiers, deduplicates colliding hotkeys, and clamps
+    /// out-of-range values so a hand-edited or older config can never put the
+    /// app into a broken state.
     pub fn normalize(&mut self) {
-        self.bindings.retain(|_, hk| match hk {
-            Some(h) => h.is_valid(),
-            None => true,
-        });
+        self.placement_modifiers = self.placement_modifiers.normalized();
+        if self.placement_modifiers.is_empty() {
+            self.placement_modifiers = BASE_MODIFIERS;
+        }
+        self.display_modifiers = self.display_modifiers.normalized();
+        if self.display_modifiers.is_empty() {
+            self.display_modifiers = DISPLAY_MODIFIERS;
+        }
+
+        // Ensure no two actions resolve to the same active hotkey (for example
+        // after a hand edit). Earlier actions in `WindowAction::ALL` win.
+        let mut seen = HashSet::new();
+        for action in WindowAction::ALL {
+            if let Some(hotkey) = self.binding(action) {
+                if !seen.insert(hotkey) {
+                    self.keys.insert(action, None);
+                }
+            }
+        }
+
         self.gaps.normalize();
-        self.migrate_display_throws();
-        self.almost_maximize_width = normalize_fraction(self.almost_maximize_width);
-        self.almost_maximize_height = normalize_fraction(self.almost_maximize_height);
-        self.size_step = normalize_step(self.size_step);
-        self.width_step = normalize_step(self.width_step);
-        self.move_step = normalize_step(self.move_step);
-        self.minimum_window_width = normalize_minimum_fraction(self.minimum_window_width);
-        self.minimum_window_height = normalize_minimum_fraction(self.minimum_window_height);
         self.normalize_cycle_sizes();
         self.animation.normalize();
     }
 
-    /// Applies one Advanced setting, clamping an out-of-range value to the
-    /// nearest bound instead of the default a hand-edited file falls back to:
-    /// someone who types 150% means "as wide as possible", not 90%.
-    pub fn set_advanced(&mut self, setting: AdvancedSetting) {
-        match setting {
-            AdvancedSetting::AlmostMaximizeWidth(value) => {
-                self.almost_maximize_width = clamp_fraction(value, self.almost_maximize_width);
-            }
-            AdvancedSetting::AlmostMaximizeHeight(value) => {
-                self.almost_maximize_height = clamp_fraction(value, self.almost_maximize_height);
-            }
-            AdvancedSetting::SizeStep(value) => {
-                self.size_step = clamp_step(value, self.size_step);
-            }
-            AdvancedSetting::WidthStep(value) => {
-                self.width_step = clamp_step(value, self.width_step);
-            }
-            AdvancedSetting::MoveStep(value) => {
-                self.move_step = clamp_step(value, self.move_step);
-            }
-            AdvancedSetting::MinimumWindowWidth(value) => {
-                self.minimum_window_width = clamp_fraction(value, self.minimum_window_width);
-            }
-            AdvancedSetting::MinimumWindowHeight(value) => {
-                self.minimum_window_height = clamp_fraction(value, self.minimum_window_height);
-            }
-            AdvancedSetting::AnimationFps(value) => {
-                self.animation.fps = value.clamp(MIN_ANIMATION_FPS, MAX_ANIMATION_FPS);
-            }
-        }
-        self.normalize();
-    }
-
-    /// Moves a display throw still sitting on the retired `Shift`+arrow
-    /// default onto [`DISPLAY_MODIFIERS`].
-    ///
-    /// Every saved config contains the *whole* binding map, not just the keys
-    /// a user changed, so without this an existing install would keep firing
-    /// the throws from `Shift`+arrow forever and never see the new default.
-    /// The point of the remap is that `Shift` stops triggering this action, so
-    /// leaving the old binding in place is not an option.
-    ///
-    /// Only the exact previous default is rewritten. A throw the user moved
-    /// somewhere else is theirs, and is left alone. If the new combination is
-    /// already spoken for by another action, the throw is simply unbound
-    /// rather than stealing that binding — `Shift` still stops working, which
-    /// is the part that matters, and nothing the user chose is destroyed.
-    fn migrate_display_throws(&mut self) {
-        let retired = BASE_MODIFIERS.union(Modifiers::SHIFT);
-        for (action, key) in [
-            (WindowAction::PreviousDisplay, KeyCode::Left),
-            (WindowAction::NextDisplay, KeyCode::Right),
-        ] {
-            if self.binding(action) != Some(Hotkey::new(retired, key)) {
-                continue;
-            }
-            let replacement = Hotkey::new(DISPLAY_MODIFIERS, key);
-            let taken = self
-                .bindings
-                .iter()
-                .any(|(a, h)| *a != action && *h == Some(replacement));
-            self.bindings
-                .insert(action, (!taken).then_some(replacement));
-        }
-    }
-
-    /// Upgrade the old default arrows once, without stealing custom shortcuts
-    /// or re-enabling actions explicitly unbound in a directional config.
-    fn migrate_directional_displays(&mut self) {
-        if self
-            .bindings
-            .keys()
-            .any(|a| a.display_direction().is_some())
-        {
-            return;
-        }
-        for (action, key, legacy) in [
-            (
-                WindowAction::DisplayLeft,
-                KeyCode::Left,
-                Some(WindowAction::PreviousDisplay),
-            ),
-            (
-                WindowAction::DisplayRight,
-                KeyCode::Right,
-                Some(WindowAction::NextDisplay),
-            ),
-            (WindowAction::DisplayUp, KeyCode::Up, None),
-            (WindowAction::DisplayDown, KeyCode::Down, None),
-        ] {
-            let hotkey = Hotkey::new(DISPLAY_MODIFIERS, key);
-            let upgrade = legacy.map_or(true, |old| self.binding(old) == Some(hotkey));
-            if let Some(old) = legacy.filter(|_| upgrade) {
-                self.bindings.insert(old, None);
-            }
-            let taken = self
-                .bindings
-                .values()
-                .any(|binding| *binding == Some(hotkey));
-            self.bindings
-                .insert(action, (upgrade && !taken).then_some(hotkey));
-        }
-    }
-
-    /// Drops duplicates and puts the cycle into its canonical order, so the
-    /// sequence a user sees does not depend on the order the settings window
-    /// happened to write the sizes in.
     fn normalize_cycle_sizes(&mut self) {
         self.cycle_sizes.sort_by_key(|s| s.cycle_rank());
         self.cycle_sizes.dedup();
@@ -970,32 +676,45 @@ impl Config {
         &self.cycle_sizes
     }
 
-    /// Whether a repeat should cycle at all: the mode has to allow it and
-    /// there has to be at least one size to cycle through.
+    /// Whether a repeat should cycle at all.
     pub fn cycles_sizes(&self) -> bool {
         self.subsequent_execution_mode == SubsequentExecutionMode::CycleSizes
             && !self.cycle_sizes.is_empty()
     }
 
-    /// The size-variant fractions, derived from the persisted configuration.
-    pub fn size_options(&self) -> SizeOptions {
-        SizeOptions {
-            almost_maximize_width: self.almost_maximize_width,
-            almost_maximize_height: self.almost_maximize_height,
-            size_step: self.size_step,
-            width_step: self.width_step,
-            move_step: self.move_step,
-            minimum_width: self.minimum_window_width,
-            minimum_height: self.minimum_window_height,
+    /// The modifier combination owned by `group`.
+    pub const fn group_modifiers(&self, group: ShortcutGroup) -> Modifiers {
+        match group {
+            ShortcutGroup::Placement => self.placement_modifiers,
+            ShortcutGroup::Displays => self.display_modifiers,
         }
     }
 
+    /// The base modifier that enables single-hold corner composition, or `None`
+    /// when either no side action (`Left`/`Right`) or no vertical action
+    /// (`Maximize`/`Restore`) is bound.
+    pub fn compose_modifiers(&self) -> Option<Modifiers> {
+        let has_side = self.key(WindowAction::LeftHalf).is_some()
+            || self.key(WindowAction::RightHalf).is_some();
+        let has_vertical =
+            self.key(WindowAction::Maximize).is_some() || self.key(WindowAction::Restore).is_some();
+        (has_side && has_vertical).then_some(self.placement_modifiers)
+    }
+
+    /// The bare key bound to `action`, if any.
+    pub fn key(&self, action: WindowAction) -> Option<KeyCode> {
+        self.keys.get(&action).copied().flatten()
+    }
+
+    /// The full [`Hotkey`] bound to `action`, combining its group's modifier
+    /// with its configured key.
     pub fn binding(&self, action: WindowAction) -> Option<Hotkey> {
-        self.bindings.get(&action).copied().flatten()
+        self.key(action)
+            .map(|key| Hotkey::new(self.group_modifiers(action.group()), key))
     }
 
     /// Every action other than `action` that `hotkey` is bound to, in
-    /// catalogue order. Binding `hotkey` to `action` would unbind these.
+    /// catalogue order.
     pub fn actions_using(&self, hotkey: Hotkey, action: WindowAction) -> Vec<WindowAction> {
         WindowAction::ALL
             .into_iter()
@@ -1003,231 +722,354 @@ impl Config {
             .collect()
     }
 
-    /// Binds `hotkey` to `action`, unbinding any other action that already
-    /// used it so the configuration can never contain a duplicate.
-    pub fn set_binding(&mut self, action: WindowAction, hotkey: Option<Hotkey>) {
-        if let Some(hk) = hotkey {
-            for a in self.actions_using(hk, action) {
-                self.bindings.insert(a, None);
+    /// Assigns `key` to `action` under its group's modifier, unbinding any
+    /// other action whose full hotkey would collide.
+    pub fn set_key(&mut self, action: WindowAction, key: Option<KeyCode>) {
+        if let Some(k) = key {
+            let hk = Hotkey::new(self.group_modifiers(action.group()), k);
+            for other in self.actions_using(hk, action) {
+                self.keys.insert(other, None);
             }
         }
-        self.bindings.insert(action, hotkey);
+        self.keys.insert(action, key);
     }
 
-    /// Returns every hotkey bound to more than one action.
-    pub fn conflicts(&self) -> Vec<Conflict> {
-        let mut by_hotkey: BTreeMap<String, (Hotkey, Vec<WindowAction>)> = BTreeMap::new();
-        for (action, hotkey) in &self.bindings {
-            if let Some(hk) = hotkey {
-                by_hotkey
-                    .entry(hk.to_string())
-                    .or_insert_with(|| (*hk, Vec::new()))
-                    .1
-                    .push(*action);
+    /// Pairs `(in_group, in_other_group)` that would collide if `group`'s
+    /// modifier were changed to `modifiers`.
+    pub fn modifier_collisions(
+        &self,
+        group: ShortcutGroup,
+        modifiers: Modifiers,
+    ) -> Vec<(WindowAction, WindowAction)> {
+        let modifiers = modifiers.normalized();
+        let other_group = match group {
+            ShortcutGroup::Placement => ShortcutGroup::Displays,
+            ShortcutGroup::Displays => ShortcutGroup::Placement,
+        };
+        if modifiers != self.group_modifiers(other_group) {
+            return Vec::new();
+        }
+        let mut collisions = Vec::new();
+        for action in group.actions() {
+            let Some(k) = self.key(action) else {
+                continue;
+            };
+            for other in other_group.actions() {
+                if self.key(other) == Some(k) {
+                    collisions.push((action, other));
+                }
             }
         }
-        by_hotkey
-            .into_values()
-            .filter(|(_, actions)| actions.len() > 1)
-            .map(|(hotkey, actions)| Conflict { hotkey, actions })
-            .collect()
+        collisions
     }
 
-    /// Every currently bound (hotkey, action) pair, for backend registration.
+    /// Updates `group`'s modifier combination. Fails if `modifiers` is empty or
+    /// would collide with bound keys in the other group.
+    pub fn set_group_modifiers(
+        &mut self,
+        group: ShortcutGroup,
+        modifiers: Modifiers,
+    ) -> Result<(), ConfigError> {
+        let modifiers = modifiers.normalized();
+        if modifiers.is_empty() {
+            return Err(ConfigError::Invalid(
+                "Choose at least one modifier key.".into(),
+            ));
+        }
+        let collisions = self.modifier_collisions(group, modifiers);
+        if !collisions.is_empty() {
+            let names: Vec<_> = collisions
+                .iter()
+                .map(|(a, b)| format!("{} and {}", a.label(), b.label()))
+                .collect();
+            return Err(ConfigError::Invalid(format!(
+                "Cannot use the same modifier for both groups while {} share a key.",
+                names.join(", ")
+            )));
+        }
+        match group {
+            ShortcutGroup::Placement => self.placement_modifiers = modifiers,
+            ShortcutGroup::Displays => self.display_modifiers = modifiers,
+        }
+        Ok(())
+    }
+
+    /// Every currently bound `(hotkey, action)` pair, for backend registration.
     pub fn active_bindings(&self) -> Vec<(Hotkey, WindowAction)> {
-        self.bindings
-            .iter()
-            .filter_map(|(a, h)| h.map(|h| (h, *a)))
+        WindowAction::ALL
+            .into_iter()
+            .filter_map(|action| self.binding(action).map(|hk| (hk, action)))
             .collect()
     }
+}
+
+struct MigratedShortcuts {
+    placement_modifiers: Modifiers,
+    display_modifiers: Modifiers,
+    keys: BTreeMap<WindowAction, Option<KeyCode>>,
+}
+
+/// Extracts legacy v1 `"bindings"` when present without v2 `"keys"`.
+fn take_legacy_bindings(
+    map: &mut serde_json::Map<String, serde_json::Value>,
+) -> Option<serde_json::Value> {
+    if map.contains_key(KEYS_KEY) {
+        map.remove(BINDINGS_KEY);
+        return None;
+    }
+    map.remove(BINDINGS_KEY)
+}
+
+fn apply_migrated_to_map(
+    map: &mut serde_json::Map<String, serde_json::Value>,
+    migrated: MigratedShortcuts,
+) {
+    if !map.contains_key(PLACEMENT_MODIFIERS_KEY) {
+        if let Ok(val) = serde_json::to_value(migrated.placement_modifiers) {
+            map.insert(PLACEMENT_MODIFIERS_KEY.to_owned(), val);
+        }
+    }
+    if !map.contains_key(DISPLAY_MODIFIERS_KEY) {
+        if let Ok(val) = serde_json::to_value(migrated.display_modifiers) {
+            map.insert(DISPLAY_MODIFIERS_KEY.to_owned(), val);
+        }
+    }
+    if let Ok(val) = serde_json::to_value(migrated.keys) {
+        map.insert(KEYS_KEY.to_owned(), val);
+    }
+}
+
+/// Converts a legacy v1 `"bindings"` object into v2 group modifiers and keys.
+///
+/// - Retired action names are dropped silently (logged at info level).
+/// - Legacy pre-directional `previous-display`/`next-display` defaults upgrade
+///   to `DisplayLeft`/`DisplayRight` plus `DisplayUp`/`DisplayDown`.
+/// - Within each group, bindings are unified onto the majority modifier
+///   (breaking ties on `LeftHalf` / `DisplayLeft`, then `WindowAction::ALL`),
+///   keeping each action's key and unbinding only if two keys collide after
+///   unifying.
+fn migrate_legacy_bindings(
+    raw: &serde_json::Value,
+    reset_fields: &mut Vec<String>,
+    notes: &mut Vec<String>,
+) -> Result<MigratedShortcuts, ConfigError> {
+    let serde_json::Value::Object(entries) = raw else {
+        return Err(ConfigError::Invalid(
+            "legacy bindings must be a JSON object".into(),
+        ));
+    };
+
+    let mut parsed: BTreeMap<WindowAction, Option<Hotkey>> = BTreeMap::new();
+    let mut legacy_prev: Option<Hotkey> = None;
+    let mut legacy_next: Option<Hotkey> = None;
+    let mut has_directional_display = false;
+
+    for (action_name, val) in entries {
+        if let Ok(action) = WindowAction::from_str(action_name) {
+            if action.moves_display() {
+                has_directional_display = true;
+            }
+            match serde_json::from_value::<Option<Hotkey>>(val.clone()) {
+                Ok(hk) => {
+                    let clean = hk.and_then(|h| {
+                        let mods = h.modifiers.normalized();
+                        (!mods.is_empty()).then_some(Hotkey::new(mods, h.key))
+                    });
+                    parsed.insert(action, clean);
+                }
+                Err(_) => {
+                    reset_fields.push(format!("{BINDINGS_KEY}.{action_name}"));
+                }
+            }
+        } else if action_name == "previous-display" || action_name == "next-display" {
+            if let Ok(Some(hk)) = serde_json::from_value::<Option<Hotkey>>(val.clone()) {
+                let mods = hk.modifiers.normalized();
+                if !mods.is_empty() {
+                    let normalized = Hotkey::new(mods, hk.key);
+                    if action_name == "previous-display" {
+                        legacy_prev = Some(normalized);
+                    } else {
+                        legacy_next = Some(normalized);
+                    }
+                }
+            }
+        } else {
+            notes.push(format!("dropped retired v1 action '{action_name}'"));
+        }
+    }
+
+    // Upgrade pre-directional v1 configs (including the retired Shift+arrow throws).
+    if !has_directional_display && (legacy_prev.is_some() || legacy_next.is_some()) {
+        let retired_shift = BASE_MODIFIERS.union(Modifiers::SHIFT);
+        let matches_old_default = |hk: Option<Hotkey>, key: KeyCode| {
+            hk == Some(Hotkey::new(DISPLAY_MODIFIERS, key))
+                || hk == Some(Hotkey::new(retired_shift, key))
+        };
+        if matches_old_default(legacy_prev, KeyCode::Left) {
+            parsed.insert(
+                WindowAction::DisplayLeft,
+                Some(Hotkey::new(DISPLAY_MODIFIERS, KeyCode::Left)),
+            );
+        }
+        if matches_old_default(legacy_next, KeyCode::Right) {
+            parsed.insert(
+                WindowAction::DisplayRight,
+                Some(Hotkey::new(DISPLAY_MODIFIERS, KeyCode::Right)),
+            );
+        }
+        for (action, key) in [
+            (WindowAction::DisplayUp, KeyCode::Up),
+            (WindowAction::DisplayDown, KeyCode::Down),
+        ] {
+            let candidate = Hotkey::new(DISPLAY_MODIFIERS, key);
+            let taken = parsed.values().any(|hk| *hk == Some(candidate));
+            if !taken {
+                parsed.insert(action, Some(candidate));
+            }
+        }
+    }
+
+    let (placement_modifiers, placement_keys) = unify_group(
+        &parsed,
+        ShortcutGroup::Placement,
+        WindowAction::LeftHalf,
+        BASE_MODIFIERS,
+        notes,
+    );
+    let (display_modifiers, mut display_keys) = unify_group(
+        &parsed,
+        ShortcutGroup::Displays,
+        WindowAction::DisplayLeft,
+        DISPLAY_MODIFIERS,
+        notes,
+    );
+
+    // Avoid cross-group hotkey collisions if both groups unified onto the same
+    // modifier.
+    if placement_modifiers == display_modifiers {
+        let used: HashSet<KeyCode> = placement_keys.values().copied().flatten().collect();
+        for action in ShortcutGroup::Displays.actions() {
+            if let Some(k) = display_keys.get(&action).copied().flatten() {
+                if used.contains(&k) {
+                    notes.push(format!(
+                        "unbound {action} during migration: key {k:?} collided with placement group"
+                    ));
+                    display_keys.insert(action, None);
+                }
+            }
+        }
+    }
+
+    let mut keys = BTreeMap::new();
+    for action in WindowAction::ALL {
+        let key = match action.group() {
+            ShortcutGroup::Placement => placement_keys.get(&action).copied().flatten(),
+            ShortcutGroup::Displays => display_keys.get(&action).copied().flatten(),
+        };
+        keys.insert(action, key);
+    }
+
+    Ok(MigratedShortcuts {
+        placement_modifiers,
+        display_modifiers,
+        keys,
+    })
+}
+
+fn unify_group(
+    parsed: &BTreeMap<WindowAction, Option<Hotkey>>,
+    group: ShortcutGroup,
+    tie_breaker: WindowAction,
+    default_mods: Modifiers,
+    notes: &mut Vec<String>,
+) -> (Modifiers, BTreeMap<WindowAction, Option<KeyCode>>) {
+    let actions: Vec<WindowAction> = group.actions().collect();
+    let bound: Vec<(WindowAction, Hotkey)> = actions
+        .iter()
+        .filter_map(|&a| parsed.get(&a).copied().flatten().map(|hk| (a, hk)))
+        .collect();
+
+    let chosen_mods = if bound.is_empty() {
+        default_mods
+    } else {
+        let mut counts: BTreeMap<u8, usize> = BTreeMap::new();
+        for (_, hk) in &bound {
+            *counts.entry(hk.modifiers.0).or_insert(0) += 1;
+        }
+        let max_count = counts.values().copied().max().unwrap_or(0);
+        let tie_mods = parsed
+            .get(&tie_breaker)
+            .copied()
+            .flatten()
+            .map(|h| h.modifiers);
+        if let Some(m) = tie_mods.filter(|m| counts.get(&m.0).copied() == Some(max_count)) {
+            m
+        } else {
+            bound
+                .iter()
+                .find(|(_, hk)| counts.get(&hk.modifiers.0).copied() == Some(max_count))
+                .map(|(_, hk)| hk.modifiers)
+                .unwrap_or(default_mods)
+        }
+    };
+
+    // Actions already on `chosen_mods` claim their key first; unified outliers
+    // follow, dropping only if their key collides.
+    let mut result: BTreeMap<WindowAction, Option<KeyCode>> =
+        actions.iter().map(|&a| (a, None)).collect();
+    let mut used_keys: HashSet<KeyCode> = HashSet::new();
+
+    for prefer_matching in [true, false] {
+        for &(action, hk) in &bound {
+            if (hk.modifiers == chosen_mods) != prefer_matching {
+                continue;
+            }
+            if used_keys.insert(hk.key) {
+                result.insert(action, Some(hk.key));
+            } else {
+                notes.push(format!(
+                    "unbound {action} during migration: key {:?} collided under unified modifier {chosen_mods}",
+                    hk.key
+                ));
+            }
+        }
+    }
+
+    (chosen_mods, result)
 }
 
 /// Upper bound for the screen-edge gap, to stop a typo shrinking windows away.
 pub const MAX_GAP: f64 = 200.0;
 
-/// The modifier carrying the bulk of the default bindings.
+/// Default base modifier for window placement.
 ///
-/// macOS uses `Control+Option`, matching Rectangle's alternate ("Magnet")
-/// default set, which is also what Tile has always shipped.
-///
-/// Windows uses `Win` alone. `Ctrl+Alt` would mirror macOS exactly, but
-/// **Windows treats `Ctrl+Alt` as `AltGr`**: on many international layouts
-/// `AltGr`+key produces characters such as `@ € { } [ ] \ ~`. Because the
-/// Windows backend swallows any keystroke it matches, binding `Ctrl+Alt`+letter
-/// would make those characters impossible to type — a German user could not
-/// type `@`.
+/// macOS uses `Control+Option`; Windows uses `Win` (avoiding `Ctrl+Alt` which
+/// acts as `AltGr` on many international layouts).
 #[cfg(target_os = "macos")]
-pub(crate) const BASE_MODIFIERS: Modifiers = Modifiers(Modifiers::CONTROL.0 | Modifiers::ALT.0);
+pub const BASE_MODIFIERS: Modifiers = Modifiers(Modifiers::CONTROL.0 | Modifiers::ALT.0);
 #[cfg(not(target_os = "macos"))]
-pub(crate) const BASE_MODIFIERS: Modifiers = Modifiers::META;
+pub const BASE_MODIFIERS: Modifiers = Modifiers::META;
 
-/// The modifier carrying the directional display throws.
+/// Default display modifier for moving windows across displays.
 ///
-/// The base modifier plus whichever of `Alt`/`Option` and `Win`/`Command` it
-/// does not already hold, which lands on the platform-conventional
-/// move-window-to-display combination on both:
-///
-/// * **Windows** — `Win+Alt+Arrow`, matching the shell's own snap variants.
-/// * **macOS** — `Control+Command+Option+Arrow`.
-///
-/// `Shift` deliberately plays no part. It used to carry these throws, but it
-/// is not the platform convention on either OS, and it is not kept as an
-/// alias: `Shift`+arrow does nothing by default.
-const DISPLAY_MODIFIERS: Modifiers =
+/// * **Windows** — `Win+Alt`
+/// * **macOS** — `Control+Option+Command`
+pub const DISPLAY_MODIFIERS: Modifiers =
     Modifiers(BASE_MODIFIERS.0 | Modifiers::ALT.0 | Modifiers::META.0);
 
-/// Default key bindings.
-///
-/// **Every default sits on the same base modifier**, so the two platforms
-/// differ in exactly one thing: what that modifier is. `Control+Option` on
-/// macOS, `Win` on Windows. Nothing else varies, so a user with a Mac and a
-/// PC learns one set of shortcuts. The only exception is the pair of display
-/// throws, which follow each platform's own move-window-to-display convention
-/// — see [`DISPLAY_MODIFIERS`].
-///
-/// The defaults are the arrows, together with the platform's own
-/// move-window-to-display combination on all four arrows to throw the window
-/// to a display in that direction. `Left` and `Right` place the window and carry the side
-/// size catalogue by cycling; `Up` maximizes and `Down` restores.
-/// The throws keep the current slot and walk screens:
-///
-/// ```text
-///   Left   ½ → ⅔ → ⅓ → …   anchored left
-///   Right  ½ → ⅔ → ⅓ → …   anchored right
-///   Up     maximize
-///   Down   restore
-/// ```
-///
-/// **Every default sits on an arrow**. The only extra modifiers are the ones
-/// [`DISPLAY_MODIFIERS`] adds for display throws. Center, the centred column,
-/// the corners, maximize-height and the explicitly-sized layouts remain in
-/// the catalogue but ship unbound.
-///
-/// # Why the arrows, and not letters
-///
-/// Every default is pressed while the base modifier is held, and on a MacBook
-/// there is no right `Control`, so `Control+Option` can only be held with the
-/// left hand. That makes left-hand letters — the old `A`/`S`/`D` thirds and
-/// `Q`/`E` two-thirds — a one-handed contortion. The arrows sit under the
-/// right hand, so the two hands divide the work.
-///
-/// Dropping those letters also retires a Windows problem: the block sat at
-/// `Q`/`A` only because Game Bar reserves the keys Rectangle uses, and center
-/// two thirds shipped unbound entirely because its natural key was the
-/// reserved `W`. None of that constrains an arrow.
-///
-/// The cost is that a cycling arrow is stateful — landing on a third can take
-/// several presses, where a letter was one. The explicitly-sized actions all
-/// remain in the catalogue for anyone who wants that determinism back; they
-/// are simply not bound by default.
-///
-/// The vertical halves are unbound because top/bottom halves are a
-/// portrait-monitor need rather than a universal one. `Up` maximizes, while
-/// `Down` restores — unless a side arrow was pressed earlier in the same
-/// hold of the base modifier, in which case they compose a corner on that
-/// side (see [`crate::compose`]). The corners therefore need no bindings of
-/// their own. `Enter` places the centred column and cycles its width;
-/// `CenterHalfBack` stays unbound.
-///
-/// # Why Windows uses `Win+Arrow`
-///
-/// `Win+Arrow` is Aero Snap — the shell combination people already reach for
-/// to tile a window. Tile's hook exists so it can claim those keys; swallowing
-/// them replaces Aero Snap with Tile's cycle (half → two thirds → third) on
-/// the same four arrows. `Win+Alt+Arrow` — Windows 11's snap variants — is
-/// claimed too, for the display throws. `Win+Shift+Arrow` (move between
-/// monitors) and `Win+Ctrl+Left/Right` (virtual desktops) stay unbound, so
-/// those OS shortcuts keep working.
-///
-/// `Win+Alt+Arrow` used to be the default for *every* action. It left Aero
-/// Snap alone, but it cost an extra modifier for no extra reach, so the tiling
-/// arrows moved down to `Win` alone and only the throws kept it.
-///
-/// # Keys Xbox Game Bar reserves
-///
-/// Game Bar owns eight shortcuts, and Tile cannot win any of them. `Win+Alt+G`
-/// is the clearest example: Game Bar's own hotkey is `Win+G` and its handler
-/// matches *loosely*, ignoring the extra `Alt`, so the overlay appears even
-/// with Tile shut down. The rest are handled by GameDVR through an input path
-/// that never reaches the keyboard hook. Users cannot fix this either — Game
-/// Bar's settings only *add* shortcuts, they never replace the built-in one.
-///
-/// The authoritative list is the `VK*` values under
-/// `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR`:
-///
-/// | Action | Shortcut |
-/// |---|---|
-/// | `ToggleGameBar` | `Win+G` |
-/// | `SaveHistoricalVideo` | `Win+Alt+G` |
-/// | `ToggleRecording` | `Win+Alt+R` |
-/// | `ToggleMicrophoneCapture` | `Win+Alt+M` |
-/// | `ToggleBroadcast` | `Win+Alt+B` |
-/// | `ToggleCameraCapture` | `Win+Alt+W` |
-/// | `ToggleRecordingIndicator` | `Win+Alt+T` |
-/// | `TakeScreenshot` | `Win+Alt+PrtScn` |
-///
-/// So `G`, `R`, `M`, `B`, `W` and `T` are all unusable. No default lands on
-/// any of them, and there is a test enforcing the whole set. This used to
-/// constrain the layout heavily — it is why the letter block sat at `Q`/`A`
-/// and why center two thirds, whose natural key was `W`, shipped unbound. The
-/// arrow-and-cycle defaults sidestep the problem entirely: no default sits on
-/// a letter, so none of the reserved keys can collide.
-///
-/// # Why not Rectangle's letters
-///
-/// Rectangle puts the thirds on `D`/`F`/`G` with `E`/`R`/`T` above, and Tile
-/// shipped that briefly. Four of those six keys are reserved by Game Bar, so
-/// it moved to `Q`/`A`; that block is now retired in favour of cycling the
-/// arrows, which needs no letters at all. Both platforms match either way.
-pub fn default_bindings() -> BTreeMap<WindowAction, Option<Hotkey>> {
+/// Default per-action keys paired with [`BASE_MODIFIERS`] and
+/// [`DISPLAY_MODIFIERS`].
+pub fn default_keys() -> BTreeMap<WindowAction, Option<KeyCode>> {
     let mut map = BTreeMap::new();
-    let base = BASE_MODIFIERS;
-
-    // Every default sits on the base modifier, so the two platforms differ
-    // only in what that modifier is. The horizontal arrows carry the side
-    // size catalogue by cycling.
-    map.insert(
-        WindowAction::LeftHalf,
-        Some(Hotkey::new(base, KeyCode::Left)),
-    );
-    map.insert(
-        WindowAction::RightHalf,
-        Some(Hotkey::new(base, KeyCode::Right)),
-    );
-    // Up maximizes and Down restores: the vertical pair is the "bigger / undo" axis.
-    map.insert(WindowAction::Maximize, Some(Hotkey::new(base, KeyCode::Up)));
-    map.insert(
-        WindowAction::Restore,
-        Some(Hotkey::new(base, KeyCode::Down)),
-    );
-    // Enter centres a full-height column and cycles its width. Saved configs
-    // store every binding, so this reaches new installs only.
-    map.insert(
-        WindowAction::CenterHalf,
-        Some(Hotkey::new(base, KeyCode::Enter)),
-    );
-
-    // The display throws sit on the platform's own move-window-to-display
-    // combination (`Win+Alt` / `Control+Command+Option`), keeping the current
-    // slot. Size cycling stays on the unmodified arrows.
-    let throw = DISPLAY_MODIFIERS;
-    map.insert(
-        WindowAction::DisplayLeft,
-        Some(Hotkey::new(throw, KeyCode::Left)),
-    );
-    map.insert(
-        WindowAction::DisplayRight,
-        Some(Hotkey::new(throw, KeyCode::Right)),
-    );
-    map.insert(
-        WindowAction::DisplayUp,
-        Some(Hotkey::new(throw, KeyCode::Up)),
-    );
-    map.insert(
-        WindowAction::DisplayDown,
-        Some(Hotkey::new(throw, KeyCode::Down)),
-    );
-
+    map.insert(WindowAction::LeftHalf, Some(KeyCode::Left));
+    map.insert(WindowAction::RightHalf, Some(KeyCode::Right));
+    map.insert(WindowAction::Maximize, Some(KeyCode::Up));
+    map.insert(WindowAction::Restore, Some(KeyCode::Down));
+    map.insert(WindowAction::CenterHalf, Some(KeyCode::Enter));
+    map.insert(WindowAction::DisplayLeft, Some(KeyCode::Left));
+    map.insert(WindowAction::DisplayRight, Some(KeyCode::Right));
+    map.insert(WindowAction::DisplayUp, Some(KeyCode::Up));
+    map.insert(WindowAction::DisplayDown, Some(KeyCode::Down));
     map
 }
 
@@ -1235,380 +1077,16 @@ pub fn default_bindings() -> BTreeMap<WindowAction, Option<Hotkey>> {
 mod tests {
     use super::*;
 
-    /// The actions that ship with a default binding.
-    ///
-    /// Four arrows and `Enter` for tiling, plus the display throws on all four
-    /// arrows. Every other action — center, the backwards centred column, the
-    /// corners (composed from the arrows instead), maximize-height and the
-    /// explicitly-sized thirds and two-thirds — ships unbound.
-    const CORE_BOUND: [WindowAction; 9] = [
-        WindowAction::LeftHalf,
-        WindowAction::RightHalf,
-        WindowAction::Maximize,
-        WindowAction::Restore,
-        WindowAction::CenterHalf,
-        WindowAction::DisplayLeft,
-        WindowAction::DisplayRight,
-        WindowAction::DisplayUp,
-        WindowAction::DisplayDown,
-    ];
-
-    /// Both horizontal arrows must cycle, because that is the only way the
-    /// thirds and two-thirds are reachable now that they ship unbound. A
-    /// future edit binding one to an explicitly-sized action would silently
-    /// strand every size except the half.
     #[test]
-    fn both_horizontal_arrows_cycle() {
-        let config = Config::default();
-        for action in [WindowAction::LeftHalf, WindowAction::RightHalf] {
-            assert!(
-                action.cycles(),
-                "{action} must cycle to reach the sizes that ship unbound"
-            );
-            assert!(
-                config.binding(action).is_some(),
-                "{action} must keep its arrow binding"
-            );
-        }
+    fn defaults_bind_all_nine_actions_without_conflicts_or_game_bar_keys() {
+        let cfg = Config::default();
+        let active = cfg.active_bindings();
+        assert_eq!(active.len(), 9);
+        let unique: HashSet<Hotkey> = active.iter().map(|(hk, _)| *hk).collect();
+        assert_eq!(unique.len(), 9);
+        assert_eq!(cfg.compose_modifiers(), Some(BASE_MODIFIERS));
 
-        // The centred column cycles on Enter; its backwards step ships unbound.
-        assert!(WindowAction::CenterHalf.cycles());
-        assert_eq!(
-            WindowAction::CenterHalfBack.cycle_anchor(),
-            WindowAction::CenterHalf
-        );
-        assert!(WindowAction::CenterHalfBack.cycles_backwards());
-        assert!(config.binding(WindowAction::CenterHalf).is_some());
-        assert_eq!(config.binding(WindowAction::CenterHalfBack), None);
-
-        // The sizes these arrows stand in for must stay in the catalogue, so
-        // custom bindings can still reach them directly.
-        for action in [
-            WindowAction::FirstThird,
-            WindowAction::CenterThird,
-            WindowAction::LastThird,
-            WindowAction::FirstTwoThirds,
-            WindowAction::CenterTwoThirds,
-            WindowAction::LastTwoThirds,
-        ] {
-            assert_eq!(
-                config.binding(action),
-                None,
-                "{action} is reached by cycling an arrow and should ship unbound"
-            );
-        }
-    }
-
-    /// No default may sit on a letter. The whole point of the arrow layout is
-    /// that the modifier hand and the action hand are different hands.
-    #[test]
-    fn no_default_binding_uses_a_letter() {
-        let config = Config::default();
-        for (hotkey, action) in config.active_bindings() {
-            assert!(
-                !('A'..='Z').any(|c| hotkey.key.label() == c.to_string()),
-                "{action} is bound to the letter {} ({hotkey})",
-                hotkey.key.label()
-            );
-        }
-    }
-
-    #[test]
-    fn defaults_use_spatially_mnemonic_keys() {
-        // These keys are load-bearing, not arbitrary. The horizontal pair
-        // places the window and cycles its width; the vertical pair is the
-        // "bigger / undo" axis:
-        //
-        //   Left / Right   place and resize
-        //   Up            maximize (or a top corner after a side)
-        //   Down          restore (or a bottom corner after a side)
-        //   Enter         centred column
-        //
-        // Changing one silently breaks the mnemonic, so they are pinned here.
-        let config = Config::default();
-        let expected = [
-            (WindowAction::LeftHalf, KeyCode::Left),
-            (WindowAction::RightHalf, KeyCode::Right),
-            (WindowAction::Maximize, KeyCode::Up),
-            (WindowAction::Restore, KeyCode::Down),
-            (WindowAction::CenterHalf, KeyCode::Enter),
-        ];
-        for (action, key) in expected {
-            let hotkey = config.binding(action).expect("action must be bound");
-            assert_eq!(hotkey.key, key, "{action} lost its mnemonic key");
-            assert_eq!(
-                hotkey.modifiers, BASE_MODIFIERS,
-                "{action} should use the platform base modifier"
-            );
-        }
-
-        let throw = DISPLAY_MODIFIERS;
-        for (action, key) in [
-            (WindowAction::DisplayLeft, KeyCode::Left),
-            (WindowAction::DisplayRight, KeyCode::Right),
-            (WindowAction::DisplayUp, KeyCode::Up),
-            (WindowAction::DisplayDown, KeyCode::Down),
-        ] {
-            let hotkey = config.binding(action).expect("display throw must be bound");
-            assert_eq!(hotkey.key, key, "{action} lost its throw key");
-            assert_eq!(
-                hotkey.modifiers, throw,
-                "{action} should use the platform display-throw modifiers"
-            );
-        }
-
-        // Nothing else ships bound: the vertical halves and center are
-        // catalogue-only, and the corners are composed from the arrows.
-        for action in [
-            WindowAction::TopHalf,
-            WindowAction::BottomHalf,
-            WindowAction::Center,
-            WindowAction::CenterHalfBack,
-            WindowAction::TopLeft,
-            WindowAction::TopRight,
-            WindowAction::BottomLeft,
-            WindowAction::BottomRight,
-        ] {
-            assert_eq!(
-                config.binding(action),
-                None,
-                "{action} must stay unbound under the arrow-only defaults"
-            );
-        }
-    }
-
-    /// Every default must be identical across platforms apart from the base
-    /// modifier — the display throws excepted, which follow each platform's own
-    /// move-window-to-display convention — so someone with a Mac and a PC
-    /// learns one set of shortcuts. Hard-coded rather than derived, so a
-    /// platform-specific edit to `default_bindings` fails here instead of
-    /// drifting silently.
-    #[test]
-    fn defaults_differ_only_by_the_base_modifier() {
-        let config = Config::default();
-        let expected = [
-            (WindowAction::LeftHalf, KeyCode::Left),
-            (WindowAction::RightHalf, KeyCode::Right),
-            (WindowAction::Maximize, KeyCode::Up),
-            (WindowAction::Restore, KeyCode::Down),
-            (WindowAction::CenterHalf, KeyCode::Enter),
-        ];
-        for (action, key) in expected {
-            let hotkey = config.binding(action).expect("action must be bound");
-            assert_eq!(
-                hotkey.key, key,
-                "{action} must use the same key on every platform"
-            );
-            assert_eq!(
-                hotkey.modifiers, BASE_MODIFIERS,
-                "{action} should sit on the base modifier"
-            );
-        }
-
-        let throw = DISPLAY_MODIFIERS;
-        for (action, key) in [
-            (WindowAction::DisplayLeft, KeyCode::Left),
-            (WindowAction::DisplayRight, KeyCode::Right),
-            (WindowAction::DisplayUp, KeyCode::Up),
-            (WindowAction::DisplayDown, KeyCode::Down),
-        ] {
-            let hotkey = config.binding(action).expect("display throw must be bound");
-            assert_eq!(
-                hotkey.key, key,
-                "{action} must use the same key on every platform"
-            );
-            assert_eq!(hotkey.modifiers, throw);
-        }
-
-        for (hotkey, action) in config.active_bindings() {
-            let expected = if action.moves_display() {
-                throw
-            } else {
-                BASE_MODIFIERS
-            };
-            assert_eq!(
-                hotkey.modifiers, expected,
-                "{action} has unexpected modifiers ({hotkey})"
-            );
-        }
-    }
-
-    /// The display throws follow each platform's own move-window-to-display
-    /// convention, so they are the one place the two platforms differ by more
-    /// than the base modifier. Both rows are pinned here — including the one
-    /// for the platform the test is not running on — so a change to either
-    /// mapping fails on any host.
-    #[test]
-    fn display_throws_use_the_platform_move_to_display_modifiers() {
-        // The rule is "the base modifier plus whichever of Alt and Meta it
-        // does not already hold", which lands on the conventional combination
-        // on both platforms.
-        let throw_for = |base: Modifiers| base.union(Modifiers::ALT).union(Modifiers::META);
-
-        // macOS: Control+Option base → Control+Command+Option.
-        let macos_base = Modifiers::CONTROL.union(Modifiers::ALT);
-        assert_eq!(
-            throw_for(macos_base),
-            Modifiers::CONTROL
-                .union(Modifiers::META)
-                .union(Modifiers::ALT),
-            "macOS display throws must be Control+Command+Option+Arrow"
-        );
-
-        // Windows: Win base → Win+Alt.
-        let windows_base = Modifiers::META;
-        assert_eq!(
-            throw_for(windows_base),
-            Modifiers::META.union(Modifiers::ALT),
-            "Windows display throws must be Win+Alt+Arrow"
-        );
-
-        // Neither carries Shift any more, on either platform.
-        for base in [macos_base, windows_base] {
-            assert!(!throw_for(base).contains(Modifiers::SHIFT));
-        }
-
-        #[cfg(target_os = "macos")]
-        let expected = throw_for(macos_base);
-        #[cfg(not(target_os = "macos"))]
-        let expected = throw_for(windows_base);
-
-        assert_eq!(DISPLAY_MODIFIERS, expected);
-
-        let config = Config::default();
-        for (action, key) in [
-            (WindowAction::DisplayLeft, KeyCode::Left),
-            (WindowAction::DisplayRight, KeyCode::Right),
-            (WindowAction::DisplayUp, KeyCode::Up),
-            (WindowAction::DisplayDown, KeyCode::Down),
-        ] {
-            let hotkey = config.binding(action).expect("display throw must be bound");
-            assert_eq!(hotkey.key, key);
-            assert_eq!(
-                hotkey.modifiers, expected,
-                "{action} is {hotkey}, expected the platform move-to-display modifiers"
-            );
-        }
-    }
-
-    /// `Shift` used to carry the display throws and was deliberately dropped
-    /// without a compatibility alias, so nothing may ship on it.
-    #[test]
-    fn no_default_binding_uses_shift() {
-        let config = Config::default();
-        for (hotkey, action) in config.active_bindings() {
-            assert!(
-                !hotkey.modifiers.contains(Modifiers::SHIFT),
-                "{action} is {hotkey}; Shift is no longer a default modifier"
-            );
-        }
-    }
-
-    /// Windows tiling defaults are `Win` plus an arrow, not `Win+Alt`. Pin that
-    /// so a well-meaning "leave Aero Snap alone" edit cannot silently restore
-    /// the extra modifier on the arrows. The display throws are the deliberate
-    /// exception: they sit on `Win+Alt`, Windows' own snap-variant combination.
-    #[cfg(not(target_os = "macos"))]
-    #[test]
-    fn windows_defaults_use_win_without_alt() {
-        assert_eq!(BASE_MODIFIERS, Modifiers::META);
-        let config = Config::default();
-        for (hotkey, action) in config.active_bindings() {
-            assert!(
-                hotkey.modifiers.contains(Modifiers::META),
-                "{action} is {hotkey}, expected Win"
-            );
-            if action.moves_display() {
-                assert_eq!(
-                    hotkey.modifiers,
-                    Modifiers::META | Modifiers::ALT,
-                    "{action} is {hotkey}, expected Win+Alt"
-                );
-            } else {
-                assert!(
-                    !hotkey.modifiers.contains(Modifiers::ALT),
-                    "{action} is {hotkey}, Win+Alt is no longer the tiling default"
-                );
-                assert_eq!(
-                    hotkey.modifiers,
-                    Modifiers::META,
-                    "{action} is {hotkey}, expected Win alone"
-                );
-            }
-        }
-    }
-
-    /// macOS keeps `Control+Option` for tiling, and throws windows between
-    /// displays with `Control+Command+Option` — the platform convention.
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn macos_defaults_use_control_option_and_add_command_for_throws() {
-        assert_eq!(BASE_MODIFIERS, Modifiers::CONTROL | Modifiers::ALT);
-        let config = Config::default();
-        for (hotkey, action) in config.active_bindings() {
-            if action.moves_display() {
-                assert_eq!(
-                    hotkey.modifiers,
-                    Modifiers::CONTROL | Modifiers::META | Modifiers::ALT,
-                    "{action} is {hotkey}, expected Control+Command+Option"
-                );
-            } else {
-                assert_eq!(
-                    hotkey.modifiers,
-                    Modifiers::CONTROL | Modifiers::ALT,
-                    "{action} is {hotkey}, expected Control+Option"
-                );
-            }
-        }
-    }
-
-    /// Windows treats `Ctrl+Alt` as `AltGr`, which many international layouts
-    /// use to type `@ € { } [ ] \ ~`. Since the Windows backend swallows the
-    /// keystrokes it matches, a `Ctrl+Alt` default would make those characters
-    /// untypeable. Guard against anyone "simplifying" the modifiers to match
-    /// macOS exactly.
-    #[cfg(not(target_os = "macos"))]
-    #[test]
-    fn windows_defaults_never_use_ctrl_alt() {
-        let config = Config::default();
-        for (hotkey, action) in config.active_bindings() {
-            let ctrl_alt = Modifiers::CONTROL | Modifiers::ALT;
-            assert!(
-                !hotkey.modifiers.contains(ctrl_alt),
-                "{action} uses Ctrl+Alt ({hotkey}), which collides with AltGr"
-            );
-        }
-    }
-
-    #[test]
-    fn retired_windows_hotkey_policy_is_ignored() {
-        let config = Config::from_json(
-            r#"{"bindings":{},"windowsHotkeys":{"mode":"future-mode","passThrough":[]}}"#,
-        )
-        .unwrap();
-        let json = config.to_json().unwrap();
-        assert!(!json.contains("windowsHotkeys"));
-        assert!(!json.contains("passThrough"));
-    }
-
-    /// Xbox Game Bar owns eight shortcuts that Tile cannot win, listed against
-    /// `default_bindings`. `Win+Alt+G` fires even with Tile shut down, because
-    /// Game Bar's `Win+G` matches loosely; the others are handled by GameDVR
-    /// through an input path the keyboard hook never sees. Users cannot
-    /// disable them — Game Bar's settings only add shortcuts.
-    ///
-    /// The defaults were chosen to avoid all of these. This test is the guard,
-    /// and it is deliberately exhaustive: an earlier version listed only `G`,
-    /// `R`, `M` and `B`, which let a `W` binding ship and collide with Game
-    /// Bar's broadcast camera toggle.
-    #[cfg(not(target_os = "macos"))]
-    #[test]
-    fn defaults_avoid_the_unwinnable_game_bar_shortcuts() {
-        // ToggleGameBar / SaveHistoricalVideo, ToggleRecording,
-        // ToggleMicrophoneCapture, ToggleBroadcast, ToggleCameraCapture,
-        // ToggleRecordingIndicator. (`Win+Alt+PrtScn` is reserved too, but
-        // Tile has no PrintScreen key code, so it cannot be bound at all.)
-        const RESERVED: [KeyCode; 6] = [
+        const GAME_BAR_KEYS: [KeyCode; 6] = [
             KeyCode::G,
             KeyCode::R,
             KeyCode::M,
@@ -1616,785 +1094,197 @@ mod tests {
             KeyCode::W,
             KeyCode::T,
         ];
-
-        let config = Config::default();
-        for (hotkey, action) in config.active_bindings() {
-            if !hotkey.modifiers.contains(Modifiers::META) {
-                continue;
-            }
-            assert!(
-                !RESERVED.contains(&hotkey.key),
-                "{action} is bound to {hotkey}, which Game Bar reserves and Tile cannot override"
-            );
+        for (hk, _) in cfg.active_bindings() {
+            assert!(hk.is_valid());
+            assert!(!GAME_BAR_KEYS.contains(&hk.key));
         }
     }
 
     #[test]
-    fn defaults_bind_the_core_actions_without_conflicts() {
-        let config = Config::default();
-        for action in CORE_BOUND {
-            assert!(
-                config.binding(action).is_some(),
-                "{action} has no default binding"
-            );
-        }
-        // Every other action ships unbound.
-        for action in WindowAction::ALL {
-            if !CORE_BOUND.contains(&action) {
-                assert!(
-                    config.binding(action).is_none(),
-                    "{action} unexpectedly has a default binding"
-                );
-            }
-        }
+    fn config_round_trips_through_v2_json() {
+        let mut cfg = Config {
+            placement_modifiers: Modifiers::CONTROL | Modifiers::META,
+            ..Default::default()
+        };
+        cfg.set_key(WindowAction::LeftHalf, Some(KeyCode::H));
+        cfg.set_key(WindowAction::CenterHalf, None);
+        cfg.gaps.window = 12.0;
+
+        let json = cfg.to_json().unwrap();
+        assert!(json.contains("\"schemaVersion\": 2"));
+        let parsed = Config::from_json(&json).unwrap();
+        assert_eq!(parsed, cfg);
+    }
+
+    #[test]
+    fn legacy_v1_config_migrates_silently_dropping_retired_actions_and_advanced_fields() {
+        let v1 = serde_json::json!({
+            "schemaVersion": 1,
+            "bindings": {
+                "left-half": { "modifiers": BASE_MODIFIERS.0, "key": "left" },
+                "right-half": { "modifiers": BASE_MODIFIERS.0, "key": "right" },
+                "maximize": { "modifiers": BASE_MODIFIERS.0, "key": "up" },
+                "restore": { "modifiers": BASE_MODIFIERS.0, "key": "down" },
+                "center-half": { "modifiers": BASE_MODIFIERS.0, "key": "enter" },
+                "display-left": { "modifiers": DISPLAY_MODIFIERS.0, "key": "left" },
+                "display-right": { "modifiers": DISPLAY_MODIFIERS.0, "key": "right" },
+                "display-up": { "modifiers": DISPLAY_MODIFIERS.0, "key": "up" },
+                "display-down": { "modifiers": DISPLAY_MODIFIERS.0, "key": "down" },
+                "first-third": { "modifiers": BASE_MODIFIERS.0, "key": "a" },
+                "top-left": { "modifiers": BASE_MODIFIERS.0, "key": "u" },
+                "move-left": null
+            },
+            "almostMaximizeWidth": 0.85,
+            "sizeStep": 40,
+            "animation": { "enabled": true, "durationMs": 200, "fps": 120 }
+        })
+        .to_string();
+
+        let loaded = Config::from_json_lenient(&v1).unwrap();
+        assert!(
+            loaded.reset_fields.is_empty(),
+            "retired fields must migrate silently, got {:?}",
+            loaded.reset_fields
+        );
+        assert_eq!(loaded.config.placement_modifiers, BASE_MODIFIERS);
+        assert_eq!(loaded.config.display_modifiers, DISPLAY_MODIFIERS);
         assert_eq!(
-            config.conflicts(),
-            vec![],
-            "default bindings must not clash"
+            loaded.config.key(WindowAction::LeftHalf),
+            Some(KeyCode::Left)
+        );
+        assert_eq!(
+            loaded.config.key(WindowAction::CenterHalf),
+            Some(KeyCode::Enter)
+        );
+        assert_eq!(
+            loaded.config.key(WindowAction::DisplayUp),
+            Some(KeyCode::Up)
+        );
+        assert_eq!(loaded.config.animation.duration_ms, 200);
+    }
+
+    #[test]
+    fn legacy_v1_mixed_modifiers_unify_by_majority_with_left_tiebreak_and_drop_only_collisions() {
+        let m1 = Modifiers::CONTROL | Modifiers::SHIFT;
+        let m2 = Modifiers::CONTROL | Modifiers::ALT;
+        let v1 = serde_json::json!({
+            "schemaVersion": 1,
+            "bindings": {
+                "left-half": { "modifiers": m1.0, "key": "h" },
+                "right-half": { "modifiers": m1.0, "key": "l" },
+                // Different modifier, distinct key -> kept under m1.
+                "maximize": { "modifiers": m2.0, "key": "k" },
+                // Different modifier, colliding key with left-half -> unbound.
+                "restore": { "modifiers": m2.0, "key": "h" },
+                // Tie in display group: DisplayLeft wins tie-break.
+                "display-left": { "modifiers": m2.0, "key": "left" },
+                "display-right": { "modifiers": m1.0, "key": "right" }
+            }
+        })
+        .to_string();
+
+        let loaded = Config::from_json_lenient(&v1).unwrap();
+        assert!(loaded.reset_fields.is_empty());
+        assert_eq!(loaded.config.placement_modifiers, m1);
+        assert_eq!(loaded.config.key(WindowAction::LeftHalf), Some(KeyCode::H));
+        assert_eq!(loaded.config.key(WindowAction::RightHalf), Some(KeyCode::L));
+        assert_eq!(loaded.config.key(WindowAction::Maximize), Some(KeyCode::K));
+        assert_eq!(loaded.config.key(WindowAction::Restore), None);
+        assert_eq!(loaded.config.key(WindowAction::CenterHalf), None);
+
+        assert_eq!(loaded.config.display_modifiers, m2);
+        assert_eq!(
+            loaded.config.key(WindowAction::DisplayLeft),
+            Some(KeyCode::Left)
+        );
+        assert_eq!(
+            loaded.config.key(WindowAction::DisplayRight),
+            Some(KeyCode::Right)
         );
     }
 
     #[test]
-    fn defaults_round_trip_through_json() {
-        let config = Config::default();
-        let parsed = Config::from_json(&config.to_json().unwrap()).unwrap();
-        assert_eq!(config, parsed);
-    }
+    fn legacy_pre_directional_display_bindings_upgrade_to_directional() {
+        let retired = BASE_MODIFIERS.union(Modifiers::SHIFT);
+        let v1 = serde_json::json!({
+            "bindings": {
+                "left-half": { "modifiers": BASE_MODIFIERS.0, "key": "left" },
+                "previous-display": { "modifiers": retired.0, "key": "left" },
+                "next-display": { "modifiers": retired.0, "key": "right" }
+            }
+        })
+        .to_string();
 
-    #[test]
-    fn missing_fields_fall_back_to_defaults() {
-        let config = Config::from_json("{}").unwrap();
-        assert_eq!(config, Config::default());
-    }
-
-    #[test]
-    fn setting_a_binding_unbinds_the_previous_owner() {
-        let mut config = Config::default();
-        let hk = config.binding(WindowAction::LeftHalf).unwrap();
-        config.set_binding(WindowAction::Center, Some(hk));
-        assert_eq!(config.binding(WindowAction::LeftHalf), None);
-        assert_eq!(config.binding(WindowAction::Center), Some(hk));
-        assert_eq!(config.conflicts(), vec![]);
-    }
-
-    #[test]
-    fn conflicts_are_detected() {
-        let mut config = Config::default();
-        let hk = config.binding(WindowAction::LeftHalf).unwrap();
-        // Bypass set_binding to construct a config like a hand-edited file.
-        config.bindings.insert(WindowAction::Center, Some(hk));
-        let conflicts = config.conflicts();
-        assert_eq!(conflicts.len(), 1);
-        assert_eq!(conflicts[0].actions.len(), 2);
-    }
-
-    #[test]
-    fn actions_using_names_every_other_holder_of_a_hotkey() {
-        let mut config = Config::default();
-        let hk = config.binding(WindowAction::LeftHalf).unwrap();
+        let loaded = Config::from_json_lenient(&v1).unwrap();
+        assert!(loaded.reset_fields.is_empty());
+        assert_eq!(loaded.config.display_modifiers, DISPLAY_MODIFIERS);
         assert_eq!(
-            config.actions_using(hk, WindowAction::Center),
+            loaded.config.key(WindowAction::DisplayLeft),
+            Some(KeyCode::Left)
+        );
+        assert_eq!(
+            loaded.config.key(WindowAction::DisplayRight),
+            Some(KeyCode::Right)
+        );
+        assert_eq!(
+            loaded.config.key(WindowAction::DisplayUp),
+            Some(KeyCode::Up)
+        );
+        assert_eq!(
+            loaded.config.key(WindowAction::DisplayDown),
+            Some(KeyCode::Down)
+        );
+    }
+
+    #[test]
+    fn equal_modifiers_allowed_when_keys_are_distinct_and_blocked_on_collision() {
+        let mut cfg = Config::default();
+        // Default keys share Left/Right/Up/Down across both groups -> blocked.
+        assert!(cfg
+            .set_group_modifiers(ShortcutGroup::Displays, BASE_MODIFIERS)
+            .is_err());
+
+        // Move display keys to 1/2/3/4 -> sharing the modifier now succeeds.
+        cfg.set_key(WindowAction::DisplayLeft, Some(KeyCode::Digit1));
+        cfg.set_key(WindowAction::DisplayRight, Some(KeyCode::Digit2));
+        cfg.set_key(WindowAction::DisplayUp, Some(KeyCode::Digit3));
+        cfg.set_key(WindowAction::DisplayDown, Some(KeyCode::Digit4));
+        assert!(cfg
+            .set_group_modifiers(ShortcutGroup::Displays, BASE_MODIFIERS)
+            .is_ok());
+        assert_eq!(cfg.display_modifiers, BASE_MODIFIERS);
+        let unique: HashSet<Hotkey> = cfg
+            .active_bindings()
+            .into_iter()
+            .map(|(hk, _)| hk)
+            .collect();
+        assert_eq!(unique.len(), 9);
+
+        // Setting a key in Displays to Left now sees LeftHalf as holder across groups.
+        let hk = Hotkey::new(BASE_MODIFIERS, KeyCode::Left);
+        assert_eq!(
+            cfg.actions_using(hk, WindowAction::DisplayLeft),
             vec![WindowAction::LeftHalf]
         );
-        assert!(config.actions_using(hk, WindowAction::LeftHalf).is_empty());
-
-        config.set_binding(WindowAction::Center, Some(hk));
-        assert_eq!(config.binding(WindowAction::LeftHalf), None);
-        assert!(config.actions_using(hk, WindowAction::Center).is_empty());
     }
 
     #[test]
-    fn normalize_clamps_bad_gaps() {
-        let mut config = Config {
-            gaps: Gaps::uniform(-5.0),
-            ..Default::default()
-        };
-        config.normalize();
-        assert_eq!(config.gaps, Gaps::default());
-
-        let mut config = Config {
-            gaps: Gaps::uniform(10_000.0),
-            ..Default::default()
-        };
-        config.normalize();
-        assert_eq!(config.gaps, Gaps::uniform(MAX_GAP));
-
-        let config = Config::from_json(r#"{"gap": -1}"#).unwrap();
-        assert_eq!(config.gaps, Gaps::default());
+    fn compose_modifiers_disables_when_side_or_vertical_actions_are_unbound() {
+        let mut cfg = Config::default();
+        assert_eq!(cfg.compose_modifiers(), Some(BASE_MODIFIERS));
+        cfg.set_key(WindowAction::LeftHalf, None);
+        assert_eq!(cfg.compose_modifiers(), Some(BASE_MODIFIERS));
+        cfg.set_key(WindowAction::RightHalf, None);
+        assert_eq!(cfg.compose_modifiers(), None);
     }
 
     #[test]
-    fn legacy_scalar_gap_migrates_to_uniform_gaps() {
-        // A config saved by an older build stores a plain number.
-        let config = Config::from_json(r#"{"gap": 24}"#).unwrap();
-        assert_eq!(config.gaps, Gaps::uniform(24.0));
-        assert_eq!(config.gaps.window, 24.0);
-        assert_eq!(config.gaps.edge_left, 24.0);
-        assert!(!config.gaps.skip_top_edge);
-
-        // A fractional legacy scalar still loads.
-        let config = Config::from_json(r#"{"gap": 12.5}"#).unwrap();
-        assert_eq!(config.gaps, Gaps::uniform(12.5));
-    }
-
-    #[test]
-    fn new_object_gaps_load_and_partial_objects_fall_back_to_defaults() {
-        let json = r#"{"gap": {
-            "window": 8,
-            "edgeTop": 0,
-            "edgeBottom": 10,
-            "edgeLeft": 12,
-            "edgeRight": 12,
-            "skipTopEdge": true,
-            "mainScreenOnly": true
-        }}"#;
-        let config = Config::from_json(json).unwrap();
-        assert_eq!(config.gaps.window, 8.0);
-        assert_eq!(config.gaps.edge_top, 0.0);
-        assert_eq!(config.gaps.edge_bottom, 10.0);
-        assert_eq!(config.gaps.edge_left, 12.0);
-        assert!(config.gaps.skip_top_edge);
-        assert!(config.gaps.main_screen_only);
-
-        // Missing object fields fall back to defaults (zero / false).
-        let config = Config::from_json(r#"{"gap": {"window": 6}}"#).unwrap();
-        assert_eq!(config.gaps.window, 6.0);
-        assert_eq!(config.gaps.edge_left, 0.0);
-        assert!(!config.gaps.main_screen_only);
-    }
-
-    #[test]
-    fn gaps_object_round_trips_through_json() {
-        let config = Config {
-            gaps: Gaps {
-                window: 8.0,
-                edge_top: 0.0,
-                edge_bottom: 10.0,
-                edge_left: 12.0,
-                edge_right: 12.0,
-                skip_top_edge: true,
-                main_screen_only: false,
-            },
-            ..Default::default()
-        };
-        let parsed = Config::from_json(&config.to_json().unwrap()).unwrap();
-        assert_eq!(config, parsed);
-    }
-
-    #[test]
-    fn cycling_defaults_match_rectangle() {
-        let config = Config::default();
-        assert_eq!(
-            config.subsequent_execution_mode,
-            SubsequentExecutionMode::CycleSizes
-        );
-        assert_eq!(
-            config.cycle_sizes(),
-            [
-                CycleSize::OneHalf,
-                CycleSize::TwoThirds,
-                CycleSize::OneThird
-            ]
-        );
-        assert!(config.cycles_sizes());
-    }
-
-    /// A config saved by an older build pins *every* binding, including the
-    /// display throws on their retired `Shift`+arrow default. Loading it must
-    /// move them onto the new modifiers — otherwise the remap would never
-    /// reach anyone who had already run Tile, and `Shift` would keep firing
-    /// the throw.
-    #[test]
-    fn a_saved_shift_display_throw_migrates_to_the_new_modifiers() {
-        let retired = BASE_MODIFIERS.union(Modifiers::SHIFT);
-        let mut saved = Config::default();
-        saved
-            .bindings
-            .retain(|action, _| action.display_direction().is_none());
-        saved.bindings.insert(
-            WindowAction::PreviousDisplay,
-            Some(Hotkey::new(retired, KeyCode::Left)),
-        );
-        saved.bindings.insert(
-            WindowAction::NextDisplay,
-            Some(Hotkey::new(retired, KeyCode::Right)),
-        );
-
-        let config = Config::from_json(&saved.to_json().unwrap()).unwrap();
-
-        assert_eq!(
-            config.binding(WindowAction::DisplayLeft),
-            Some(Hotkey::new(DISPLAY_MODIFIERS, KeyCode::Left))
-        );
-        assert_eq!(
-            config.binding(WindowAction::DisplayRight),
-            Some(Hotkey::new(DISPLAY_MODIFIERS, KeyCode::Right))
-        );
-        for (hotkey, action) in config.active_bindings() {
-            assert!(
-                !hotkey.modifiers.contains(Modifiers::SHIFT),
-                "{action} is {hotkey}; the retired Shift throw survived the load"
-            );
-        }
-        assert!(config.conflicts().is_empty());
-    }
-
-    /// The migration rewrites the old *default* and nothing else. A throw the
-    /// user deliberately moved is theirs to keep.
-    #[test]
-    fn a_custom_display_throw_survives_the_migration() {
-        let custom = Hotkey::new(Modifiers::CONTROL | Modifiers::SHIFT, KeyCode::F1);
-        let mut saved = Config::default();
-        saved.set_binding(WindowAction::NextDisplay, Some(custom));
-
-        let config = Config::from_json(&saved.to_json().unwrap()).unwrap();
-
-        assert_eq!(config.binding(WindowAction::NextDisplay), Some(custom));
-    }
-
-    /// If the user already gave the new combination to something else, the
-    /// throw is unbound rather than stealing it. `Shift` stops firing either
-    /// way, and the user's own choice is left standing.
-    #[test]
-    fn the_migration_never_steals_an_existing_binding() {
-        let replacement = Hotkey::new(DISPLAY_MODIFIERS, KeyCode::Right);
-        let mut saved = Config::default();
-        saved.set_binding(WindowAction::Center, Some(replacement));
-        saved.bindings.insert(
-            WindowAction::NextDisplay,
-            Some(Hotkey::new(
-                BASE_MODIFIERS.union(Modifiers::SHIFT),
-                KeyCode::Right,
-            )),
-        );
-
-        let config = Config::from_json(&saved.to_json().unwrap()).unwrap();
-
-        assert_eq!(config.binding(WindowAction::Center), Some(replacement));
-        assert_eq!(config.binding(WindowAction::NextDisplay), None);
-        assert!(config.conflicts().is_empty());
-    }
-
-    fn legacy_display_config() -> Config {
-        let mut saved = Config::default();
-        saved
-            .bindings
-            .retain(|action, _| action.display_direction().is_none());
-        saved.set_binding(
-            WindowAction::PreviousDisplay,
-            Some(Hotkey::new(DISPLAY_MODIFIERS, KeyCode::Left)),
-        );
-        saved.set_binding(
-            WindowAction::NextDisplay,
-            Some(Hotkey::new(DISPLAY_MODIFIERS, KeyCode::Right)),
-        );
-        saved
-    }
-
-    #[test]
-    fn legacy_default_arrows_upgrade_to_all_four_directions_once() {
-        let saved = legacy_display_config();
-        let mut config = Config::from_json(&saved.to_json().unwrap()).unwrap();
-        for action in WindowAction::ALL
-            .into_iter()
-            .filter(|a| a.display_direction().is_some())
-        {
-            assert_eq!(config.binding(action), Config::default().binding(action));
-        }
-        assert_eq!(config.binding(WindowAction::PreviousDisplay), None);
-        assert_eq!(config.binding(WindowAction::NextDisplay), None);
-        config.set_binding(WindowAction::DisplayUp, None);
-        config.set_binding(
-            WindowAction::NextDisplay,
-            Some(Hotkey::new(DISPLAY_MODIFIERS, KeyCode::Right)),
-        );
-        let reloaded = Config::from_json(&config.to_json().unwrap()).unwrap();
-        assert_eq!(reloaded.bindings, config.bindings);
-        assert!(reloaded.conflicts().is_empty());
-    }
-
-    #[test]
-    fn directional_upgrade_preserves_custom_disabled_and_conflicting_bindings() {
-        let mut saved = legacy_display_config();
-        let custom = Hotkey::new(Modifiers::CONTROL, KeyCode::F1);
-        saved.set_binding(WindowAction::PreviousDisplay, None);
-        saved.set_binding(WindowAction::NextDisplay, Some(custom));
-        let occupied = Hotkey::new(DISPLAY_MODIFIERS, KeyCode::Up);
-        saved.set_binding(WindowAction::Center, Some(occupied));
-        let config = Config::from_json(&saved.to_json().unwrap()).unwrap();
-        assert_eq!(config.binding(WindowAction::PreviousDisplay), None);
-        assert_eq!(config.binding(WindowAction::NextDisplay), Some(custom));
-        assert_eq!(config.binding(WindowAction::DisplayLeft), None);
-        assert_eq!(config.binding(WindowAction::DisplayRight), None);
-        assert_eq!(config.binding(WindowAction::DisplayUp), None);
-        assert_eq!(config.binding(WindowAction::Center), Some(occupied));
-        assert_eq!(
-            config.binding(WindowAction::DisplayDown),
-            Config::default().binding(WindowAction::DisplayDown)
-        );
-        assert!(config.conflicts().is_empty());
-    }
-
-    #[test]
-    fn a_config_predating_cycling_still_loads() {
-        // Exactly what an older build would have written: no cycling keys at
-        // all, the legacy scalar gap for good measure, and `showTrayIcon` —
-        // a key that was never wired up and has since been retired. It has to
-        // be ignored rather than rejected, or the upgrade breaks.
-        let json = r#"{
-            "bindings": {},
-            "gap": 8,
-            "launchOnLogin": true,
-            "showTrayIcon": false
-        }"#;
-        let config = Config::from_json(json).unwrap();
-        assert_eq!(config.gaps, Gaps::uniform(8.0));
-        assert!(config.launch_on_login);
-        // Cycling arrives switched on, with Rectangle's defaults.
-        assert_eq!(
-            config.subsequent_execution_mode,
-            SubsequentExecutionMode::CycleSizes
-        );
-        assert_eq!(config.cycle_sizes(), Config::default().cycle_sizes());
-        // The incremental resize and move steps arrive at their defaults too.
-        assert_eq!(config.size_step, 30.0);
-        assert_eq!(config.width_step, 30.0);
-        assert_eq!(config.move_step, 30.0);
-        assert_eq!(config.minimum_window_width, 0.25);
-        assert_eq!(config.minimum_window_height, 0.25);
-    }
-
-    #[test]
-    fn animation_defaults_are_on_and_round_trip_through_json() {
-        let config = Config::default();
-        assert!(config.animation.enabled);
-        assert_eq!(
-            config.animation.duration_ms,
-            AnimationConfig::default().duration_ms
-        );
-        assert_eq!(config.animation.fps, 90);
-
-        let json = config.to_json().unwrap();
-        assert!(json.contains(&format!(
-            r#""durationMs": {}"#,
-            config.animation.duration_ms
-        )));
-        assert_eq!(Config::from_json(&json).unwrap(), config);
-    }
-
-    #[test]
-    fn launch_on_login_defaults_on() {
-        assert!(Config::default().launch_on_login);
-        assert!(Config::from_json("{}").unwrap().launch_on_login);
-    }
-
-    #[test]
-    fn animation_default_duration_matches_the_platform_feel() {
-        let duration = AnimationConfig::default().duration_ms;
-
-        #[cfg(target_os = "macos")]
-        assert_eq!(duration, 250);
-        #[cfg(target_os = "windows")]
-        assert_eq!(duration, 220);
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        assert_eq!(duration, 220);
-    }
-
-    #[test]
-    fn a_config_predating_animation_still_loads() {
-        // A file written by a build that had no concept of animation at all.
-        // It must load, and pick up the current defaults rather than an
-        // all-zero struct that would divide by zero in the frame pump.
-        let json = r#"{
-            "bindings": {},
-            "gap": 8,
-            "launchOnLogin": true
-        }"#;
-        let config = Config::from_json(json).unwrap();
-        assert_eq!(config.animation, AnimationConfig::default());
-    }
-
-    #[test]
-    fn a_partial_animation_object_keeps_the_other_defaults() {
-        // Someone switching the animation off by hand should not have to
-        // restate the tuning knobs.
-        let config = Config::from_json(r#"{"animation": {"enabled": false}}"#).unwrap();
-        assert!(!config.animation.enabled);
-        assert_eq!(
-            config.animation.duration_ms,
-            AnimationConfig::default().duration_ms
-        );
-        assert_eq!(config.animation.fps, 90);
-    }
-
-    #[test]
-    fn normalize_clamps_animation_tuning() {
-        let mut config = Config {
-            animation: AnimationConfig {
-                enabled: true,
-                duration_ms: 99_999,
-                fps: 5,
-            },
-            ..Default::default()
-        };
-        config.normalize();
-        assert_eq!(config.animation.duration_ms, MAX_ANIMATION_DURATION_MS);
-        assert_eq!(config.animation.fps, MIN_ANIMATION_FPS);
-
-        // Zero is the dangerous one: a zero duration divides by zero when the
-        // animator scales time, and a zero fps does the same for the frame
-        // interval. Both fall back to the default rather than being clamped to
-        // the floor, since zero reads as "unset" more than "as fast as
-        // possible".
-        let mut zeroed = Config {
-            animation: AnimationConfig {
-                enabled: true,
-                duration_ms: 0,
-                fps: 0,
-            },
-            ..Default::default()
-        };
-        zeroed.normalize();
-        assert_eq!(
-            zeroed.animation.duration_ms,
-            AnimationConfig::default().duration_ms
-        );
-        assert_eq!(zeroed.animation.fps, 90);
-
-        let mut tiny = Config {
-            animation: AnimationConfig {
-                enabled: true,
-                duration_ms: 1,
-                fps: 1000,
-            },
-            ..Default::default()
-        };
-        tiny.normalize();
-        assert_eq!(tiny.animation.duration_ms, MIN_ANIMATION_DURATION_MS);
-        assert_eq!(tiny.animation.fps, MAX_ANIMATION_FPS);
-    }
-
-    #[test]
-    fn animation_params_follow_the_config() {
-        let config = Config {
-            animation: AnimationConfig {
-                enabled: true,
-                duration_ms: 220,
-                fps: 60,
-            },
-            ..Default::default()
-        };
-        let params = config.animation.params();
-        assert_eq!(params.duration_ms, 220);
-        assert_eq!(params.fps, 60);
-    }
-
-    #[test]
-    fn cycling_settings_round_trip_through_json() {
-        let config = Config {
-            subsequent_execution_mode: SubsequentExecutionMode::DoNothing,
-            cycle_sizes: vec![CycleSize::OneHalf, CycleSize::ThreeQuarters],
-            ..Default::default()
-        };
-        let json = config.to_json().unwrap();
-        assert!(json.contains(r#""subsequentExecutionMode": "do-nothing""#));
-        assert!(json.contains(r#""three-quarters""#));
-        assert_eq!(Config::from_json(&json).unwrap(), config);
-    }
-
-    #[test]
-    fn unknown_cycling_values_fall_back_instead_of_failing_the_load() {
-        // A config written by a future build that grew a "cycle-monitor" mode
-        // and a size this build does not know about.
-        let json = r#"{
-            "subsequentExecutionMode": "cycle-monitor",
-            "cycleSizes": ["one-half", "one-fifth", "two-thirds"]
-        }"#;
-        let config = Config::from_json(json).unwrap();
-        assert_eq!(
-            config.subsequent_execution_mode,
-            SubsequentExecutionMode::default()
-        );
-        assert_eq!(
-            config.cycle_sizes(),
-            [CycleSize::OneHalf, CycleSize::TwoThirds]
-        );
-    }
-
-    #[test]
-    fn step_settings_round_trip_and_normalize() {
-        let config = Config {
-            size_step: 45.0,
-            width_step: 90.0,
-            move_step: 12.0,
-            minimum_window_width: 0.1,
-            minimum_window_height: 0.4,
-            ..Default::default()
-        };
-        let json = config.to_json().unwrap();
-        assert!(json.contains(r#""sizeStep": 45.0"#));
-        assert_eq!(Config::from_json(&json).unwrap(), config);
-
-        // Nonsense values fall back to the defaults rather than making an
-        // action a silent no-op or shrinking a window away.
-        let json = r#"{
-            "sizeStep": 0,
-            "widthStep": -5,
-            "moveStep": 100000,
-            "minimumWindowWidth": 2,
-            "minimumWindowHeight": -1
-        }"#;
-        let config = Config::from_json(json).unwrap();
-        assert_eq!(config.size_step, 30.0);
-        assert_eq!(config.width_step, 30.0);
-        assert_eq!(config.move_step, MAX_STEP);
-        assert_eq!(config.minimum_window_width, 0.25);
-        assert_eq!(config.minimum_window_height, 0.25);
-    }
-
-    #[test]
-    fn advanced_settings_deserialize_from_the_ui_shape() {
-        let setting: AdvancedSetting =
-            serde_json::from_str(r#"{ "field": "moveStep", "value": 32 }"#).unwrap();
-        assert_eq!(setting, AdvancedSetting::MoveStep(32.0));
-        let setting: AdvancedSetting =
-            serde_json::from_str(r#"{ "field": "almostMaximizeWidth", "value": 0.8 }"#).unwrap();
-        assert_eq!(setting, AdvancedSetting::AlmostMaximizeWidth(0.8));
-        let setting: AdvancedSetting =
-            serde_json::from_str(r#"{ "field": "animationFps", "value": 60 }"#).unwrap();
-        assert_eq!(setting, AdvancedSetting::AnimationFps(60));
-        assert!(
-            serde_json::from_str::<AdvancedSetting>(r#"{ "field": "gap", "value": 1 }"#).is_err()
-        );
-    }
-
-    #[test]
-    fn advanced_settings_change_only_their_own_field() {
-        type Expect = fn(&mut Config);
-        let defaults = Config::default();
-        let cases: [(AdvancedSetting, Expect); 8] = [
-            (AdvancedSetting::AlmostMaximizeWidth(0.8), |c| {
-                c.almost_maximize_width = 0.8
-            }),
-            (AdvancedSetting::AlmostMaximizeHeight(0.7), |c| {
-                c.almost_maximize_height = 0.7
-            }),
-            (AdvancedSetting::SizeStep(40.0), |c| c.size_step = 40.0),
-            (AdvancedSetting::WidthStep(50.0), |c| c.width_step = 50.0),
-            (AdvancedSetting::MoveStep(32.0), |c| c.move_step = 32.0),
-            (AdvancedSetting::MinimumWindowWidth(0.3), |c| {
-                c.minimum_window_width = 0.3
-            }),
-            (AdvancedSetting::MinimumWindowHeight(0.2), |c| {
-                c.minimum_window_height = 0.2
-            }),
-            (AdvancedSetting::AnimationFps(60), |c| c.animation.fps = 60),
-        ];
-        for (setting, expect) in cases {
-            let mut actual = defaults.clone();
-            actual.set_advanced(setting);
-            let mut expected = defaults.clone();
-            expect(&mut expected);
-            assert_eq!(actual, expected, "{setting:?} touched another field");
-        }
-    }
-
-    #[test]
-    fn advanced_settings_clamp_to_the_nearest_bound() {
-        let mut config = Config::default();
-        config.set_advanced(AdvancedSetting::AlmostMaximizeWidth(1.5));
-        assert_eq!(config.almost_maximize_width, 1.0);
-        config.set_advanced(AdvancedSetting::MinimumWindowHeight(0.0));
-        assert_eq!(config.minimum_window_height, MIN_SIZE_FRACTION);
-        config.set_advanced(AdvancedSetting::MinimumWindowWidth(-3.0));
-        assert_eq!(config.minimum_window_width, MIN_SIZE_FRACTION);
-        config.set_advanced(AdvancedSetting::SizeStep(0.0));
-        assert_eq!(config.size_step, 1.0);
-        config.set_advanced(AdvancedSetting::MoveStep(5000.0));
-        assert_eq!(config.move_step, MAX_STEP);
-        config.set_advanced(AdvancedSetting::WidthStep(f64::NAN));
-        assert_eq!(config.width_step, 30.0);
-        config.set_advanced(AdvancedSetting::AnimationFps(0));
-        assert_eq!(config.animation.fps, MIN_ANIMATION_FPS);
-        config.set_advanced(AdvancedSetting::AnimationFps(1000));
-        assert_eq!(config.animation.fps, MAX_ANIMATION_FPS);
-    }
-
-    #[test]
-    fn size_options_carry_the_persisted_steps() {
-        let config = Config {
-            size_step: 15.0,
-            move_step: 25.0,
-            ..Default::default()
-        };
-        let options = config.size_options();
-        assert_eq!(options.size_step, 15.0);
-        assert_eq!(options.move_step, 25.0);
-        assert_eq!(options.minimum_width, 0.25);
-    }
-
-    #[test]
-    fn every_subsequent_execution_mode_round_trips() {
-        for mode in [
-            SubsequentExecutionMode::CycleSizes,
-            SubsequentExecutionMode::DoNothing,
-        ] {
-            let config = Config {
-                subsequent_execution_mode: mode,
-                ..Default::default()
-            };
-            let parsed = Config::from_json(&config.to_json().unwrap()).unwrap();
-            assert_eq!(parsed.subsequent_execution_mode, mode, "{}", mode.id());
-        }
-    }
-
-    #[test]
-    fn cycle_sizes_are_deduplicated_and_ordered_canonically() {
-        let mut config = Config {
-            cycle_sizes: vec![
-                CycleSize::OneThird,
-                CycleSize::ThreeQuarters,
-                CycleSize::OneHalf,
-                CycleSize::OneThird,
-                CycleSize::OneQuarter,
-                CycleSize::TwoThirds,
-            ],
-            ..Default::default()
-        };
-        config.normalize();
-        // Rectangle's order: start at a half, grow, then wrap to the smallest.
-        assert_eq!(
-            config.cycle_sizes(),
-            [
-                CycleSize::OneHalf,
-                CycleSize::TwoThirds,
-                CycleSize::ThreeQuarters,
-                CycleSize::OneQuarter,
-                CycleSize::OneThird,
-            ]
-        );
-    }
-
-    #[test]
-    fn an_empty_size_list_disables_cycling() {
-        let config = Config::from_json(r#"{"cycleSizes": []}"#).unwrap();
-        assert!(config.cycle_sizes().is_empty());
-        assert!(!config.cycles_sizes());
-    }
-
-    fn saved_value(config: &Config) -> serde_json::Value {
-        serde_json::from_str(&config.to_json().unwrap()).unwrap()
-    }
-
-    #[test]
-    fn to_json_writes_the_current_schema_version() {
-        let value = saved_value(&Config::default());
-        assert_eq!(value["schemaVersion"], CONFIG_SCHEMA_VERSION);
-        let loaded = Config::from_json_lenient(&value.to_string()).unwrap();
-        assert_eq!(loaded.schema_version, CONFIG_SCHEMA_VERSION);
-        assert!(loaded.reset_fields.is_empty());
-        assert_eq!(loaded.config, Config::default());
-    }
-
-    #[test]
-    fn a_config_without_a_schema_version_is_legacy() {
-        let loaded = Config::from_json_lenient(r#"{"gap": 8, "launchOnLogin": false}"#).unwrap();
-        assert_eq!(loaded.schema_version, LEGACY_SCHEMA_VERSION);
-        assert!(!loaded.is_newer_schema());
-        assert!(loaded.reset_fields.is_empty());
-        assert!(!loaded.config.launch_on_login);
-    }
-
-    #[test]
-    fn one_wrong_typed_field_resets_only_that_field() {
-        let mut value = saved_value(&Config {
-            launch_on_login: false,
-            gaps: Gaps::uniform(17.0),
-            ..Config::default()
-        });
-        value["sizeStep"] = serde_json::json!("not a number");
-        let loaded = Config::from_json_lenient(&value.to_string()).unwrap();
-        assert_eq!(loaded.reset_fields, vec!["sizeStep".to_owned()]);
-        assert_eq!(loaded.config.size_step, Config::default().size_step);
-        assert!(!loaded.config.launch_on_login);
-        assert_eq!(loaded.config.gaps, Gaps::uniform(17.0));
-        // The strict parser still rejects the same file outright.
-        assert!(Config::from_json(&value.to_string()).is_err());
-    }
-
-    #[test]
-    fn a_bad_binding_entry_drops_only_that_entry() {
-        let mut value = saved_value(&Config::default());
-        let bindings = value["bindings"].as_object_mut().unwrap();
-        bindings.insert("not-an-action".into(), serde_json::json!(null));
-        bindings.insert("maximize".into(), serde_json::json!(42));
-        let loaded = Config::from_json_lenient(&value.to_string()).unwrap();
-        let mut reset = loaded.reset_fields.clone();
-        reset.sort();
-        assert_eq!(reset, vec!["bindings.maximize", "bindings.not-an-action"]);
-        assert_eq!(loaded.config.binding(WindowAction::Maximize), None);
-        assert_eq!(
-            loaded.config.binding(WindowAction::LeftHalf),
-            Config::default().binding(WindowAction::LeftHalf)
-        );
-    }
-
-    #[test]
-    fn a_non_object_bindings_value_resets_to_defaults() {
-        let loaded = Config::from_json_lenient(r#"{"bindings": [1, 2]}"#).unwrap();
-        assert_eq!(loaded.reset_fields, vec!["bindings".to_owned()]);
-        assert_eq!(loaded.config.bindings, Config::default().bindings);
-    }
-
-    #[test]
-    fn a_newer_schema_version_still_loads_what_it_can() {
-        let mut value = saved_value(&Config {
-            launch_on_login: false,
-            ..Config::default()
-        });
-        value["schemaVersion"] = serde_json::json!(CONFIG_SCHEMA_VERSION + 1);
-        value["somethingFromTheFuture"] = serde_json::json!({"x": 1});
-        let loaded = Config::from_json_lenient(&value.to_string()).unwrap();
-        assert!(loaded.is_newer_schema());
-        assert!(loaded.reset_fields.is_empty());
-        assert!(!loaded.config.launch_on_login);
-    }
-
-    #[test]
-    fn a_wrong_typed_schema_version_is_reported_and_treated_as_legacy() {
-        let loaded = Config::from_json_lenient(r#"{"schemaVersion": "two"}"#).unwrap();
-        assert_eq!(loaded.schema_version, LEGACY_SCHEMA_VERSION);
-        assert_eq!(loaded.reset_fields, vec!["schemaVersion".to_owned()]);
-    }
-
-    #[test]
-    fn lenient_parsing_rejects_non_objects_and_bad_json() {
-        assert!(Config::from_json_lenient("[1, 2]").is_err());
-        assert!(Config::from_json_lenient("{ nope").is_err());
-    }
-
-    #[test]
-    fn cycle_size_ids_are_stable_and_unique() {
-        let mut ids: Vec<&str> = CycleSize::ALL.iter().map(|s| s.id()).collect();
-        ids.sort_unstable();
-        let count = ids.len();
-        ids.dedup();
-        assert_eq!(ids.len(), count);
-        // These strings are persisted config keys; pin them.
-        assert_eq!(CycleSize::OneHalf.id(), "one-half");
-        assert_eq!(CycleSize::TwoThirds.id(), "two-thirds");
-        assert_eq!(CycleSize::ThreeQuarters.id(), "three-quarters");
-        assert_eq!(CycleSize::OneThird.id(), "one-third");
-        assert_eq!(CycleSize::OneQuarter.id(), "one-quarter");
-    }
-
-    #[test]
-    fn active_bindings_skips_unbound_actions() {
-        let mut config = Config::default();
-        let before = config.active_bindings().len();
-        config.set_binding(WindowAction::Maximize, None);
-        let active = config.active_bindings();
-        assert_eq!(active.len(), before - 1);
-        assert!(!active.iter().any(|(_, a)| *a == WindowAction::Maximize));
+    fn animation_params_uses_refresh_rate_with_fallback_and_clamping() {
+        let cfg = AnimationConfig::default();
+        assert_eq!(cfg.params(None).fps, DEFAULT_ANIMATION_FPS);
+        assert_eq!(cfg.params(Some(0)).fps, DEFAULT_ANIMATION_FPS);
+        assert_eq!(cfg.params(Some(120)).fps, 120);
+        assert_eq!(cfg.params(Some(500)).fps, MAX_ANIMATION_FPS);
+        assert_eq!(cfg.params(Some(5)).fps, MIN_ANIMATION_FPS);
     }
 }

@@ -17,7 +17,8 @@ use std::sync::Arc;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime, State, Webview};
 use tile_core::{
-    AdvancedSetting, Config, CycleSize, Gaps, Hotkey, SubsequentExecutionMode, WindowAction,
+    Config, CycleSize, Gaps, Hotkey, KeyCode, Modifiers, ShortcutGroup, SubsequentExecutionMode,
+    WindowAction,
 };
 
 use crate::autostart;
@@ -147,21 +148,37 @@ pub fn reveal_config_backup<R: Runtime>(
     result.map_err(|err| err.to_string())
 }
 
-/// Binds `hotkey` to `action`. If another action uses the hotkey the call
-/// fails with `shortcutTaken` unless that action is listed in `replace` (the
-/// holders the user agreed to replace), in which case it is unbound in the
-/// same write.
+/// Assigns `key` to `action` under its group's modifier. If another action
+/// already resolves to that same hotkey the call fails with `shortcutTaken`
+/// unless that action is listed in `replace`, in which case it is cleared in
+/// the same write.
 #[tauri::command]
-pub fn set_binding<R: Runtime>(
+pub fn set_key<R: Runtime>(
     app: AppHandle<R>,
     webview: Webview<R>,
     state: State<'_, Shared>,
     action: WindowAction,
-    hotkey: Option<Hotkey>,
+    key: Option<KeyCode>,
     replace: Option<Vec<WindowAction>>,
 ) -> Result<Config, SettingsError> {
     write(&app, &webview, &state, true, |txn| {
-        txn.set_binding(action, hotkey, &replace.unwrap_or_default())
+        txn.set_key(action, key, &replace.unwrap_or_default())
+    })
+}
+
+/// Sets the modifier combination shared by `group` (`placement` or `displays`).
+/// Refuses an empty modifier or a modifier that would make bound keys collide
+/// across groups.
+#[tauri::command]
+pub fn set_group_modifiers<R: Runtime>(
+    app: AppHandle<R>,
+    webview: Webview<R>,
+    state: State<'_, Shared>,
+    group: ShortcutGroup,
+    modifiers: Modifiers,
+) -> Result<Config, SettingsError> {
+    write(&app, &webview, &state, true, |txn| {
+        txn.set_group_modifiers(group, modifiers)
     })
 }
 
@@ -200,7 +217,7 @@ pub fn set_cycling<R: Runtime>(
 ///
 /// The on/off choice matters most to someone who finds the motion distracting
 /// or is working over a remote-desktop session. Duration has its own control
-/// alongside it; the frame rate lives in Settings ▸ Advanced.
+/// alongside it; frame pacing matches the target display's refresh rate.
 #[tauri::command]
 pub fn set_animation<R: Runtime>(
     app: AppHandle<R>,
@@ -210,20 +227,6 @@ pub fn set_animation<R: Runtime>(
 ) -> Result<Config, SettingsError> {
     write(&app, &webview, &state, false, |txn| {
         txn.update_config(|config| config.animation.enabled = enabled)
-    })
-}
-
-/// Sets one of the knobs in Settings ▸ Advanced. [`Config::set_advanced`]
-/// clamps the value, so the returned config carries what was actually saved.
-#[tauri::command]
-pub fn set_advanced<R: Runtime>(
-    app: AppHandle<R>,
-    webview: Webview<R>,
-    state: State<'_, Shared>,
-    setting: AdvancedSetting,
-) -> Result<Config, SettingsError> {
-    write(&app, &webview, &state, false, |txn| {
-        txn.update_config(|config| config.set_advanced(setting))
     })
 }
 

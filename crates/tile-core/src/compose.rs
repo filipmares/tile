@@ -1,31 +1,28 @@
-//! Corner composition: the side-arrow-then-vertical-arrow gesture.
+//! Corner composition: the side-key-then-vertical-key gesture.
 //!
-//! While the base modifier stays held, pressing a side arrow (base+`Left` or
-//! base+`Right`) starts on the middle stop of a three-stop vertical rail for
-//! that side (`Top ↔ Full ↔ Bottom`):
+//! While the configured base modifier stays held, pressing the side placement
+//! key (`LeftHalf` or `RightHalf`) starts on the middle stop of a three-stop
+//! vertical rail for that side (`Top ↔ Full ↔ Bottom`):
 //!
-//! - From `Full`, base+`Up` / base+`Down` moves to the top or bottom corner
-//!   keeping the side's current width.
-//! - From `Top`, base+`Down` returns to `Full` keeping the corner's width, and
-//!   base+`Up` maximizes and ends composition.
-//! - From `Bottom`, base+`Up` returns to `Full` keeping the corner's width, and
-//!   base+`Down` restores and ends composition.
-//! - While in a corner, pressing that side's arrow (`Left` in a left corner,
-//!   `Right` in a right corner) cycles the corner's width; pressing the
-//!   opposite side arrow resets to a fresh full-height placement on the
-//!   opposite side.
+//! - From `Full`, pressing `Maximize` / `Restore` moves to the top or bottom
+//!   corner keeping the side's current width.
+//! - From `Top`, pressing `Restore` returns to `Full` keeping the corner's
+//!   width, and pressing `Maximize` maximizes and ends composition.
+//! - From `Bottom`, pressing `Maximize` returns to `Full` keeping the corner's
+//!   width, and pressing `Restore` restores and ends composition.
+//! - While in a corner, pressing that side's key cycles the corner's width;
+//!   pressing the opposite side key resets to a fresh full-height placement on
+//!   the opposite side.
 //!
 //! Releasing the base modifier (or pressing any other action) ends composition,
-//! so a later base+`Up` maximizes, base+`Down` restores, and base+`Left`/`Right`
-//! starts a fresh full-height half.
+//! so a later `Maximize` maximizes, `Restore` restores, and `LeftHalf` /
+//! `RightHalf` starts a fresh full-height placement.
 //!
-//! Composition is specific to the standard bindings: the side arrows must be
-//! bound to [`WindowAction::LeftHalf`]/[`WindowAction::RightHalf`] and the
-//! vertical arrows to [`WindowAction::Maximize`]/[`WindowAction::Restore`],
-//! all on the base modifier. Rebound shortcuts keep their plain meaning.
+//! Composition follows whichever base modifier and keys the user configured for
+//! `LeftHalf`, `RightHalf`, `Maximize`, and `Restore`.
 
 use crate::config::BASE_MODIFIERS;
-use crate::{ActionRequest, Hotkey, KeyCode, WindowAction};
+use crate::{ActionRequest, ActionTarget, Corner, Hotkey, Modifiers, WindowAction};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Side {
@@ -34,14 +31,14 @@ enum Side {
 }
 
 impl Side {
-    fn action(self, vertical: Vertical) -> WindowAction {
+    fn target(self, vertical: Vertical) -> ActionTarget {
         match (self, vertical) {
-            (Side::Left, Vertical::Top) => WindowAction::TopLeft,
-            (Side::Left, Vertical::Full) => WindowAction::LeftHalf,
-            (Side::Left, Vertical::Bottom) => WindowAction::BottomLeft,
-            (Side::Right, Vertical::Top) => WindowAction::TopRight,
-            (Side::Right, Vertical::Full) => WindowAction::RightHalf,
-            (Side::Right, Vertical::Bottom) => WindowAction::BottomRight,
+            (Side::Left, Vertical::Top) => ActionTarget::Corner(Corner::TopLeft),
+            (Side::Left, Vertical::Full) => ActionTarget::Action(WindowAction::LeftHalf),
+            (Side::Left, Vertical::Bottom) => ActionTarget::Corner(Corner::BottomLeft),
+            (Side::Right, Vertical::Top) => ActionTarget::Corner(Corner::TopRight),
+            (Side::Right, Vertical::Full) => ActionTarget::Action(WindowAction::RightHalf),
+            (Side::Right, Vertical::Bottom) => ActionTarget::Corner(Corner::BottomRight),
         }
     }
 }
@@ -66,10 +63,19 @@ struct Active {
 /// a *hold* identifier: any value that changes whenever a modifier key is
 /// released. Two presses with the same hold were made without letting go of
 /// the modifiers in between.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct CornerComposer {
+    /// The configured base modifier that enables single-hold corner
+    /// composition, or `None` when composition is inactive.
+    base_modifiers: Option<Modifiers>,
     /// The side and vertical stop active in the current hold.
     active: Option<Active>,
+}
+
+impl Default for CornerComposer {
+    fn default() -> Self {
+        Self::with_base_modifiers(Some(BASE_MODIFIERS))
+    }
 }
 
 impl CornerComposer {
@@ -77,25 +83,42 @@ impl CornerComposer {
         Self::default()
     }
 
+    pub const fn with_base_modifiers(base_modifiers: Option<Modifiers>) -> Self {
+        Self {
+            base_modifiers,
+            active: None,
+        }
+    }
+
+    /// Updates the configured base modifier and clears any in-progress hold.
+    pub fn set_base_modifiers(&mut self, base_modifiers: Option<Modifiers>) {
+        self.base_modifiers = base_modifiers;
+        self.active = None;
+    }
+
     /// The request a press of `hotkey`, bound to `action`, should send.
     pub fn press(&mut self, hotkey: Hotkey, action: WindowAction, hold: u64) -> ActionRequest {
-        if hotkey.modifiers != BASE_MODIFIERS {
+        let Some(base_modifiers) = self.base_modifiers else {
+            self.active = None;
+            return action.into();
+        };
+        if hotkey.modifiers != base_modifiers {
             self.active = None;
             return action.into();
         }
 
         let current = self.active.filter(|state| state.hold == hold);
 
-        match (hotkey.key, action) {
-            (KeyCode::Left, WindowAction::LeftHalf) | (KeyCode::Right, WindowAction::RightHalf) => {
-                let side = if hotkey.key == KeyCode::Left {
+        match action {
+            WindowAction::LeftHalf | WindowAction::RightHalf => {
+                let side = if action == WindowAction::LeftHalf {
                     Side::Left
                 } else {
                     Side::Right
                 };
                 match current {
                     Some(state) if state.side == side && state.vertical != Vertical::Full => {
-                        state.side.action(state.vertical).into()
+                        state.side.target(state.vertical).into()
                     }
                     _ => {
                         self.active = Some(Active {
@@ -107,14 +130,13 @@ impl CornerComposer {
                     }
                 }
             }
-            (KeyCode::Up, WindowAction::Maximize) | (KeyCode::Down, WindowAction::Restore) => {
+            WindowAction::Maximize | WindowAction::Restore => {
                 let next = current.and_then(|state| {
-                    let vertical = match (state.vertical, hotkey.key) {
-                        (Vertical::Full, KeyCode::Up) => Vertical::Top,
-                        (Vertical::Bottom, KeyCode::Up) | (Vertical::Top, KeyCode::Down) => {
-                            Vertical::Full
-                        }
-                        (Vertical::Full, KeyCode::Down) => Vertical::Bottom,
+                    let vertical = match (state.vertical, action) {
+                        (Vertical::Full, WindowAction::Maximize) => Vertical::Top,
+                        (Vertical::Bottom, WindowAction::Maximize)
+                        | (Vertical::Top, WindowAction::Restore) => Vertical::Full,
+                        (Vertical::Full, WindowAction::Restore) => Vertical::Bottom,
                         _ => return None,
                     };
                     Some((state.side, vertical))
@@ -126,7 +148,7 @@ impl CornerComposer {
                             side,
                             vertical,
                         });
-                        ActionRequest::composed(side.action(vertical))
+                        ActionRequest::composed(side.target(vertical))
                     }
                     None => {
                         self.active = None;
@@ -145,6 +167,7 @@ impl CornerComposer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::KeyCode;
 
     fn base(key: KeyCode) -> Hotkey {
         Hotkey::new(BASE_MODIFIERS, key)
@@ -160,7 +183,7 @@ mod tests {
         // Full -> Top -> Full -> Bottom -> Full.
         assert_eq!(
             c.press(base(KeyCode::Up), WindowAction::Maximize, 1),
-            ActionRequest::composed(WindowAction::TopLeft)
+            ActionRequest::composed(Corner::TopLeft)
         );
         assert_eq!(
             c.press(base(KeyCode::Down), WindowAction::Restore, 1),
@@ -168,7 +191,7 @@ mod tests {
         );
         assert_eq!(
             c.press(base(KeyCode::Down), WindowAction::Restore, 1),
-            ActionRequest::composed(WindowAction::BottomLeft)
+            ActionRequest::composed(Corner::BottomLeft)
         );
         assert_eq!(
             c.press(base(KeyCode::Up), WindowAction::Maximize, 1),
@@ -177,23 +200,23 @@ mod tests {
     }
 
     #[test]
-    fn same_side_arrow_in_a_corner_cycles_that_corner() {
+    fn same_side_key_in_a_corner_cycles_that_corner() {
         let mut c = CornerComposer::new();
         c.press(base(KeyCode::Left), WindowAction::LeftHalf, 1);
         assert_eq!(
             c.press(base(KeyCode::Up), WindowAction::Maximize, 1),
-            ActionRequest::composed(WindowAction::TopLeft)
+            ActionRequest::composed(Corner::TopLeft)
         );
         // Repeating Left while in TopLeft emits plain TopLeft so Engine cycles its width.
         assert_eq!(
             c.press(base(KeyCode::Left), WindowAction::LeftHalf, 1),
-            WindowAction::TopLeft.into()
+            Corner::TopLeft.into()
         );
         assert_eq!(
             c.press(base(KeyCode::Left), WindowAction::LeftHalf, 1),
-            WindowAction::TopLeft.into()
+            Corner::TopLeft.into()
         );
-        // Down still steps back to Full Left.
+        // Restore still steps back to Full Left.
         assert_eq!(
             c.press(base(KeyCode::Down), WindowAction::Restore, 1),
             ActionRequest::composed(WindowAction::LeftHalf)
@@ -206,7 +229,7 @@ mod tests {
     }
 
     #[test]
-    fn opposite_side_arrow_in_a_corner_resets_to_opposite_full_side() {
+    fn opposite_side_key_in_a_corner_resets_to_opposite_full_side() {
         let mut c = CornerComposer::new();
         c.press(base(KeyCode::Left), WindowAction::LeftHalf, 1);
         c.press(base(KeyCode::Up), WindowAction::Maximize, 1);
@@ -216,11 +239,11 @@ mod tests {
         );
         assert_eq!(
             c.press(base(KeyCode::Down), WindowAction::Restore, 1),
-            ActionRequest::composed(WindowAction::BottomRight)
+            ActionRequest::composed(Corner::BottomRight)
         );
         assert_eq!(
             c.press(base(KeyCode::Right), WindowAction::RightHalf, 1),
-            WindowAction::BottomRight.into()
+            Corner::BottomRight.into()
         );
         assert_eq!(
             c.press(base(KeyCode::Left), WindowAction::LeftHalf, 1),
@@ -234,14 +257,14 @@ mod tests {
         c.press(base(KeyCode::Left), WindowAction::LeftHalf, 1);
         assert_eq!(
             c.press(base(KeyCode::Up), WindowAction::Maximize, 1),
-            ActionRequest::composed(WindowAction::TopLeft)
+            ActionRequest::composed(Corner::TopLeft)
         );
-        // Up from TopLeft maximizes and ends composition.
+        // Maximize from TopLeft maximizes and ends composition.
         assert_eq!(
             c.press(base(KeyCode::Up), WindowAction::Maximize, 1),
             WindowAction::Maximize.into()
         );
-        // Composition ended, so Down is now plain Restore even in the same hold.
+        // Composition ended, so Restore is now plain Restore even in the same hold.
         assert_eq!(
             c.press(base(KeyCode::Down), WindowAction::Restore, 1),
             WindowAction::Restore.into()
@@ -251,7 +274,7 @@ mod tests {
         c.press(base(KeyCode::Right), WindowAction::RightHalf, 1);
         assert_eq!(
             c.press(base(KeyCode::Down), WindowAction::Restore, 1),
-            ActionRequest::composed(WindowAction::BottomRight)
+            ActionRequest::composed(Corner::BottomRight)
         );
         assert_eq!(
             c.press(base(KeyCode::Down), WindowAction::Restore, 1),
@@ -297,17 +320,46 @@ mod tests {
     }
 
     #[test]
-    fn rebound_shortcuts_do_not_compose() {
-        let mut c = CornerComposer::new();
-        c.press(base(KeyCode::H), WindowAction::LeftHalf, 1);
+    fn composition_follows_custom_base_modifier_and_custom_keys() {
+        let custom = Modifiers::CONTROL | Modifiers::META;
+        let mut c = CornerComposer::with_base_modifiers(Some(custom));
+        let hk = |key| Hotkey::new(custom, key);
+
         assert_eq!(
-            c.press(base(KeyCode::K), WindowAction::Maximize, 1),
+            c.press(hk(KeyCode::H), WindowAction::LeftHalf, 1),
+            WindowAction::LeftHalf.into()
+        );
+        assert_eq!(
+            c.press(hk(KeyCode::K), WindowAction::Maximize, 1),
+            ActionRequest::composed(Corner::TopLeft)
+        );
+        assert_eq!(
+            c.press(hk(KeyCode::H), WindowAction::LeftHalf, 1),
+            Corner::TopLeft.into()
+        );
+        assert_eq!(
+            c.press(hk(KeyCode::J), WindowAction::Restore, 1),
+            ActionRequest::composed(WindowAction::LeftHalf)
+        );
+
+        // A display throw on the same modifier ends composition rather than composing.
+        assert_eq!(
+            c.press(hk(KeyCode::D), WindowAction::DisplayRight, 1),
+            WindowAction::DisplayRight.into()
+        );
+        assert_eq!(
+            c.press(hk(KeyCode::K), WindowAction::Maximize, 1),
             WindowAction::Maximize.into()
         );
+    }
+
+    #[test]
+    fn composition_is_disabled_when_base_modifiers_is_none() {
+        let mut c = CornerComposer::with_base_modifiers(None);
         c.press(base(KeyCode::Left), WindowAction::LeftHalf, 1);
         assert_eq!(
-            c.press(base(KeyCode::Up), WindowAction::TopHalf, 1),
-            WindowAction::TopHalf.into()
+            c.press(base(KeyCode::Up), WindowAction::Maximize, 1),
+            WindowAction::Maximize.into()
         );
     }
 }

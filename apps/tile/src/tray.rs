@@ -1,13 +1,9 @@
 //! Tray icon and its menu.
 //!
-//! The menu offers a curated set of layouts — the two sides with their
-//! corners, the centred column, halves, maximize/restore and the display
-//! throws — each showing its current
-//! shortcut, so the menu teaches the bindings and reaches layouts that have
-//! none. Positions that come in sizes offer ½ / ⅔ / ⅓. A menu item
-//! is always exact: it lands where its label says rather than cycling, see
-//! [`crate::state::ActionRequest`]. The full catalogue stays in the settings
-//! window rather than becoming an unusable tray list.
+//! The menu offers the 9 window actions — Left, Right, Center Column,
+//! Maximize, Restore, and the four directional display throws — each showing
+//! its current shortcut. Clicking Left, Right, or Center Column repeatedly
+//! steps through the configured size cycle.
 
 use std::str::FromStr;
 use std::sync::mpsc::Sender;
@@ -51,14 +47,8 @@ const HOTKEY_WARNING_LABEL: &str = "Some shortcuts aren't working right now";
 /// Prefix for menu item ids that perform a window action.
 const ACTION_ID_PREFIX: &str = "action:";
 
-/// The labels of a sized position's submenu, in the order of its actions.
-const SIZE_LABELS: [&str; 3] = ["½", "⅔", "⅓"];
-
 /// One row of the window-action part of the menu.
 enum Entry {
-    /// A position offered at ½, ⅔ and ⅓ — each an existing catalogue action,
-    /// so the menu never invents a layout the settings window cannot bind.
-    Sized(&'static str, [WindowAction; 3]),
     Single(WindowAction),
     /// An action under a shorter label than its catalogue name, for use
     /// inside a submenu whose title already supplies the context.
@@ -68,55 +58,6 @@ enum Entry {
     Separator,
 }
 
-/// A side: its ½ / ⅔ / ⅓ columns, then its two corners. Corners stay
-/// half-height and vary in width, so a ⅓ corner leaves room to stack a second
-/// window beneath it.
-const LEFT: &[Entry] = &[
-    Entry::Labelled("½", WindowAction::LeftHalf),
-    Entry::Labelled("⅔", WindowAction::FirstTwoThirds),
-    Entry::Labelled("⅓", WindowAction::FirstThird),
-    Entry::Separator,
-    Entry::Sized(
-        "Top",
-        [
-            WindowAction::TopLeft,
-            WindowAction::TopLeftThird,
-            WindowAction::TopLeftSixth,
-        ],
-    ),
-    Entry::Sized(
-        "Bottom",
-        [
-            WindowAction::BottomLeft,
-            WindowAction::BottomLeftThird,
-            WindowAction::BottomLeftSixth,
-        ],
-    ),
-];
-
-const RIGHT: &[Entry] = &[
-    Entry::Labelled("½", WindowAction::RightHalf),
-    Entry::Labelled("⅔", WindowAction::LastTwoThirds),
-    Entry::Labelled("⅓", WindowAction::LastThird),
-    Entry::Separator,
-    Entry::Sized(
-        "Top",
-        [
-            WindowAction::TopRight,
-            WindowAction::TopRightThird,
-            WindowAction::TopRightSixth,
-        ],
-    ),
-    Entry::Sized(
-        "Bottom",
-        [
-            WindowAction::BottomRight,
-            WindowAction::BottomRightThird,
-            WindowAction::BottomRightSixth,
-        ],
-    ),
-];
-
 const DISPLAYS: &[Entry] = &[
     Entry::Labelled("Left", WindowAction::DisplayLeft),
     Entry::Labelled("Right", WindowAction::DisplayRight),
@@ -125,22 +66,11 @@ const DISPLAYS: &[Entry] = &[
 ];
 
 const ACTION_ENTRIES: &[Entry] = &[
-    Entry::Group("Left", LEFT),
-    Entry::Group("Right", RIGHT),
-    Entry::Sized(
-        "Center Column",
-        [
-            WindowAction::CenterHalf,
-            WindowAction::CenterTwoThirds,
-            WindowAction::CenterThird,
-        ],
-    ),
-    Entry::Single(WindowAction::TopHalf),
-    Entry::Single(WindowAction::BottomHalf),
+    Entry::Single(WindowAction::LeftHalf),
+    Entry::Single(WindowAction::RightHalf),
+    Entry::Single(WindowAction::CenterHalf),
     Entry::Separator,
     Entry::Single(WindowAction::Maximize),
-    Entry::Single(WindowAction::AlmostMaximize),
-    Entry::Single(WindowAction::Center),
     Entry::Single(WindowAction::Restore),
     Entry::Separator,
     Entry::Group("Displays", DISPLAYS),
@@ -163,7 +93,7 @@ impl MenuActions {
     /// which the caller must tell the user about: the click did nothing.
     fn enqueue(&self, action: WindowAction) -> Result<(), String> {
         self.0
-            .send(ActionRequest::exact(action))
+            .send(ActionRequest::from_menu(action))
             .map_err(|err| format!("could not queue {action}: the action worker is gone ({err})"))
     }
 }
@@ -256,17 +186,6 @@ fn entry_items<R: Runtime>(
     let mut items: Vec<Box<dyn IsMenuItem<R>>> = Vec::new();
     for entry in entries {
         match entry {
-            Entry::Sized(label, actions) => {
-                let sizes = actions
-                    .iter()
-                    .zip(SIZE_LABELS)
-                    .map(|(action, size)| {
-                        action_item(app, config, *action, size)
-                            .map(|item| Box::new(item) as Box<dyn IsMenuItem<R>>)
-                    })
-                    .collect::<tauri::Result<Vec<_>>>()?;
-                items.push(Box::new(submenu(app, label, &sizes)?));
-            }
             Entry::Single(action) => {
                 items.push(Box::new(action_item(app, config, *action, action.label())?));
             }
@@ -749,31 +668,19 @@ mod tests {
     fn every_menu_action_appears_once() {
         fn collect(entries: &[Entry], seen: &mut std::collections::HashSet<WindowAction>) {
             for entry in entries {
-                let actions: &[WindowAction] = match entry {
-                    Entry::Sized(_, actions) => actions,
+                match entry {
                     Entry::Single(action) | Entry::Labelled(_, action) => {
-                        std::slice::from_ref(action)
+                        assert!(seen.insert(*action), "{action} appears twice in the menu");
                     }
-                    Entry::Group(_, children) => {
-                        collect(children, seen);
-                        &[]
-                    }
-                    Entry::Separator => &[],
-                };
-                for action in actions {
-                    assert!(seen.insert(*action), "{action} appears twice in the menu");
+                    Entry::Group(_, children) => collect(children, seen),
+                    Entry::Separator => {}
                 }
             }
         }
         let mut seen = std::collections::HashSet::new();
         collect(ACTION_ENTRIES, &mut seen);
-        for corner in [
-            WindowAction::TopLeft,
-            WindowAction::TopRight,
-            WindowAction::BottomLeft,
-            WindowAction::BottomRight,
-        ] {
-            assert!(seen.contains(&corner), "{corner} missing from the menu");
+        for action in WindowAction::ALL {
+            assert!(seen.contains(&action), "{action} missing from the menu");
         }
     }
 

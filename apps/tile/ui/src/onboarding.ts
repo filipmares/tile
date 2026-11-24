@@ -15,8 +15,11 @@ import { formatHotkey, isMac } from "./hotkey";
 import { config as sharedConfig, setConfig } from "./state";
 import {
   ActionPerformed,
+  ActionTarget,
+  bindingFor,
   Config,
   CycleSize,
+  Hotkey,
   WelcomeStatus,
   WindowAction,
 } from "./types";
@@ -101,23 +104,15 @@ const FLOATING: PaneFrame = { screen: 0, x: 0.14, y: 0.14, w: 0.56, h: 0.64 };
  * currently on. Only actions with an unambiguous shape are here; anything
  * else leaves the pane where it is rather than guessing at it.
  */
-const PANE_SHAPES: Partial<Record<WindowAction, (f: number) => PaneRect>> = {
+const PANE_SHAPES: Partial<Record<ActionTarget, (f: number) => PaneRect>> = {
   "left-half": (f) => ({ x: 0, y: 0, w: f, h: 1 }),
   "right-half": (f) => ({ x: 1 - f, y: 0, w: f, h: 1 }),
-  "top-half": (f) => ({ x: 0, y: 0, w: 1, h: f }),
-  "bottom-half": (f) => ({ x: 0, y: 1 - f, w: 1, h: f }),
+  "center-half": (f) => ({ x: (1 - f) / 2, y: 0, w: f, h: 1 }),
   "top-left": (f) => ({ x: 0, y: 0, w: f, h: 0.5 }),
   "top-right": (f) => ({ x: 1 - f, y: 0, w: f, h: 0.5 }),
   "bottom-left": (f) => ({ x: 0, y: 0.5, w: f, h: 0.5 }),
   "bottom-right": (f) => ({ x: 1 - f, y: 0.5, w: f, h: 0.5 }),
-  "first-third": () => ({ x: 0, y: 0, w: 1 / 3, h: 1 }),
-  "center-third": () => ({ x: 1 / 3, y: 0, w: 1 / 3, h: 1 }),
-  "last-third": () => ({ x: 2 / 3, y: 0, w: 1 / 3, h: 1 }),
-  "first-two-thirds": () => ({ x: 0, y: 0, w: 2 / 3, h: 1 }),
-  "last-two-thirds": () => ({ x: 1 / 3, y: 0, w: 2 / 3, h: 1 }),
   maximize: () => ({ x: 0, y: 0, w: 1, h: 1 }),
-  "almost-maximize": () => ({ x: 0.05, y: 0.05, w: 0.9, h: 0.9 }),
-  center: () => ({ x: 0.2, y: 0.15, w: 0.6, h: 0.7 }),
 };
 
 /** The width (or height) each cycle size takes, as a fraction. */
@@ -150,11 +145,10 @@ const COUNT_WORDS: Record<number, string> = {
 };
 
 /** Actions whose repeat walks the size cycle rather than doing nothing. */
-const CYCLING_ACTIONS: WindowAction[] = [
+const CYCLING_ACTIONS: ActionTarget[] = [
   "left-half",
   "right-half",
-  "top-half",
-  "bottom-half",
+  "center-half",
   "top-left",
   "top-right",
   "bottom-left",
@@ -167,22 +161,12 @@ const DISPLAY_ACTIONS: WindowAction[] = [
   "display-right",
   "display-up",
   "display-down",
-  "previous-display",
-  "next-display",
 ];
 
 /**
- * Every action that moves a window to another display. The display slide
- * accepts any of them: the lesson is that the window crossed screens, not
- * which of several bound chords did it.
+ * Every action that moves a window to another display.
  */
-const THROW_ACTIONS: WindowAction[] = [
-  ...DISPLAY_ACTIONS,
-  "first-display",
-  "second-display",
-  "third-display",
-  "fourth-display",
-];
+const THROW_ACTIONS: WindowAction[] = [...DISPLAY_ACTIONS];
 
 /**
  * How long the pane and the tick are given before the deck moves on. The pane
@@ -229,10 +213,10 @@ const walk = {
   screenCount: 1,
   currentScreen: 0,
   displayNeighbors: [] as WelcomeStatus["displayNeighbors"],
-  bindings: {} as Config["bindings"],
+  bindings: {} as Partial<Record<WindowAction, Hotkey | null>>,
   pane: FLOATING,
   /** The last action performed, for spotting a repeat. */
-  lastAction: null as WindowAction | null,
+  lastAction: null as ActionTarget | null,
   /** Where in the configured size cycle that action currently sits. */
   sizeIndex: -1,
   /** Which cycle sizes the user has actually been shown, by index. */
@@ -269,7 +253,7 @@ function buildSlides(
 ): Slide[] {
   const slides: Slide[] = [];
   const combo = (action: WindowAction): string | null => {
-    const hk = cfg?.bindings[action];
+    const hk = cfg ? bindingFor(cfg, action) : null;
     return hk ? formatHotkey(hk) : null;
   };
 
@@ -420,14 +404,9 @@ function movePane(frame: PaneFrame, snapped: boolean): void {
   renderGhost();
 }
 
-function displayTarget(action: WindowAction, from: number): number | null {
-  if (action === "previous-display" || action === "next-display") {
-    const step = action === "next-display" ? 1 : walk.screenCount - 1;
-    return (from + step) % walk.screenCount;
-  }
-  const named = THROW_ACTIONS.indexOf(action) - DISPLAY_ACTIONS.length;
-  if (named >= 0) return named < walk.screenCount ? named : null;
-  return walk.displayNeighbors[from]?.[action] ?? null;
+function displayTarget(action: ActionTarget, from: number): number | null {
+  if (!DISPLAY_ACTIONS.includes(action as WindowAction)) return null;
+  return walk.displayNeighbors[from]?.[action as WindowAction] ?? null;
 }
 
 /** The first bound throw that actually goes somewhere from display `from`. */
@@ -465,7 +444,7 @@ function aimDisplaySlide(): void {
  * refusal re-aims the keycap from where the window actually is.
  */
 function satisfies(slide: Slide, event: ActionPerformed): boolean {
-  if (!slide.actions.includes(event.action)) return false;
+  if (!slide.actions.includes(event.action as WindowAction)) return false;
   if (slide.id !== "display") return true;
   if (!event.hadWindow) {
     return displayTarget(event.action, walk.currentScreen) !== null;
@@ -538,7 +517,7 @@ function renderGhost(): void {
  * where the lesson left it instead of following the window off course.
  */
 function reflectOnStage(
-  action: WindowAction,
+  action: ActionTarget,
   place: boolean,
   screen: number | null,
 ): void {
@@ -554,7 +533,7 @@ function reflectOnStage(
       : Math.min(Math.max(screen, 0), walk.screenCount - 1);
   const reported = realScreen === null ? null : onStage(realScreen);
 
-  if (THROW_ACTIONS.includes(action)) {
+  if (THROW_ACTIONS.includes(action as WindowAction)) {
     const target =
       realScreen ?? displayTarget(action, walk.currentScreen) ?? walk.currentScreen;
     walk.currentScreen = target;
@@ -584,7 +563,11 @@ function reflectOnStage(
   // specific key and the pips must answer that question, not a neighbouring
   // one — and never a press the slide turned down.
   const teaches = walk.slides.find((s) => s.id === "cycle");
-  if (place && teaches?.actions.includes(action) && walk.sizeIndex >= 0) {
+  if (
+    place &&
+    teaches?.actions.includes(action as WindowAction) &&
+    walk.sizeIndex >= 0
+  ) {
     walk.cycleSeen.add(walk.sizeIndex);
   }
   if (!place) {
@@ -1030,7 +1013,11 @@ export async function bootWelcome(): Promise<void> {
   renderStage(status.screenCount);
   walk.screenCount = Math.max(status.screenCount, 1);
   walk.displayNeighbors = status.displayNeighbors;
-  walk.bindings = cfg?.bindings ?? {};
+  walk.bindings = cfg
+    ? Object.fromEntries(
+        DISPLAY_ACTIONS.map((action) => [action, bindingFor(cfg, action)]),
+      )
+    : {};
   walk.currentScreen = Math.min(
     Math.max(status.currentScreen, 0),
     walk.screenCount - 1,

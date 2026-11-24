@@ -1,221 +1,63 @@
 // TypeScript mirrors of the Rust types that cross the Tauri bridge. These MUST
 // match the serde representations in `tile-core` and the app's DTOs exactly.
 
-/** Presentation families, mirroring `WindowFamily::ALL` and its labels. */
-export const FAMILIES: { id: string; label: string }[] = [
-  { id: "halves", label: "Halves" },
-  { id: "displays", label: "Displays" },
-  { id: "corners", label: "Corners" },
-  { id: "horizontal-thirds", label: "Horizontal Thirds" },
-  { id: "vertical-thirds", label: "Vertical Thirds" },
-  { id: "fourths", label: "Fourths" },
-  { id: "corner-thirds", label: "Corner Thirds" },
-  { id: "sixths", label: "Sixths" },
-  { id: "ninths", label: "Ninths" },
-  { id: "sizing", label: "Size & Position" },
-  { id: "move", label: "Move" },
-  { id: "resize", label: "Resize" },
-  { id: "halve-double", label: "Halve & Double" },
+/** Shortcut modifier groups, mirroring `ShortcutGroup::ALL`. */
+export type ShortcutGroup = "placement" | "displays";
+
+export const SHORTCUT_GROUPS: ReadonlyArray<{
+  id: ShortcutGroup;
+  label: string;
+  modifierLabel: string;
+  description: string;
+}> = [
+  {
+    id: "placement",
+    label: "Window placement",
+    modifierLabel: "Base modifier",
+    description:
+      "Hold the base modifier and press a key. Repeat Left, Right, or Center Column to cycle widths.",
+  },
+  {
+    id: "displays",
+    label: "Displays",
+    modifierLabel: "Display modifier",
+    description:
+      "Hold the display modifier and press a key to move the window to another display.",
+  },
 ];
 
 /**
- * Order, labels and families mirror `WindowAction::ALL`, `WindowAction::label`
- * and `WindowAction::family`. `family` keys into {@link FAMILIES}.
+ * Order, labels and groups mirror `WindowAction::ALL`, `WindowAction::label`
+ * and `WindowAction::group`.
  */
 export const ACTIONS = [
-  { id: "left-half", label: "Left Half", family: "halves" },
-  { id: "right-half", label: "Right Half", family: "halves" },
-  { id: "top-half", label: "Top Half", family: "halves" },
-  { id: "bottom-half", label: "Bottom Half", family: "halves" },
-  { id: "display-left", label: "Display Left", family: "displays" },
-  { id: "display-right", label: "Display Right", family: "displays" },
-  { id: "display-up", label: "Display Above", family: "displays" },
-  { id: "display-down", label: "Display Below", family: "displays" },
-  { id: "previous-display", label: "Previous Display", family: "displays" },
-  { id: "next-display", label: "Next Display", family: "displays" },
-  { id: "first-display", label: "First Display", family: "displays" },
-  { id: "second-display", label: "Second Display", family: "displays" },
-  { id: "third-display", label: "Third Display", family: "displays" },
-  { id: "fourth-display", label: "Fourth Display", family: "displays" },
-  { id: "top-left", label: "Top Left", family: "corners" },
-  { id: "top-right", label: "Top Right", family: "corners" },
-  { id: "bottom-left", label: "Bottom Left", family: "corners" },
-  { id: "bottom-right", label: "Bottom Right", family: "corners" },
-  { id: "first-third", label: "First Third", family: "horizontal-thirds" },
-  { id: "center-third", label: "Center Third", family: "horizontal-thirds" },
-  { id: "last-third", label: "Last Third", family: "horizontal-thirds" },
-  {
-    id: "first-two-thirds",
-    label: "First Two Thirds",
-    family: "horizontal-thirds",
-  },
-  {
-    id: "last-two-thirds",
-    label: "Last Two Thirds",
-    family: "horizontal-thirds",
-  },
-  {
-    id: "center-two-thirds",
-    label: "Center Two Thirds",
-    family: "horizontal-thirds",
-  },
-  {
-    id: "top-vertical-third",
-    label: "Top Vertical Third",
-    family: "vertical-thirds",
-  },
-  {
-    id: "middle-vertical-third",
-    label: "Middle Vertical Third",
-    family: "vertical-thirds",
-  },
-  {
-    id: "bottom-vertical-third",
-    label: "Bottom Vertical Third",
-    family: "vertical-thirds",
-  },
-  {
-    id: "top-vertical-two-thirds",
-    label: "Top Vertical Two Thirds",
-    family: "vertical-thirds",
-  },
-  {
-    id: "bottom-vertical-two-thirds",
-    label: "Bottom Vertical Two Thirds",
-    family: "vertical-thirds",
-  },
-  { id: "first-fourth", label: "First Fourth", family: "fourths" },
-  { id: "second-fourth", label: "Second Fourth", family: "fourths" },
-  { id: "third-fourth", label: "Third Fourth", family: "fourths" },
-  { id: "last-fourth", label: "Last Fourth", family: "fourths" },
-  {
-    id: "first-three-fourths",
-    label: "First Three Fourths",
-    family: "fourths",
-  },
-  {
-    id: "last-three-fourths",
-    label: "Last Three Fourths",
-    family: "fourths",
-  },
-  {
-    id: "center-three-fourths",
-    label: "Center Three Fourths",
-    family: "fourths",
-  },
-  { id: "top-left-third", label: "Top Left Third", family: "corner-thirds" },
-  { id: "top-right-third", label: "Top Right Third", family: "corner-thirds" },
-  {
-    id: "bottom-left-third",
-    label: "Bottom Left Third",
-    family: "corner-thirds",
-  },
-  {
-    id: "bottom-right-third",
-    label: "Bottom Right Third",
-    family: "corner-thirds",
-  },
-  { id: "top-left-sixth", label: "Top Left Sixth", family: "sixths" },
-  { id: "top-center-sixth", label: "Top Center Sixth", family: "sixths" },
-  { id: "top-right-sixth", label: "Top Right Sixth", family: "sixths" },
-  { id: "bottom-left-sixth", label: "Bottom Left Sixth", family: "sixths" },
-  {
-    id: "bottom-center-sixth",
-    label: "Bottom Center Sixth",
-    family: "sixths",
-  },
-  {
-    id: "bottom-right-sixth",
-    label: "Bottom Right Sixth",
-    family: "sixths",
-  },
-  { id: "top-left-ninth", label: "Top Left Ninth", family: "ninths" },
-  { id: "top-center-ninth", label: "Top Center Ninth", family: "ninths" },
-  { id: "top-right-ninth", label: "Top Right Ninth", family: "ninths" },
-  { id: "middle-left-ninth", label: "Middle Left Ninth", family: "ninths" },
-  {
-    id: "middle-center-ninth",
-    label: "Middle Center Ninth",
-    family: "ninths",
-  },
-  {
-    id: "middle-right-ninth",
-    label: "Middle Right Ninth",
-    family: "ninths",
-  },
-  { id: "bottom-left-ninth", label: "Bottom Left Ninth", family: "ninths" },
-  {
-    id: "bottom-center-ninth",
-    label: "Bottom Center Ninth",
-    family: "ninths",
-  },
-  {
-    id: "bottom-right-ninth",
-    label: "Bottom Right Ninth",
-    family: "ninths",
-  },
-  { id: "maximize", label: "Maximize", family: "sizing" },
-  { id: "almost-maximize", label: "Almost Maximize", family: "sizing" },
-  { id: "maximize-height", label: "Maximize Height", family: "sizing" },
-  { id: "center-half", label: "Center Half", family: "sizing" },
-  {
-    id: "center-half-back",
-    label: "Center Half (Previous Size)",
-    family: "sizing",
-  },
-  { id: "center", label: "Center", family: "sizing" },
-  { id: "restore", label: "Restore", family: "sizing" },
-  { id: "move-left", label: "Move Left", family: "move" },
-  { id: "move-right", label: "Move Right", family: "move" },
-  { id: "move-up", label: "Move Up", family: "move" },
-  { id: "move-down", label: "Move Down", family: "move" },
-  { id: "larger", label: "Larger", family: "resize" },
-  { id: "smaller", label: "Smaller", family: "resize" },
-  { id: "larger-width", label: "Larger Width", family: "resize" },
-  { id: "smaller-width", label: "Smaller Width", family: "resize" },
-  { id: "larger-height", label: "Larger Height", family: "resize" },
-  { id: "smaller-height", label: "Smaller Height", family: "resize" },
-  {
-    id: "double-width-left",
-    label: "Double Width Left",
-    family: "halve-double",
-  },
-  {
-    id: "double-width-right",
-    label: "Double Width Right",
-    family: "halve-double",
-  },
-  {
-    id: "double-height-up",
-    label: "Double Height Up",
-    family: "halve-double",
-  },
-  {
-    id: "double-height-down",
-    label: "Double Height Down",
-    family: "halve-double",
-  },
-  {
-    id: "halve-width-left",
-    label: "Halve Width Left",
-    family: "halve-double",
-  },
-  {
-    id: "halve-width-right",
-    label: "Halve Width Right",
-    family: "halve-double",
-  },
-  { id: "halve-height-up", label: "Halve Height Up", family: "halve-double" },
-  {
-    id: "halve-height-down",
-    label: "Halve Height Down",
-    family: "halve-double",
-  },
-
-] as const satisfies readonly { id: string; label: string; family: string }[];
+  { id: "left-half", label: "Left", group: "placement" },
+  { id: "right-half", label: "Right", group: "placement" },
+  { id: "maximize", label: "Maximize", group: "placement" },
+  { id: "restore", label: "Restore", group: "placement" },
+  { id: "center-half", label: "Center Column", group: "placement" },
+  { id: "display-left", label: "Display Left", group: "displays" },
+  { id: "display-right", label: "Display Right", group: "displays" },
+  { id: "display-up", label: "Display Above", group: "displays" },
+  { id: "display-down", label: "Display Below", group: "displays" },
+] as const satisfies readonly {
+  id: string;
+  label: string;
+  group: ShortcutGroup;
+}[];
 
 /** `WindowAction` — serde `rename_all = "kebab-case"`. */
 export type WindowAction = (typeof ACTIONS)[number]["id"];
+
+/** Composed-only corner identifiers reported by `tile://action-performed`. */
+export type CornerAction =
+  | "top-left"
+  | "top-right"
+  | "bottom-left"
+  | "bottom-right";
+
+/** `ActionTarget` — either a bindable action or a composed corner. */
+export type ActionTarget = WindowAction | CornerAction;
 
 /** `KeyCode` — serde `rename_all = "kebab-case"`. Mirrors `KeyCode::ALL`. */
 export type KeyCode =
@@ -377,63 +219,45 @@ export const CYCLE_SIZES: ReadonlyArray<{ id: CycleSize; label: string }> = [
 export interface AnimationConfig {
   enabled: boolean;
   durationMs: number;
-  fps: number;
 }
 
-/** `Config` — serde `rename_all = "camelCase"`. */
+/** `Config` — serde `rename_all = "camelCase"`, schema v2. */
 export interface Config {
-  bindings: Partial<Record<WindowAction, Hotkey | null>>;
+  placementModifiers: number;
+  displayModifiers: number;
+  keys: Partial<Record<WindowAction, KeyCode | null>>;
   gap: Gaps;
   launchOnLogin: boolean;
-  almostMaximizeWidth: number;
-  almostMaximizeHeight: number;
-  sizeStep: number;
-  widthStep: number;
-  moveStep: number;
-  minimumWindowWidth: number;
-  minimumWindowHeight: number;
   subsequentExecutionMode: SubsequentExecutionMode;
   cycleSizes: CycleSize[];
-  /** Set once the settings window has claimed the first-run orientation. */
   orientationShown: boolean;
   animation: AnimationConfig;
 }
 
-/** A Settings ▸ Advanced field, named as `AdvancedSetting` serializes it. */
-export type AdvancedField =
-  | "almostMaximizeWidth"
-  | "almostMaximizeHeight"
-  | "sizeStep"
-  | "widthStep"
-  | "moveStep"
-  | "minimumWindowWidth"
-  | "minimumWindowHeight"
-  | "animationFps";
+/** Returns the modifier bitmask for `group`. */
+export function groupModifiers(cfg: Config, group: ShortcutGroup): number {
+  return group === "placement" ? cfg.placementModifiers : cfg.displayModifiers;
+}
 
-/**
- * `AdvancedSetting` — serde `tag = "field", content = "value"`. Fractions
- * travel as fractions (0.9), not percentages.
- */
-export interface AdvancedSetting {
-  field: AdvancedField;
-  value: number;
+/** Returns the full `Hotkey` bound to `action`, or `null` if unbound. */
+export function bindingFor(cfg: Config, action: WindowAction): Hotkey | null {
+  const key = cfg.keys[action];
+  if (!key) return null;
+  const meta = ACTIONS.find((a) => a.id === action);
+  if (!meta) return null;
+  return { modifiers: groupModifiers(cfg, meta.group), key };
 }
 
 export type PermissionStatus = "granted" | "denied" | "not-required";
 
-/** What the permission panel's primary button does next. */
 export type GrantStep = "prompt" | "open-settings";
 
 export interface AccessibilityHelp {
   grantStep: GrantStep;
-  /** The running Tile.app, or null for an unbundled development build. */
   appBundle: string | null;
 }
 
-export type HotkeyRoute =
-  | "registered"
-  | "intercepted"
-  | "unavailable";
+export type HotkeyRoute = "registered" | "intercepted" | "unavailable";
 
 export interface HotkeyBindingStatus {
   hotkey: Hotkey;
@@ -445,28 +269,17 @@ export interface HotkeyBindingStatus {
 export interface HotkeyStatus {
   bindings: HotkeyBindingStatus[];
   hookInstalled: boolean;
-  /** The keyboard hook keeps failing; intercepted shortcuts do nothing. */
   hookUnavailable: boolean;
   applyError: string | null;
 }
 
-/** `BuildKindDto` — serde `rename_all = "kebab-case"`. */
 export type BuildKind = "development" | "installed";
 
-/** `BuildInfoDto` — where this binary came from and where it stores config. */
 export interface BuildInfo {
   kind: BuildKind;
   configDir: string | null;
 }
 
-/**
- * `ConfigRecoveryDto` — this launch could not load the saved settings as-is.
- * `kind` says why: unreadable (`corrupt`, started from defaults), some fields
- * reset (`partial-reset`), or written by a newer Tile (`newer-version`).
- * `someFieldsReset` is true whenever any setting fell back to its default,
- * including for a `newer-version` file. `backupPath` is null when the old
- * file could not be kept, in which case nothing is being saved this session.
- */
 export interface ConfigRecovery {
   kind: "corrupt" | "partial-reset" | "newer-version";
   someFieldsReset: boolean;
@@ -493,10 +306,6 @@ export type UpdateStatus =
   | { status: "ready-to-relaunch"; version: string }
   | { status: "error"; kind: UpdateErrorKind };
 
-/**
- * `UpdateErrorKind` — why an update failed. The raw updater text stays in
- * the log; `updateErrorMessage` in `errors.ts` turns this into a sentence.
- */
 export type UpdateErrorKind =
   | "offline"
   | "server"
@@ -506,38 +315,16 @@ export type UpdateErrorKind =
   | "installer"
   | "unknown";
 
-/** `WelcomeStatusDto` — what the welcome walkthrough may honestly ask for. */
 export interface WelcomeStatus {
   screenCount: number;
   hasMovableWindow: boolean;
-  /**
-   * Display a shortcut would move a window on, counted left to right. Falls
-   * back to the primary display when `hasMovableWindow` is false, since there
-   * is then no window to take the answer from.
-   */
   currentScreen: number;
   displayNeighbors: Partial<Record<WindowAction, number>>[];
 }
 
-/**
- * `ActionPerformedDto` — payload of `tile://action-performed`, sent to the
- * welcome window only.
- *
- * `moved` says the window actually changed position or size. `hadWindow` says
- * there was something to act on at all, and it is the one that decides whether
- * anything was proved: with no window there is nothing to see, so the press is
- * a preview. `moved: false` with `hadWindow: true` is a no-op — the window was
- * already exactly where the action would have put it — which the walkthrough
- * credits, because Tile agreeing with the user is not Tile failing them.
- */
 export interface ActionPerformed {
-  action: WindowAction;
+  action: ActionTarget;
   moved: boolean;
   hadWindow: boolean;
-  /**
-   * Display the window is on, or heading for when it moved, counted left to
-   * right. Null only when `hadWindow` is false: a no-op reports the display
-   * the window is already sitting on, so this does not track `moved`.
-   */
   screen: number | null;
 }

@@ -6,7 +6,7 @@
 //! here rather than editing it.
 
 use serde::{Deserialize, Serialize};
-use tile_core::{Hotkey, WindowAction};
+use tile_core::{ActionTarget, Hotkey, WindowAction};
 use tile_platform::{HotkeyBindingStatus, HotkeyRoute, PermissionStatus};
 
 use crate::build_kind::BuildKind;
@@ -276,10 +276,10 @@ pub struct WelcomeStatusDto {
 /// lying. `moved` is narrower — it says the window actually went somewhere, so
 /// `moved: false` alongside `had_window: true` means the window was already in
 /// position rather than that anything failed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ActionPerformedDto {
-    pub action: WindowAction,
+    pub action: ActionTarget,
     pub moved: bool,
     pub had_window: bool,
     /// The display the window is on, or heading for, counted left to right.

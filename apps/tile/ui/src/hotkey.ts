@@ -1,7 +1,17 @@
 // Hotkey recording and display, mapping browser keyboard events onto the closed
 // `KeyCode` set from `tile-core/src/hotkey.rs`.
 
-import { Hotkey, KeyCode, MOD, WindowAction } from "./types";
+import {
+  ACTIONS,
+  bindingFor,
+  Config,
+  groupModifiers,
+  Hotkey,
+  KeyCode,
+  MOD,
+  ShortcutGroup,
+  WindowAction,
+} from "./types";
 
 export function isMac(): boolean {
   return /mac/i.test(navigator.userAgent) || /mac/i.test(navigator.platform);
@@ -186,22 +196,127 @@ export function hasAltGrRisk(hotkey: Hotkey): boolean {
   );
 }
 
-/** Every action other than `action` that `hotkey` is bound to, in `order`. */
+/** Every action other than `exclude` whose active shortcut equals `hotkey`. */
 export function actionsUsing(
-  bindings: Partial<Record<WindowAction, Hotkey | null>>,
+  cfg: Config,
   hotkey: Hotkey,
-  action: WindowAction,
-  order: readonly WindowAction[],
+  exclude: WindowAction,
 ): WindowAction[] {
-  return order.filter((other) => {
-    const bound = bindings[other];
+  return ACTIONS.map(({ id }) => id).filter((other) => {
+    if (other === exclude) return false;
+    const bound = bindingFor(cfg, other);
     return (
-      other !== action &&
-      bound != null &&
+      bound !== null &&
       bound.modifiers === hotkey.modifiers &&
       bound.key === hotkey.key
     );
   });
+}
+
+/**
+ * Pairs `[inGroup, inOtherGroup]` that would collide if `group`'s modifier
+ * were changed to `modifiers`.
+ */
+export function modifierCollisions(
+  cfg: Config,
+  group: ShortcutGroup,
+  modifiers: number,
+): Array<[WindowAction, WindowAction]> {
+  const otherGroup: ShortcutGroup =
+    group === "placement" ? "displays" : "placement";
+  if (modifiers !== groupModifiers(cfg, otherGroup)) return [];
+
+  const inGroup = ACTIONS.filter((a) => a.group === group);
+  const inOther = ACTIONS.filter((a) => a.group === otherGroup);
+  const collisions: Array<[WindowAction, WindowAction]> = [];
+  for (const a of inGroup) {
+    const key = cfg.keys[a.id];
+    if (!key) continue;
+    for (const b of inOther) {
+      if (cfg.keys[b.id] === key) collisions.push([a.id, b.id]);
+    }
+  }
+  return collisions;
+}
+
+export interface ModifierPreset {
+  modifiers: number;
+  label: string;
+}
+
+/** Curated safe modifier presets per OS for the group modifier dropdown. */
+export function modifierPresets(mac = isMac()): readonly ModifierPreset[] {
+  if (mac) {
+    return [
+      { modifiers: MOD.CONTROL | MOD.ALT, label: "⌃⌥  Control + Option" },
+      {
+        modifiers: MOD.CONTROL | MOD.ALT | MOD.META,
+        label: "⌃⌥⌘  Control + Option + Command",
+      },
+      { modifiers: MOD.CONTROL | MOD.META, label: "⌃⌘  Control + Command" },
+      { modifiers: MOD.ALT | MOD.META, label: "⌥⌘  Option + Command" },
+      { modifiers: MOD.CONTROL | MOD.SHIFT, label: "⌃⇧  Control + Shift" },
+      { modifiers: MOD.ALT | MOD.SHIFT, label: "⌥⇧  Option + Shift" },
+    ];
+  }
+  return [
+    { modifiers: MOD.META, label: "Win" },
+    { modifiers: MOD.META | MOD.ALT, label: "Win + Alt" },
+    { modifiers: MOD.META | MOD.SHIFT, label: "Win + Shift" },
+    { modifiers: MOD.META | MOD.CONTROL, label: "Win + Ctrl" },
+    { modifiers: MOD.CONTROL | MOD.SHIFT, label: "Ctrl + Shift" },
+    { modifiers: MOD.ALT | MOD.SHIFT, label: "Alt + Shift" },
+  ];
+}
+
+export interface ModifierToggle {
+  bit: number;
+  label: string;
+  ariaLabel: string;
+}
+
+/** Individual modifier toggles shown when the user chooses Custom… */
+export function modifierToggles(mac = isMac()): readonly ModifierToggle[] {
+  if (mac) {
+    return [
+      { bit: MOD.CONTROL, label: "⌃ Control", ariaLabel: "Control" },
+      { bit: MOD.ALT, label: "⌥ Option", ariaLabel: "Option" },
+      { bit: MOD.SHIFT, label: "⇧ Shift", ariaLabel: "Shift" },
+      { bit: MOD.META, label: "⌘ Command", ariaLabel: "Command" },
+    ];
+  }
+  return [
+    { bit: MOD.CONTROL, label: "Ctrl", ariaLabel: "Ctrl" },
+    { bit: MOD.ALT, label: "Alt", ariaLabel: "Alt" },
+    { bit: MOD.SHIFT, label: "Shift", ariaLabel: "Shift" },
+    { bit: MOD.META, label: "Win", ariaLabel: "Win" },
+  ];
+}
+
+const ALT_GR_WARNING =
+  "Windows treats Ctrl+Alt as AltGr on many keyboard layouts. This modifier may prevent typing characters such as @, €, {, or }.";
+
+/** Warnings for choosing `modifiers` for a group whose bound keys are `keys`. */
+export function modifierWarnings(
+  modifiers: number,
+  keys: KeyCode[],
+  mac = isMac(),
+): string[] {
+  const warnings = new Set<string>();
+  if (modifiers === MOD.SHIFT) {
+    warnings.add(
+      "Shift alone interferes with capital letters and text selection.",
+    );
+  }
+  if (!mac && (modifiers & (MOD.CONTROL | MOD.ALT)) === (MOD.CONTROL | MOD.ALT)) {
+    warnings.add(ALT_GR_WARNING);
+  }
+  for (const key of keys) {
+    for (const warning of hotkeyWarnings({ modifiers, key }, mac)) {
+      warnings.add(warning);
+    }
+  }
+  return [...warnings];
 }
 
 /**
@@ -251,9 +366,7 @@ export function hotkeyWarnings(hotkey: Hotkey, mac: boolean): string[] {
   }
   const warnings: string[] = [];
   if (hasAltGrRisk(hotkey)) {
-    warnings.push(
-      "Windows treats Ctrl+Alt as AltGr on many keyboard layouts. This shortcut may prevent typing characters such as @, €, {, or }.",
-    );
+    warnings.push(ALT_GR_WARNING);
   }
   const known = knownWindowsShortcutWarning(hotkey);
   if (known) warnings.push(known);
@@ -288,15 +401,22 @@ const PURE_MODIFIERS = new Set([
   "CapsLock",
 ]);
 
-export type RecordOutcome =
-  | { kind: "bound"; hotkey: Hotkey }
+export type KeyRecordOutcome =
+  | { kind: "key"; key: KeyCode }
   | { kind: "clear" }
   | { kind: "cancel" }
   | { kind: "pending" }
   | { kind: "error"; message: string };
 
-/** Interprets one keydown during recording. */
-export function interpret(e: KeyboardEvent): RecordOutcome {
+/**
+ * Interprets one keydown during single-key recording. Accepts either a bare
+ * key or a key pressed while holding the group's own modifier out of muscle
+ * memory.
+ */
+export function interpretKey(
+  e: KeyboardEvent,
+  groupMods: number,
+): KeyRecordOutcome {
   if (PURE_MODIFIERS.has(e.key)) {
     return { kind: "pending" };
   }
@@ -305,7 +425,6 @@ export function interpret(e: KeyboardEvent): RecordOutcome {
   }
 
   const mods = modifiersFromEvent(e);
-
   if ((e.code === "Backspace" || e.code === "Delete") && mods === 0) {
     return { kind: "clear" };
   }
@@ -318,14 +437,13 @@ export function interpret(e: KeyboardEvent): RecordOutcome {
       message: `"${shown}" can't be used as a shortcut key.`,
     };
   }
-  if (mods === 0) {
+  if (mods !== 0 && mods !== groupMods) {
     return {
       kind: "error",
-      message: "Add at least one modifier (⌘ / Ctrl / Alt / Shift) — a bare key would swallow normal typing.",
+      message: "Press just the key — change the modifier above.",
     };
   }
-
-  return { kind: "bound", hotkey: { modifiers: mods, key } };
+  return { kind: "key", key };
 }
 
 const KEY_LABELS: Readonly<Record<KeyCode, string>> = {
@@ -443,22 +561,33 @@ const KEY_LABELS: Readonly<Record<KeyCode, string>> = {
   "numpad-enter": "NumEnter",
 };
 
+/** Renders a modifier bitmask with platform-correct symbols. */
+export function formatModifiers(modifiers: number, mac = isMac()): string {
+  const parts: string[] = [];
+  if (mac) {
+    if (modifiers & MOD.CONTROL) parts.push("⌃");
+    if (modifiers & MOD.ALT) parts.push("⌥");
+    if (modifiers & MOD.SHIFT) parts.push("⇧");
+    if (modifiers & MOD.META) parts.push("⌘");
+    return parts.join("");
+  }
+  if (modifiers & MOD.CONTROL) parts.push("Ctrl");
+  if (modifiers & MOD.ALT) parts.push("Alt");
+  if (modifiers & MOD.SHIFT) parts.push("Shift");
+  if (modifiers & MOD.META) parts.push("Win");
+  return parts.join("+");
+}
+
+/** Renders a single key label. */
+export function formatKey(key: KeyCode): string {
+  return KEY_LABELS[key];
+}
+
 /** Renders a hotkey with platform-correct modifier symbols. */
 export function formatHotkey(hk: Hotkey): string {
   const mac = isMac();
-  const parts: string[] = [];
-  // macOS convention orders modifiers ⌃⌥⇧⌘.
-  if (mac) {
-    if (hk.modifiers & MOD.CONTROL) parts.push("⌃");
-    if (hk.modifiers & MOD.ALT) parts.push("⌥");
-    if (hk.modifiers & MOD.SHIFT) parts.push("⇧");
-    if (hk.modifiers & MOD.META) parts.push("⌘");
-    return parts.join("") + KEY_LABELS[hk.key];
-  }
-  if (hk.modifiers & MOD.CONTROL) parts.push("Ctrl");
-  if (hk.modifiers & MOD.ALT) parts.push("Alt");
-  if (hk.modifiers & MOD.SHIFT) parts.push("Shift");
-  if (hk.modifiers & MOD.META) parts.push("Win");
-  parts.push(KEY_LABELS[hk.key]);
-  return parts.join("+");
+  const mods = formatModifiers(hk.modifiers, mac);
+  const key = KEY_LABELS[hk.key];
+  if (!mods) return key;
+  return mac ? mods + key : `${mods}+${key}`;
 }

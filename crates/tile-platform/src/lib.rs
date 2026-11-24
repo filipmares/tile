@@ -7,7 +7,9 @@
 
 use std::sync::mpsc::Sender;
 
-use tile_core::{ActionRequest, Hotkey, Rect, Screen, WindowAction, WindowId, WindowSnapshot};
+use tile_core::{
+    ActionRequest, Hotkey, Modifiers, Rect, Screen, WindowAction, WindowId, WindowSnapshot,
+};
 
 #[cfg(target_os = "macos")]
 pub mod macos;
@@ -205,7 +207,9 @@ pub trait WindowBackend: Send {
 /// Implementations own whatever thread and message loop the platform requires;
 /// [`HotkeyBackend::apply`] may be called from any thread.
 pub trait HotkeyBackend: Send {
-    /// Replaces the full set of registered hotkeys.
+    /// Replaces the full set of registered hotkeys and updates the modifier
+    /// combination used for single-hold corner composition (`None` disables
+    /// corner composition).
     ///
     /// This is intentionally all-or-nothing per call: the backend unregisters
     /// everything it previously held and then registers `bindings`, so the
@@ -215,7 +219,11 @@ pub trait HotkeyBackend: Send {
     /// [`HotkeyRoute::Unavailable`] in the returned report rather than failing
     /// the whole call, so one bad binding cannot leave the app with no working
     /// hotkeys.
-    fn apply(&mut self, bindings: &[HotkeyBinding]) -> Result<HotkeyApplyReport>;
+    fn apply(
+        &mut self,
+        bindings: &[HotkeyBinding],
+        compose_modifiers: Option<Modifiers>,
+    ) -> Result<HotkeyApplyReport>;
 
     /// Installs the callback that hears about status changes the backend
     /// makes on its own, such as routes moving during recovery after sleep or

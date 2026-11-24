@@ -130,6 +130,9 @@ struct HookDispatch {
     /// Set while the shortcut recorder is open; see
     /// [`HotkeyBackend::set_capture`].
     capture: Option<HotkeyCaptureListener>,
+    /// True while single-hold corner composition needs modifier-release
+    /// tracking from the low-level keyboard hook.
+    compose_active: bool,
 }
 
 thread_local! {
@@ -564,6 +567,7 @@ enum Command {
     Start,
     Apply {
         bindings: Vec<HotkeyBinding>,
+        compose_modifiers: Option<Modifiers>,
         deadline: Instant,
         control: std::sync::Arc<ApplyControl>,
         reply: Sender<Result<HotkeyApplyReport>>,
@@ -646,6 +650,10 @@ struct OwnerState {
     published: Option<HotkeyApplyReport>,
     revision: u64,
     listener: SharedListener,
+    /// Configured base modifier for single-hold corner composition. Only active
+    /// inside [`COMPOSER`] while a keyboard hook is live, so a missing hook
+    /// never leaves `MODIFIER_RELEASES` stuck on one hold.
+    compose_modifiers: Option<Modifiers>,
 }
 
 type SharedListener = std::sync::Arc<std::sync::Mutex<Option<HotkeyStatusListener>>>;
@@ -858,13 +866,18 @@ impl WindowsHotkeyBackend {
 }
 
 impl HotkeyBackend for WindowsHotkeyBackend {
-    fn apply(&mut self, bindings: &[HotkeyBinding]) -> Result<HotkeyApplyReport> {
+    fn apply(
+        &mut self,
+        bindings: &[HotkeyBinding],
+        compose_modifiers: Option<Modifiers>,
+    ) -> Result<HotkeyApplyReport> {
         log::debug!("applying {} Windows hotkeys", bindings.len());
         let (reply_tx, reply_rx) = mpsc::channel();
         let control = std::sync::Arc::new(ApplyControl::new());
         self.commands
             .send(Command::Apply {
                 bindings: bindings.to_vec(),
+                compose_modifiers,
                 deadline: Instant::now() + COMMAND_TIMEOUT,
                 control: std::sync::Arc::clone(&control),
                 reply: reply_tx,
@@ -977,12 +990,14 @@ fn owner_thread_main(
             published: None,
             revision: 0,
             listener,
+            compose_modifiers: None,
         };
         HOOK_DISPATCH.with(|dispatch| {
             *dispatch.borrow_mut() = Some(HookDispatch {
                 sender: events,
                 bindings: Vec::new(),
                 capture: None,
+                compose_active: false,
             });
         });
         if startup_cancelled.load(Ordering::Acquire)
@@ -1073,6 +1088,7 @@ fn drain_commands(commands: &Receiver<Command>, owner: &mut OwnerState) -> bool 
             Command::Start => {}
             Command::Apply {
                 bindings,
+                compose_modifiers,
                 deadline,
                 control,
                 reply,
@@ -1083,7 +1099,7 @@ fn drain_commands(commands: &Receiver<Command>, owner: &mut OwnerState) -> bool 
                         "request was cancelled or expired before processing",
                     ))
                 } else {
-                    owner.apply(&bindings, deadline, &control)
+                    owner.apply(&bindings, compose_modifiers, deadline, &control)
                 };
                 owner.sync_watchdog();
                 let failed = result.is_err();
@@ -1109,6 +1125,7 @@ impl OwnerState {
     fn apply(
         &mut self,
         bindings: &[HotkeyBinding],
+        compose_modifiers: Option<Modifiers>,
         deadline: Instant,
         control: &ApplyControl,
     ) -> Result<HotkeyApplyReport> {
@@ -1218,30 +1235,39 @@ impl OwnerState {
             );
         }
 
-        let installed_for_apply = if !hook_bindings.is_empty() && self.hook.is_none() {
+        let need_hook = !hook_bindings.is_empty() || compose_modifiers.is_some();
+        let installed_for_apply = if need_hook && self.hook.is_none() {
             if let Err(err) = self.install_hook() {
-                let rollback = self
-                    .rollback_apply(
-                        &staged,
-                        &removed,
-                        &old_hook_bindings,
-                        false,
-                        "hook installation failed",
-                    )
-                    .expect_err("rollback always reports the triggering apply failure");
-                return match rollback {
-                    PlatformError::HotkeyStateUnknown(details) => {
-                        Err(PlatformError::HotkeyStateUnknown(format!(
-                            "hook installation failed: {err}; {details}"
-                        )))
-                    }
-                    rollback => Err(PlatformError::os(
-                        "hotkey apply",
-                        format!("{err}; {rollback}"),
-                    )),
-                };
+                if hook_failure_aborts_apply(!hook_bindings.is_empty()) {
+                    let rollback = self
+                        .rollback_apply(
+                            &staged,
+                            &removed,
+                            &old_hook_bindings,
+                            false,
+                            "hook installation failed",
+                        )
+                        .expect_err("rollback always reports the triggering apply failure");
+                    return match rollback {
+                        PlatformError::HotkeyStateUnknown(details) => {
+                            Err(PlatformError::HotkeyStateUnknown(format!(
+                                "hook installation failed: {err}; {details}"
+                            )))
+                        }
+                        rollback => Err(PlatformError::os(
+                            "hotkey apply",
+                            format!("{err}; {rollback}"),
+                        )),
+                    };
+                }
+                log::warn!(
+                    "Windows keyboard hook could not be installed for corner composition ({err}); \
+                     keeping natively registered shortcuts active"
+                );
+                false
+            } else {
+                true
             }
-            true
         } else {
             false
         };
@@ -1273,6 +1299,8 @@ impl OwnerState {
                 "native registrations changed but hook dispatch could not be published: {err}"
             ))
         })?;
+        self.compose_modifiers = compose_modifiers;
+        self.sync_composer();
         for committed in retained.iter().chain(&staged) {
             if let Some(owned) = self
                 .registered
@@ -1286,11 +1314,12 @@ impl OwnerState {
         clear_transient_keys();
 
         let mut warning = None;
-        if hook_bindings.is_empty() && !capture_active() {
+        if !hook_in_use() {
             if let Some(hook) = self.hook {
                 match unsafe { UnhookWindowsHookEx(hook) } {
                     Ok(()) => {
                         self.hook = None;
+                        self.sync_composer();
                         log::info!("Windows keyboard hook removed; all active shortcuts use native registration");
                     }
                     Err(err) => {
@@ -1303,8 +1332,9 @@ impl OwnerState {
             }
         } else if installed_for_apply {
             log::info!(
-                "Windows keyboard hook installed for {} shortcut(s)",
-                hook_bindings.len()
+                "Windows keyboard hook installed for {} shortcut(s) (corner_composition={})",
+                hook_bindings.len(),
+                compose_modifiers.is_some()
             );
         }
 
@@ -1313,7 +1343,7 @@ impl OwnerState {
             hook_installed: self.hook.is_some(),
             hook_unavailable: self
                 .hook_health
-                .unavailable(!current_hook_bindings().is_empty()),
+                .unavailable(!current_hook_bindings().is_empty() || compose_active()),
             warning,
             revision: self.next_revision(),
         };
@@ -1334,7 +1364,10 @@ impl OwnerState {
         if provisional_hook {
             if let Some(hook) = self.hook {
                 match unsafe { UnhookWindowsHookEx(hook) } {
-                    Ok(()) => self.hook = None,
+                    Ok(()) => {
+                        self.hook = None;
+                        self.sync_composer();
+                    }
                     Err(err) => rollback_errors.push(format!(
                         "remove provisional keyboard hook: {}",
                         err.message()
@@ -1388,9 +1421,23 @@ impl OwnerState {
         }
     }
 
+    /// Keeps the corner composer and hook-demand flag aligned with whether a
+    /// keyboard hook is actually installed. Without a live hook,
+    /// `MODIFIER_RELEASES` never advances, so composition must stay disabled.
+    fn sync_composer(&self) {
+        set_compose_state(
+            self.compose_modifiers.is_some(),
+            self.hook
+                .is_some()
+                .then_some(())
+                .and(self.compose_modifiers),
+        );
+    }
+
     fn install_hook(&mut self) -> Result<()> {
         let hook = self.set_hook()?;
         self.hook = Some(hook);
+        self.sync_composer();
         self.watchdog
             .restart(now_tick(), HOOK_LAST_EVENT.load(Ordering::Relaxed));
         Ok(())
@@ -1527,7 +1574,9 @@ impl OwnerState {
         HotkeyApplyReport {
             bindings,
             hook_installed: self.hook.is_some(),
-            hook_unavailable: self.hook_health.unavailable(!hook_table.is_empty()),
+            hook_unavailable: self
+                .hook_health
+                .unavailable(!hook_table.is_empty() || compose_active()),
             warning: applied.warning.clone(),
             revision: applied.revision,
         }
@@ -1709,13 +1758,14 @@ impl OwnerState {
             }
             log::debug!("Windows shortcut capture started");
         } else {
-            if current_hook_bindings().is_empty() {
+            if !hook_in_use() {
                 if let Some(hook) = self.hook {
                     // Keep the handle (and the drain state) unless Windows
                     // confirms removal, as the apply path does.
                     match unsafe { UnhookWindowsHookEx(hook) } {
                         Ok(()) => {
                             self.hook = None;
+                            self.sync_composer();
                             // No hook will see these keys' key-ups any more.
                             clear_key_bits(&CAPTURED_KEYS);
                         }
@@ -1906,6 +1956,8 @@ impl OwnerState {
     fn release_all(&mut self) {
         set_hook_bindings(Vec::new()).ok();
         set_hook_capture(None).ok();
+        self.compose_modifiers = None;
+        self.sync_composer();
         clear_key_bits(&CAPTURED_KEYS);
         clear_transient_keys();
         self.pending.clear();
@@ -2068,9 +2120,51 @@ fn capture_active() -> bool {
         .unwrap_or(false)
 }
 
-/// Whether anything — a binding or the recorder — currently needs the hook.
+/// Failing to install the keyboard hook only aborts `apply` when at least one
+/// binding relies on interception to fire at all. When only corner composition
+/// asked for the hook, natively registered shortcuts stay active without
+/// composition until hook recovery succeeds.
+fn hook_failure_aborts_apply(has_hook_bindings: bool) -> bool {
+    has_hook_bindings
+}
+
+/// Whether single-hold corner composition needs the hook to observe modifier
+/// releases.
+fn compose_active() -> bool {
+    HOOK_DISPATCH
+        .try_with(|dispatch| {
+            dispatch
+                .try_borrow()
+                .ok()
+                .and_then(|guard| guard.as_ref().map(|state| state.compose_active))
+        })
+        .ok()
+        .flatten()
+        .unwrap_or(false)
+}
+
+/// Updates whether corner composition wants the hook (`wanted`) and the live
+/// base modifier passed to [`CornerComposer`] (`live_modifiers`, `None` when
+/// no hook is installed to advance `MODIFIER_RELEASES`).
+fn set_compose_state(wanted: bool, live_modifiers: Option<Modifiers>) {
+    let _ = COMPOSER.try_with(|composer| {
+        if let Ok(mut composer) = composer.try_borrow_mut() {
+            composer.set_base_modifiers(live_modifiers);
+        }
+    });
+    let _ = HOOK_DISPATCH.try_with(|dispatch| {
+        if let Ok(mut guard) = dispatch.try_borrow_mut() {
+            if let Some(state) = guard.as_mut() {
+                state.compose_active = wanted;
+            }
+        }
+    });
+}
+
+/// Whether anything — a binding, the recorder, or corner composition —
+/// currently needs the hook.
 fn hook_in_use() -> bool {
-    !current_hook_bindings().is_empty() || capture_active()
+    !current_hook_bindings().is_empty() || capture_active() || compose_active()
 }
 
 fn set_hook_capture(listener: Option<HotkeyCaptureListener>) -> Result<()> {
@@ -2635,7 +2729,7 @@ mod tests {
                 vk: VK_LEFT.0,
                 extended: None,
                 mods: Modifiers::META | Modifiers::CONTROL,
-                action: WindowAction::TopHalf,
+                action: WindowAction::DisplayLeft,
                 repeat: false,
             },
         ]
@@ -2651,7 +2745,7 @@ mod tests {
         assert_eq!(
             match_binding_in(&t, VK_LEFT.0, true, Modifiers::META | Modifiers::CONTROL)
                 .map(|binding| binding.action),
-            Some(WindowAction::TopHalf)
+            Some(WindowAction::DisplayLeft)
         );
     }
 
@@ -2702,7 +2796,7 @@ mod tests {
                 vk: VK_RETURN.0,
                 extended: keycode_extended(KeyCode::NumpadEnter),
                 mods: Modifiers::META,
-                action: WindowAction::Center,
+                action: WindowAction::CenterHalf,
                 repeat: false,
             },
         ];
@@ -2714,7 +2808,7 @@ mod tests {
         assert_eq!(
             match_binding_in(&bindings, VK_RETURN.0, true, Modifiers::META)
                 .map(|binding| binding.action),
-            Some(WindowAction::Center)
+            Some(WindowAction::CenterHalf)
         );
     }
 
@@ -2759,12 +2853,12 @@ mod tests {
     fn hook_route_preserves_repeat_policy_and_is_exclusive() {
         let binding = HotkeyBinding {
             hotkey: Hotkey::new(Modifiers::META, KeyCode::Left),
-            action: WindowAction::MoveLeft,
+            action: WindowAction::LeftHalf,
             repeat: true,
         };
         let repeating = to_hook_binding(binding);
         assert!(repeating.repeat);
-        assert_eq!(repeat_action(repeating), Some(WindowAction::MoveLeft));
+        assert_eq!(repeat_action(repeating), Some(WindowAction::LeftHalf));
 
         let exclusive = to_hook_binding(HotkeyBinding {
             repeat: false,
@@ -2787,13 +2881,13 @@ mod tests {
     fn changing_repeat_policy_requires_native_reregistration() {
         let old = HotkeyBinding {
             hotkey: Hotkey::new(Modifiers::CONTROL, KeyCode::M),
-            action: WindowAction::MoveLeft,
+            action: WindowAction::LeftHalf,
             repeat: true,
         };
         assert!(can_reuse_registration(
             old,
             HotkeyBinding {
-                action: WindowAction::MoveRight,
+                action: WindowAction::RightHalf,
                 ..old
             }
         ));
@@ -3093,7 +3187,7 @@ mod tests {
             vk: VK_RETURN.0,
             extended: Some(false),
             mods: Modifiers::META,
-            action: WindowAction::Center,
+            action: WindowAction::CenterHalf,
             repeat: false,
         }];
         assert_eq!(
@@ -3109,7 +3203,7 @@ mod tests {
         assert!(keys.up(VK_RETURN.0), "its key-up is swallowed");
         assert_eq!(
             keys.down(&bound, VK_RETURN.0, 900, Modifiers::META),
-            fired(WindowAction::Center, true),
+            fired(WindowAction::CenterHalf, true),
             "a fresh press fires the new binding"
         );
     }
@@ -3426,6 +3520,7 @@ mod tests {
                     sender: tx,
                     bindings: Vec::new(),
                     capture: None,
+                    compose_active: false,
                 });
             });
             set_hook_bindings(table()).unwrap();
@@ -3435,6 +3530,68 @@ mod tests {
                 let _held = dispatch.borrow_mut();
                 assert!(current_hook_bindings().is_empty());
             });
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn corner_composition_keeps_hook_wanted_and_disables_composer_without_a_live_hook() {
+        assert!(!hook_failure_aborts_apply(false));
+        assert!(hook_failure_aborts_apply(true));
+
+        std::thread::spawn(|| {
+            let (tx, _rx) = mpsc::channel();
+            HOOK_DISPATCH.with(|dispatch| {
+                *dispatch.borrow_mut() = Some(HookDispatch {
+                    sender: tx,
+                    bindings: Vec::new(),
+                    capture: None,
+                    compose_active: false,
+                });
+            });
+            assert!(!hook_in_use());
+
+            let custom = Modifiers::CONTROL | Modifiers::SHIFT;
+            // Desired, but no hook is live yet: hook stays wanted for recovery,
+            // yet presses must NOT compose against a frozen MODIFIER_RELEASES.
+            set_compose_state(true, None);
+            assert!(hook_in_use());
+            assert_eq!(
+                compose_request(
+                    Some(Hotkey::new(custom, KeyCode::Left)),
+                    WindowAction::LeftHalf
+                ),
+                WindowAction::LeftHalf.into()
+            );
+            assert_eq!(
+                compose_request(
+                    Some(Hotkey::new(custom, KeyCode::Up)),
+                    WindowAction::Maximize
+                ),
+                WindowAction::Maximize.into()
+            );
+
+            // Once a hook is live, composition activates on that modifier.
+            set_compose_state(true, Some(custom));
+            assert_eq!(
+                compose_request(
+                    Some(Hotkey::new(custom, KeyCode::Left)),
+                    WindowAction::LeftHalf
+                ),
+                WindowAction::LeftHalf.into()
+            );
+            assert_eq!(
+                compose_request(
+                    Some(Hotkey::new(custom, KeyCode::Up)),
+                    WindowAction::Maximize
+                ),
+                ActionRequest::composed(tile_core::Corner::TopLeft)
+            );
+
+            // Clearing composition releases the hook demand.
+            set_compose_state(false, None);
+            assert!(!hook_in_use());
         })
         .join()
         .unwrap();

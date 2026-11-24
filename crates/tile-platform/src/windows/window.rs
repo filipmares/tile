@@ -4,13 +4,14 @@ use std::ffi::c_void;
 
 use tile_core::{Rect, Screen, WindowId, WindowSnapshot};
 
-use windows::core::{Error as WinError, BOOL, HRESULT};
+use windows::core::{Error as WinError, BOOL, HRESULT, PCWSTR};
 use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, HWND, LPARAM, RECT};
 use windows::Win32::Graphics::Dwm::{
     DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS,
 };
 use windows::Win32::Graphics::Gdi::{
-    EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW,
+    EnumDisplayMonitors, EnumDisplaySettingsW, GetMonitorInfoW, DEVMODEW, ENUM_CURRENT_SETTINGS,
+    HDC, HMONITOR, MONITORINFO, MONITORINFOEXW,
 };
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
@@ -543,11 +544,28 @@ unsafe extern "system" fn monitor_enum_proc(
             work_area: rect_from_win(mi.monitorInfo.rcWork),
             scale_factor: dpi_x as f64 / 96.0,
             is_primary: mi.monitorInfo.dwFlags & MONITORINFOF_PRIMARY != 0,
+            refresh_rate_hz: monitor_refresh_rate_hz(&mi.szDevice),
         });
     }
 
     // Keep enumerating remaining monitors.
     BOOL(1)
+}
+
+/// Queries the monitor's current vertical refresh rate in Hz via GDI.
+///
+/// Windows returns `0` or `1` to signify "hardware default"; those map to
+/// `None` so callers fall back to the default frame rate.
+unsafe fn monitor_refresh_rate_hz(device: &[u16; 32]) -> Option<u32> {
+    let mut mode: DEVMODEW = std::mem::zeroed();
+    mode.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
+    if EnumDisplaySettingsW(PCWSTR(device.as_ptr()), ENUM_CURRENT_SETTINGS, &mut mode).as_bool()
+        && mode.dmDisplayFrequency > 1
+    {
+        Some(mode.dmDisplayFrequency)
+    } else {
+        None
+    }
 }
 
 /// Extracts the NUL-terminated device name (e.g. `\\.\DISPLAY1`) from a

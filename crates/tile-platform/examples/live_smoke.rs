@@ -55,10 +55,8 @@ fn windows_smoke() {
     for action in [
         WindowAction::LeftHalf,
         WindowAction::RightHalf,
-        WindowAction::TopHalf,
-        WindowAction::BottomHalf,
+        WindowAction::CenterHalf,
         WindowAction::Maximize,
-        WindowAction::Center,
         WindowAction::Restore,
     ] {
         match engine.plan(action, &current, &screens) {
