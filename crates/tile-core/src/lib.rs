@@ -38,8 +38,14 @@ pub struct WindowSnapshot {
 /// The outcome of asking the engine what to do about an action.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Plan {
-    /// Move the window to this rectangle.
-    Move { id: WindowId, target: Rect },
+    /// Move the window to this rectangle. `recenter` is true when the planned
+    /// placement is a centered column that should be re-centered horizontally
+    /// if the app clamps its width.
+    Move {
+        id: WindowId,
+        target: Rect,
+        recenter: bool,
+    },
     /// Nothing to do — the window is already where it should be, or there is
     /// no history to restore.
     NoOp(NoOpReason),
@@ -67,6 +73,9 @@ pub struct Engine {
 struct CycleState {
     window: WindowId,
     target: ActionTarget,
+    /// The unclamped rectangle Tile asked for, so a clamped window still knows
+    /// which cycle size it reached.
+    planned: Rect,
     applied: Rect,
 }
 
@@ -137,6 +146,7 @@ impl Engine {
             Plan::Move {
                 id: window.id,
                 target: rect,
+                recenter: false,
             }
         })
     }
@@ -186,6 +196,7 @@ impl Engine {
                 Some(rect) => Plan::Move {
                     id: window.id,
                     target: rect,
+                    recenter: false,
                 },
                 None => Plan::NoOp(NoOpReason::NoHistory),
             };
@@ -200,6 +211,7 @@ impl Engine {
             return Plan::NoOp(NoOpReason::NoHistory);
         };
 
+        let recenter = target == ActionTarget::Action(WindowAction::CenterHalf);
         let settled = || {
             if rect.approx_eq(&window.frame, POSITION_TOLERANCE) {
                 Plan::NoOp(NoOpReason::AlreadyInPosition)
@@ -207,11 +219,12 @@ impl Engine {
                 Plan::Move {
                     id: window.id,
                     target: rect,
+                    recenter,
                 }
             }
         };
 
-        let continues = self.continues_cycle(target, window)
+        let continues = self.active_cycle(target, window).is_some()
             || rect.approx_eq(&window.frame, POSITION_TOLERANCE);
 
         if !target.cycles() || !self.config.cycles_sizes() {
@@ -222,6 +235,7 @@ impl Engine {
             return Plan::Move {
                 id: window.id,
                 target: rect,
+                recenter,
             };
         }
 
@@ -229,6 +243,7 @@ impl Engine {
             Some(next) => Plan::Move {
                 id: window.id,
                 target: next,
+                recenter,
             },
             None => Plan::NoOp(NoOpReason::AlreadyInPosition),
         }
@@ -255,19 +270,28 @@ impl Engine {
         if dest.id == from.id {
             return Plan::NoOp(NoOpReason::AlreadyInPosition);
         }
-        let rect = remap_slot(&self.config, window.frame, from, dest);
+        let source_frame = self
+            .cycle
+            .as_ref()
+            .filter(|state| {
+                state.window == window.id
+                    && state.applied.approx_eq(&window.frame, APPLIED_TOLERANCE)
+            })
+            .map_or(window.frame, |state| state.planned);
+        let (rect, recenter) = remap_slot(&self.config, source_frame, from, dest);
         if rect.approx_eq(&window.frame, POSITION_TOLERANCE) {
             Plan::NoOp(NoOpReason::AlreadyInPosition)
         } else {
             Plan::Move {
                 id: window.id,
                 target: rect,
+                recenter,
             }
         }
     }
 
-    fn continues_cycle(&self, target: ActionTarget, window: &WindowSnapshot) -> bool {
-        self.cycle.as_ref().is_some_and(|state| {
+    fn active_cycle(&self, target: ActionTarget, window: &WindowSnapshot) -> Option<&CycleState> {
+        self.cycle.as_ref().filter(|state| {
             state.window == window.id
                 && state.target == target
                 && state.applied.approx_eq(&window.frame, APPLIED_TOLERANCE)
@@ -298,20 +322,35 @@ impl Engine {
         }
 
         let len = rects.len();
-        let current = rects
-            .iter()
-            .position(|r| r.approx_eq(&window.frame, APPLIED_TOLERANCE));
-        let start = current.map_or(0, |i| i + 1);
-        (0..len)
+        let current = self
+            .active_cycle(target, window)
+            .and_then(|state| {
+                rects
+                    .iter()
+                    .position(|r| r.approx_eq(&state.planned, APPLIED_TOLERANCE))
+            })
+            .or_else(|| {
+                rects
+                    .iter()
+                    .position(|r| r.approx_eq(&window.frame, APPLIED_TOLERANCE))
+            });
+        let (start, count) = match current {
+            Some(i) => (i + 1, len.saturating_sub(1)),
+            None => (0, len),
+        };
+        (0..count)
             .map(|offset| rects[(start + offset) % len])
             .find(|r| !r.approx_eq(&window.frame, APPLIED_TOLERANCE))
     }
 
-    /// Records a successful move so that `Restore` can undo it.
+    /// Records a successful move so that `Restore` can undo it and repeat
+    /// presses know which cycle step was reached even when the app clamped the
+    /// window's size.
     pub fn commit(
         &mut self,
         target: impl Into<ActionTarget>,
         window: &WindowSnapshot,
+        planned: Rect,
         applied: Rect,
     ) {
         let target = target.into();
@@ -327,6 +366,7 @@ impl Engine {
                 Some(CycleState {
                     window: window.id,
                     target,
+                    planned,
                     applied,
                 })
             } else {
@@ -349,8 +389,10 @@ const SLOT_TARGETS: [ActionTarget; 7] = [
 ];
 
 /// Rebuilds `frame` on `dest`, preferring a recognised tile slot so a left
-/// third or corner stays in that slot when the two work areas differ.
-fn remap_slot(config: &Config, frame: Rect, from: &Screen, dest: &Screen) -> Rect {
+/// third or corner stays in that slot when the two work areas differ. Also
+/// reports whether the matched slot is a centered column that should be
+/// re-centered if the app clamps its width.
+fn remap_slot(config: &Config, frame: Rect, from: &Screen, dest: &Screen) -> (Rect, bool) {
     for target in SLOT_TARGETS {
         for size in CycleSize::ALL {
             let Some(src) = target.cycle_rect(
@@ -370,7 +412,10 @@ fn remap_slot(config: &Config, frame: Rect, from: &Screen, dest: &Screen) -> Rec
                 dest.is_primary,
                 size.fraction(),
             ) {
-                return dst;
+                return (
+                    dst,
+                    target == ActionTarget::Action(WindowAction::CenterHalf),
+                );
             }
         }
     }
@@ -381,11 +426,14 @@ fn remap_slot(config: &Config, frame: Rect, from: &Screen, dest: &Screen) -> Rec
             if let Some(dst) =
                 WindowAction::Maximize.target_rect(dest.work_area, &config.gaps, dest.is_primary)
             {
-                return dst;
+                return (dst, false);
             }
         }
     }
-    map_proportionally(frame, from.work_area, dest.work_area)
+    (
+        map_proportionally(frame, from.work_area, dest.work_area),
+        false,
+    )
 }
 
 /// Re-expresses `frame` as fractions of `from` and applies them to `to`.
@@ -442,7 +490,7 @@ mod tests {
         let req = req.into();
         match engine.plan_request(req, win, screens) {
             Plan::Move { target, .. } => {
-                engine.commit(req.target, win, target);
+                engine.commit(req.target, win, target, target);
                 win.frame = target;
                 target
             }
@@ -580,6 +628,114 @@ mod tests {
         assert_eq!(
             engine.plan(WindowAction::LeftHalf, &win, &screens),
             Plan::NoOp(NoOpReason::AlreadyInPosition)
+        );
+    }
+
+    #[test]
+    fn clamped_center_column_advances_through_all_cycle_sizes() {
+        let apply_clamped = |engine: &mut Engine,
+                             win: &mut WindowSnapshot,
+                             screens: &[Screen],
+                             min_w: f64,
+                             max_w: f64|
+         -> (Rect, Rect) {
+            let (target, recenter) = match engine.plan(WindowAction::CenterHalf, win, screens) {
+                Plan::Move {
+                    target, recenter, ..
+                } => (target, recenter),
+                other => panic!("expected Move, got {other:?}"),
+            };
+            assert!(recenter);
+            let clamped = Rect::new(
+                target.x,
+                target.y,
+                target.width.clamp(min_w, max_w),
+                target.height,
+            );
+            let actual = clamped
+                .recentered_horizontally(screens[0].work_area)
+                .unwrap_or(clamped);
+            engine.commit(WindowAction::CenterHalf, win, target, actual);
+            win.frame = actual;
+            (target, actual)
+        };
+
+        let screens = [screen()];
+
+        // All 5 sizes enabled; min_w=560 clamps 1/4 (480) but 1/3 (640) fits and must not be skipped.
+        let mut engine = Engine::default();
+        engine.config.cycle_sizes = CycleSize::ALL.to_vec();
+        engine.config.normalize();
+        let mut win = window();
+        let widths: Vec<(f64, f64)> = (0..6)
+            .map(|_| {
+                let (planned, actual) =
+                    apply_clamped(&mut engine, &mut win, &screens, 560.0, 5000.0);
+                let left = actual.x - screens[0].work_area.x;
+                let right = screens[0].work_area.max_x() - actual.max_x();
+                assert!((left - right).abs() <= 1.0, "off-center: {actual:?}");
+                (planned.width, actual.width)
+            })
+            .collect();
+        assert_eq!(
+            widths,
+            vec![
+                (960.0, 960.0),
+                (1280.0, 1280.0),
+                (1440.0, 1440.0),
+                (480.0, 560.0),
+                (640.0, 640.0),
+                (960.0, 960.0),
+            ]
+        );
+
+        // min_w > 1/2 must not get stuck at 1/2; must still reach 2/3.
+        let mut engine = Engine::default();
+        let mut win = window();
+        let (p1, a1) = apply_clamped(&mut engine, &mut win, &screens, 1000.0, 5000.0);
+        assert_eq!((p1.width, a1.width), (960.0, 1000.0));
+        let (p2, a2) = apply_clamped(&mut engine, &mut win, &screens, 1000.0, 5000.0);
+        assert_eq!((p2.width, a2.width), (1280.0, 1280.0));
+
+        // max_w == 1/2 must not loop between 1/2 and 2/3; must still reach 1/3.
+        let mut engine = Engine::default();
+        let mut win = window();
+        let (p1, a1) = apply_clamped(&mut engine, &mut win, &screens, 0.0, 960.0);
+        assert_eq!((p1.width, a1.width), (960.0, 960.0));
+        let (p2, a2) = apply_clamped(&mut engine, &mut win, &screens, 0.0, 960.0);
+        assert_eq!((p2.width, a2.width), (1280.0, 960.0));
+        let (p3, a3) = apply_clamped(&mut engine, &mut win, &screens, 0.0, 960.0);
+        assert_eq!((p3.width, a3.width), (640.0, 640.0));
+    }
+
+    #[test]
+    fn display_throw_flags_recenter_only_for_center_column_slots() {
+        let mut engine = Engine::default();
+        let screens = [screen(), second_screen()];
+        let mut win = window();
+
+        // Center Column 1/3 on screen 0 -> DisplayRight onto narrower screen 1 flags recenter.
+        apply(&mut engine, WindowAction::CenterHalf, &mut win, &screens);
+        apply(&mut engine, WindowAction::CenterHalf, &mut win, &screens);
+        apply(&mut engine, WindowAction::CenterHalf, &mut win, &screens);
+        assert_eq!(
+            engine.plan(WindowAction::DisplayRight, &win, &screens),
+            Plan::Move {
+                id: win.id,
+                target: Rect::new(2320.0, 0.0, 400.0, 860.0),
+                recenter: true,
+            }
+        );
+
+        // LeftHalf on screen 0 -> DisplayRight does not flag recenter.
+        apply(&mut engine, WindowAction::LeftHalf, &mut win, &screens);
+        assert_eq!(
+            engine.plan(WindowAction::DisplayRight, &win, &screens),
+            Plan::Move {
+                id: win.id,
+                target: Rect::new(1920.0, 0.0, 600.0, 860.0),
+                recenter: false,
+            }
         );
     }
 }

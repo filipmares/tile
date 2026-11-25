@@ -1037,6 +1037,13 @@ fn leave_fullscreen_and_minimized(element: ffi::AXUIElementRef) -> Result<()> {
     Ok(())
 }
 
+fn frame_settled(target: Rect, actual: Rect, previous: Option<Rect>) -> bool {
+    actual.approx_eq(&target, 2.0)
+        || (previous.is_some_and(|prev| prev.approx_eq(&actual, 1.0))
+            && (actual.x - target.x).abs() <= 2.0
+            && (actual.y - target.y).abs() <= 2.0)
+}
+
 /// Applies a frame and verifies the frame Chrome (and other AX clients) report.
 ///
 /// macOS may transiently accept or partially apply an AX position/size update
@@ -1056,6 +1063,7 @@ fn apply_frame_and_readback(
         x: target.x,
         y: target.y,
     };
+    let mut previous = None;
 
     for attempt in 0..FRAME_SETTLE_ATTEMPTS {
         let mut retry = false;
@@ -1088,14 +1096,20 @@ fn apply_frame_and_readback(
         };
 
         if let Some(actual) = actual {
-            if (!retry && actual.approx_eq(&target, 2.0)) || attempt + 1 == FRAME_SETTLE_ATTEMPTS {
+            if (!retry && frame_settled(target, actual, previous))
+                || attempt + 1 == FRAME_SETTLE_ATTEMPTS
+            {
                 return Ok(actual);
             }
-        } else if attempt + 1 == FRAME_SETTLE_ATTEMPTS {
-            return Err(PlatformError::os(
-                operation,
-                "the application did not report where the window ended up",
-            ));
+            previous = (!retry).then_some(actual);
+        } else {
+            previous = None;
+            if attempt + 1 == FRAME_SETTLE_ATTEMPTS {
+                return Err(PlatformError::os(
+                    operation,
+                    "the application did not report where the window ended up",
+                ));
+            }
         }
         thread::sleep(FRAME_SETTLE_DELAY);
     }
@@ -1353,9 +1367,9 @@ impl AnimationSession for MacAnimationSession {
         // Unlike `set_window_frame` this never consults the focused window: the
         // session already holds the element it has been driving, so a click on
         // another window mid-animation cannot make the final frame fail.
-        let actual = apply_frame_and_readback(element, target, "finish");
-        drop(self.enhanced_ui.take());
-        actual
+        // `enhanced_ui` stays suppressed until `Drop` so a follow-up recenter
+        // through `finish` does not run with Enhanced UI re-enabled.
+        apply_frame_and_readback(element, target, "finish")
     }
 
     fn current_frame(&self) -> Result<Rect> {
@@ -1639,6 +1653,18 @@ mod enhanced_ui_tests {
         assert!(operation.is_err());
         assert_eq!(state.get(), Some(true));
         assert_eq!(*writes.borrow(), [false, true]);
+    }
+
+    #[test]
+    fn frame_settled_accepts_stable_clamped_frame_on_second_read_only() {
+        let target = super::Rect::new(490.0, 25.0, 490.0, 931.0);
+        let clamped = super::Rect::new(490.0, 25.0, 650.0, 931.0);
+        let unmoved = super::Rect::new(100.0, 100.0, 800.0, 600.0);
+
+        assert!(super::frame_settled(target, target, None));
+        assert!(!super::frame_settled(target, clamped, None));
+        assert!(super::frame_settled(target, clamped, Some(clamped)));
+        assert!(!super::frame_settled(target, unmoved, Some(unmoved)));
     }
 }
 

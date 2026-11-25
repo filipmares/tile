@@ -638,4 +638,38 @@ mod tests {
             assert!(action.target_rect(AREA, &Gaps::default(), true).is_none());
         }
     }
+
+    #[test]
+    fn center_column_is_centered_across_all_cycle_sizes() {
+        let areas = [
+            AREA,
+            Rect::new(0.0, 25.0, 1470.0, 931.0),
+            Rect::new(0.0, 25.0, 1512.0, 957.0),
+            Rect::new(-1441.0, 0.0, 1441.0, 900.0),
+            Rect::new(71.0, 0.0, 1369.0, 800.0),
+        ];
+        let gap_sets = [Gaps::default(), Gaps::uniform(10.0), Gaps::uniform(11.0)];
+
+        for area in areas {
+            for gaps in &gap_sets {
+                for size in crate::CycleSize::ALL {
+                    let rect = WindowAction::CenterHalf
+                        .cycle_rect(area, gaps, true, size.fraction())
+                        .unwrap();
+                    let left_margin = rect.x - area.x;
+                    let right_margin = area.max_x() - rect.max_x();
+                    assert!(
+                        (left_margin - right_margin).abs() <= 1.0,
+                        "off-center for size={size:?} area={area:?} gaps={gaps:?}: \
+                         rect={rect:?} left={left_margin} right={right_margin}"
+                    );
+                    assert_eq!(
+                        rect.recentered_horizontally(area),
+                        None,
+                        "unclamped {size:?} should not trigger recentering"
+                    );
+                }
+            }
+        }
+    }
 }
