@@ -130,6 +130,17 @@ impl Rect {
             height,
         }
     }
+
+    /// Re-centers `self` horizontally inside `bounds` when its x differs by
+    /// more than one unit from the centered position, keeping its actual size
+    /// and vertical position.
+    pub fn recentered_horizontally(&self, bounds: Rect) -> Option<Rect> {
+        let centered_x = (bounds.x + (bounds.width - self.width).max(0.0) / 2.0).round();
+        if (self.x - centered_x).abs() <= 1.0 {
+            return None;
+        }
+        Some(Rect::new(centered_x, self.y, self.width, self.height))
+    }
 }
 
 /// A display, as reported by the platform backend.
@@ -275,6 +286,38 @@ mod tests {
         // Negative insets are clamped to zero rather than growing the window.
         let r = Rect::new(0.0, 0.0, 10.0, 10.0).inset_edges(-5.0, -5.0, 0.0, 0.0);
         assert_eq!(r, Rect::new(0.0, 0.0, 10.0, 10.0));
+    }
+
+    #[test]
+    fn recentered_horizontally_centers_clamped_frames_within_bounds() {
+        let macbook = Rect::new(0.0, 25.0, 1470.0, 931.0);
+
+        // Min-width clamp on 1/3 (requested x=490, w=490 -> app kept x=490, w=650).
+        assert_eq!(
+            Rect::new(490.0, 25.0, 650.0, 931.0).recentered_horizontally(macbook),
+            Some(Rect::new(410.0, 25.0, 650.0, 931.0))
+        );
+        // Max-width clamp on 2/3 (requested x=245, w=980 -> app kept x=245, w=715).
+        assert_eq!(
+            Rect::new(245.0, 25.0, 715.0, 931.0).recentered_horizontally(macbook),
+            Some(Rect::new(378.0, 25.0, 715.0, 931.0))
+        );
+        // Secondary display with negative origin.
+        let left_display = Rect::new(-1920.0, 0.0, 1920.0, 1080.0);
+        assert_eq!(
+            Rect::new(-1280.0, 0.0, 800.0, 1080.0).recentered_horizontally(left_display),
+            Some(Rect::new(-1360.0, 0.0, 800.0, 1080.0))
+        );
+        // Window wider than bounds clamps to the left edge instead of going off-screen.
+        assert_eq!(
+            Rect::new(200.0, 25.0, 1600.0, 931.0).recentered_horizontally(macbook),
+            Some(Rect::new(0.0, 25.0, 1600.0, 931.0))
+        );
+        // Already centered within one unit needs no move.
+        assert_eq!(
+            Rect::new(410.0, 25.0, 650.0, 931.0).recentered_horizontally(macbook),
+            None
+        );
     }
 
     #[test]

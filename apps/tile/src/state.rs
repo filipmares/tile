@@ -902,6 +902,55 @@ fn screen_index(screens: &[Screen], frame: Rect) -> Option<usize> {
 
 pub use tile_core::ActionRequest;
 
+fn recenter_area(recenter: bool, screens: &[Screen], target: Rect) -> Option<Rect> {
+    recenter
+        .then(|| Screen::best_match(screens, &target).map(|screen| screen.work_area))
+        .flatten()
+}
+
+fn recenter_if_needed(
+    backend: &dyn WindowBackend,
+    session: Option<&mut (dyn AnimationSession + '_)>,
+    id: WindowId,
+    recenter_in: Option<Rect>,
+    actual: Rect,
+) -> Rect {
+    let Some(recentered) = recenter_in.and_then(|area| actual.recentered_horizontally(area)) else {
+        return actual;
+    };
+    let result = match session {
+        Some(open) => open.finish(recentered),
+        None => backend.set_window_frame(id, recentered),
+    };
+    match result {
+        Ok(centered) => centered,
+        Err(err) => {
+            log::debug!("could not re-center window {id}: {err}");
+            actual
+        }
+    }
+}
+
+fn apply_final(
+    backend: &dyn WindowBackend,
+    mut session: Option<&mut (dyn AnimationSession + '_)>,
+    id: WindowId,
+    recenter_in: Option<Rect>,
+    target: Rect,
+) -> tile_platform::Result<Rect> {
+    let actual = match session.as_deref_mut() {
+        Some(open) => open.finish(target)?,
+        None => backend.set_window_frame(id, target)?,
+    };
+    Ok(recenter_if_needed(
+        backend,
+        session,
+        id,
+        recenter_in,
+        actual,
+    ))
+}
+
 fn apply_once(
     backend: &dyn WindowBackend,
     engine: &mut Engine,
@@ -922,9 +971,14 @@ fn apply_once(
     let screens = backend.screens()?;
 
     match engine.plan_request(request, &window, &screens) {
-        Plan::Move { id, target } => {
-            let actual = backend.set_window_frame(id, target)?;
-            engine.commit(target_action, &window, actual);
+        Plan::Move {
+            id,
+            target,
+            recenter,
+        } => {
+            let recenter_in = recenter_area(recenter, &screens, target);
+            let actual = apply_final(backend, None, id, recenter_in, target)?;
+            engine.commit(target_action, &window, target, actual);
             log::debug!("performed {target_action} on window {id}");
             observe(ActionReport {
                 target: target_action,
@@ -954,6 +1008,9 @@ struct Flight {
     /// Where the window was when this action was planned. This is the "before"
     /// frame Restore will return to.
     window: WindowSnapshot,
+    /// Destination display's work area when this flight should re-center a
+    /// clamped centered column on landing.
+    recenter_in: Option<Rect>,
     animator: Animator,
     /// Pacing derived from the destination display's refresh rate.
     params: AnimationParams,
@@ -970,6 +1027,7 @@ impl Flight {
         id: WindowId,
         target_action: ActionTarget,
         window: WindowSnapshot,
+        recenter_in: Option<Rect>,
         target: Rect,
         params: AnimationParams,
     ) -> tile_platform::Result<Self> {
@@ -986,6 +1044,7 @@ impl Flight {
             animator: Animator::new(start, target, params),
             params,
             window,
+            recenter_in,
             session,
             committed: false,
         })
@@ -995,20 +1054,22 @@ impl Flight {
         if self.committed {
             return;
         }
-        engine.commit(self.target, &self.window, self.animator.target());
+        let target = self.animator.target();
+        engine.commit(self.target, &self.window, target, target);
         self.committed = true;
     }
 
     fn commit_final(&self, engine: &mut Engine, actual: Rect) {
+        let target = self.animator.target();
         let window = if self.committed {
             WindowSnapshot {
                 id: self.id,
-                frame: self.animator.target(),
+                frame: target,
             }
         } else {
             self.window.clone()
         };
-        engine.commit(self.target, &window, actual);
+        engine.commit(self.target, &window, target, actual);
     }
 }
 
@@ -1104,7 +1165,11 @@ fn run_animated_pipeline(
             }
 
             match engine.plan_request(request, &window, &screens) {
-                Plan::Move { id, target } => {
+                Plan::Move {
+                    id,
+                    target,
+                    recenter,
+                } => {
                     *outcome = ActionOutcome::Moved;
                     if let Some(previous) = flight.take() {
                         if previous.id == id {
@@ -1114,6 +1179,7 @@ fn run_animated_pipeline(
                         }
                     }
 
+                    let recenter_in = recenter_area(recenter, &screens, target);
                     let params = params_for_target(animation, &screens, target);
                     match flight.as_mut() {
                         Some(in_flight) => {
@@ -1121,6 +1187,7 @@ fn run_animated_pipeline(
                             in_flight.params = params;
                             in_flight.target = target_action;
                             in_flight.window = window;
+                            in_flight.recenter_in = recenter_in;
                             in_flight.committed = false;
                         }
                         None => {
@@ -1129,6 +1196,7 @@ fn run_animated_pipeline(
                                 id,
                                 target_action,
                                 window,
+                                recenter_in,
                                 target,
                                 params,
                             )?);
@@ -1166,7 +1234,14 @@ fn run_animated_pipeline(
             next,
         )? {
             Interruption::Settled(actual) => {
-                if let Some(landed) = flight.take() {
+                if let Some(mut landed) = flight.take() {
+                    let actual = recenter_if_needed(
+                        backend,
+                        landed.session.as_deref_mut(),
+                        landed.id,
+                        landed.recenter_in,
+                        actual,
+                    );
                     landed.commit_final(engine, actual);
                     log::debug!("performed {} on window {}", landed.target, landed.id);
                 }
@@ -1190,11 +1265,13 @@ fn land(
     mut flight: Flight,
 ) -> tile_platform::Result<()> {
     let target = flight.animator.target();
-
-    let actual = match flight.session.as_mut() {
-        Some(open) => open.finish(target)?,
-        None => backend.set_window_frame(flight.id, target)?,
-    };
+    let actual = apply_final(
+        backend,
+        flight.session.as_deref_mut(),
+        flight.id,
+        flight.recenter_in,
+        target,
+    )?;
 
     flight.commit_final(engine, actual);
     log::debug!("landed {} on window {}", flight.target, flight.id);
@@ -1248,6 +1325,23 @@ mod tests {
         finished_via_session: Rc<RefCell<bool>>,
         /// Reported display refresh rate in Hz.
         refresh_rate_hz: Option<u32>,
+        /// Custom screens when a test needs a multi-monitor layout.
+        screens: Vec<Screen>,
+        /// When set, `set_window_frame` fails once on this 1-based call index.
+        fail_set_frame_on_call: RefCell<Option<usize>>,
+        set_frame_calls: RefCell<usize>,
+    }
+
+    fn clamp_rect(target: Rect, min_size: Option<(f64, f64)>) -> Rect {
+        match min_size {
+            Some((w, h)) => Rect::new(
+                target.x,
+                target.y,
+                target.width.max(w),
+                target.height.max(h),
+            ),
+            None => target,
+        }
     }
 
     impl FakeBackend {
@@ -1263,6 +1357,9 @@ mod tests {
                 via_session: Rc::new(RefCell::new(Vec::new())),
                 finished_via_session: Rc::new(RefCell::new(false)),
                 refresh_rate_hz: Some(90),
+                screens: Vec::new(),
+                fail_set_frame_on_call: RefCell::new(None),
+                set_frame_calls: RefCell::new(0),
             }
         }
 
@@ -1289,18 +1386,6 @@ mod tests {
             Self {
                 restored_frame: Some(frame),
                 ..Self::new()
-            }
-        }
-
-        fn clamp(&self, target: Rect) -> Rect {
-            match self.min_size {
-                Some((w, h)) => Rect::new(
-                    target.x,
-                    target.y,
-                    target.width.max(w),
-                    target.height.max(h),
-                ),
-                None => target,
             }
         }
 
@@ -1339,6 +1424,9 @@ mod tests {
         }
 
         fn screens(&self) -> tile_platform::Result<Vec<Screen>> {
+            if !self.screens.is_empty() {
+                return Ok(self.screens.clone());
+            }
             Ok(vec![Screen {
                 id: "fake".into(),
                 frame: Rect::new(0.0, 0.0, 1920.0, 1080.0),
@@ -1350,7 +1438,15 @@ mod tests {
         }
 
         fn set_window_frame(&self, _id: WindowId, target: Rect) -> tile_platform::Result<Rect> {
-            let actual = self.clamp(target);
+            let mut calls = self.set_frame_calls.borrow_mut();
+            *calls += 1;
+            if *self.fail_set_frame_on_call.borrow() == Some(*calls) {
+                return Err(tile_platform::PlatformError::os(
+                    "set_window_frame",
+                    "the focused window changed before the move could be applied",
+                ));
+            }
+            let actual = clamp_rect(target, self.min_size);
             self.frames.borrow_mut().push(actual);
             Ok(actual)
         }
@@ -1376,6 +1472,7 @@ mod tests {
                 restored: self
                     .restored_frame
                     .unwrap_or(Rect::new(100.0, 100.0, 400.0, 300.0)),
+                min_size: self.min_size,
                 fail_after: self.fail_after,
             })))
         }
@@ -1388,6 +1485,7 @@ mod tests {
         finished: Rc<RefCell<bool>>,
         /// Where opening the session left the window.
         restored: Rect,
+        min_size: Option<(f64, f64)>,
         fail_after: Option<usize>,
     }
 
@@ -1405,9 +1503,10 @@ mod tests {
         }
 
         fn finish(&mut self, target: Rect) -> tile_platform::Result<Rect> {
-            self.frames.borrow_mut().push(target);
+            let actual = clamp_rect(target, self.min_size);
+            self.frames.borrow_mut().push(actual);
             *self.finished.borrow_mut() = true;
-            Ok(target)
+            Ok(actual)
         }
 
         fn current_frame(&self) -> tile_platform::Result<Rect> {
@@ -1846,6 +1945,176 @@ mod tests {
         .unwrap();
 
         assert_eq!(backend.last_frame().width, 1200.0);
+    }
+
+    #[test]
+    fn clamped_center_column_recenters_across_all_cycle_sizes() {
+        let backend = FakeBackend::with_min_size(800.0, 200.0);
+        let mut engine = Engine::default();
+        engine.config.cycle_sizes = tile_core::CycleSize::ALL.to_vec();
+        engine.config.normalize();
+
+        // 1920px wide screen: 1/2 (960), 2/3 (1280), 3/4 (1440), 1/4 (480 -> 800), 1/3 (640 -> 800), back to 1/2 (960).
+        let expected = [
+            Rect::new(480.0, 0.0, 960.0, 1080.0),
+            Rect::new(320.0, 0.0, 1280.0, 1080.0),
+            Rect::new(240.0, 0.0, 1440.0, 1080.0),
+            Rect::new(560.0, 0.0, 800.0, 1080.0),
+            Rect::new(560.0, 0.0, 800.0, 1080.0),
+            Rect::new(480.0, 0.0, 960.0, 1080.0),
+        ];
+
+        for expected_frame in expected {
+            apply_once(&backend, &mut engine, WindowAction::CenterHalf, &mut |_| {}).unwrap();
+            assert_eq!(backend.last_frame(), expected_frame);
+        }
+    }
+
+    #[test]
+    fn animated_clamped_center_column_recenters_via_session_and_fallback() {
+        // Fallback path (`begin_animation` -> Ok(None)) cycling 1/2 -> 2/3 -> 1/3 (clamped to 800).
+        let backend = FakeBackend::with_min_size(800.0, 200.0);
+        let mut engine = engine_with_animation();
+        let original = backend.focused_window().unwrap().unwrap().frame;
+
+        animated_pipeline(
+            &backend,
+            &mut engine,
+            WindowAction::CenterHalf,
+            animation_config(),
+            &mut FixedPacer,
+            &mut after_frames(2, vec![WindowAction::CenterHalf, WindowAction::CenterHalf]),
+            &mut |_| {},
+        )
+        .unwrap();
+        assert_eq!(backend.last_frame(), Rect::new(560.0, 0.0, 800.0, 1080.0));
+
+        // Restore still returns to the original pre-Tile frame.
+        animated_pipeline(
+            &backend,
+            &mut engine,
+            WindowAction::Restore,
+            animation_config(),
+            &mut FixedPacer,
+            &mut || None,
+            &mut |_| {},
+        )
+        .unwrap();
+        assert_eq!(backend.last_frame().x, original.x);
+        assert_eq!(backend.last_frame().y, original.y);
+
+        // Session path (`begin_animation` -> Ok(Some(session))) with min_w=1100 clamping 1/2 (960).
+        let mut session_backend =
+            FakeBackend::with_restore_to(Rect::new(100.0, 100.0, 1100.0, 600.0));
+        session_backend.min_size = Some((1100.0, 200.0));
+        let mut engine = engine_with_animation();
+
+        animated_pipeline(
+            &session_backend,
+            &mut engine,
+            WindowAction::CenterHalf,
+            animation_config(),
+            &mut FixedPacer,
+            &mut || None,
+            &mut |_| {},
+        )
+        .unwrap();
+        assert_eq!(
+            session_backend.via_session.borrow().last().copied(),
+            Some(Rect::new(410.0, 0.0, 1100.0, 1080.0))
+        );
+    }
+
+    #[test]
+    fn superseded_clamped_center_column_recenters_when_landed() {
+        let backend = FakeBackend::with_min_size(1100.0, 200.0);
+        let mut engine = engine_with_animation();
+
+        // Focus moves away mid-flight on a clamped CenterHalf 1/2 (960 -> 1100), forcing `land`.
+        let mut frame = 0;
+        let focus_lost = &backend.focus_lost;
+        animated_pipeline(
+            &backend,
+            &mut engine,
+            WindowAction::CenterHalf,
+            animation_config(),
+            &mut FixedPacer,
+            &mut || {
+                frame += 1;
+                if frame == 2 {
+                    *focus_lost.borrow_mut() = true;
+                    Some(ActionRequest::from(WindowAction::Maximize))
+                } else {
+                    None
+                }
+            },
+            &mut |_| {},
+        )
+        .unwrap();
+
+        assert_eq!(backend.last_frame(), Rect::new(410.0, 0.0, 1100.0, 1080.0));
+    }
+
+    #[test]
+    fn failed_recenter_still_commits_move_and_preserves_restore() {
+        let backend = FakeBackend::with_min_size(1100.0, 200.0);
+        *backend.fail_set_frame_on_call.borrow_mut() = Some(2);
+        let mut engine = Engine::default();
+        let original = backend.focused_window().unwrap().unwrap().frame;
+
+        // First move applies (480, 0, 1100, 1080); second (recenter) fails as if focus changed.
+        let outcome =
+            apply_once(&backend, &mut engine, WindowAction::CenterHalf, &mut |_| {}).unwrap();
+        assert_eq!(outcome, ActionOutcome::Moved);
+        assert_eq!(backend.last_frame(), Rect::new(480.0, 0.0, 1100.0, 1080.0));
+
+        // History was still recorded, so Restore returns to the pre-Tile origin.
+        apply_once(&backend, &mut engine, WindowAction::Restore, &mut |_| {}).unwrap();
+        assert_eq!(backend.last_frame().x, original.x);
+        assert_eq!(backend.last_frame().y, original.y);
+    }
+
+    #[test]
+    fn display_throw_of_center_column_recenters_when_clamped() {
+        let mut backend = FakeBackend::with_min_size(650.0, 200.0);
+        backend.screens = vec![
+            Screen {
+                id: "wide".into(),
+                frame: Rect::new(0.0, 0.0, 2560.0, 1440.0),
+                work_area: Rect::new(0.0, 0.0, 2560.0, 1440.0),
+                scale_factor: 1.0,
+                is_primary: true,
+                refresh_rate_hz: Some(60),
+            },
+            Screen {
+                id: "laptop".into(),
+                frame: Rect::new(2560.0, 0.0, 1470.0, 956.0),
+                work_area: Rect::new(2560.0, 25.0, 1470.0, 931.0),
+                scale_factor: 2.0,
+                is_primary: false,
+                refresh_rate_hz: Some(60),
+            },
+        ];
+        let mut engine = Engine::default();
+
+        // Cycle to Center Column 1/3 on the 2560px monitor (width 854 fits without clamping).
+        for _ in 0..3 {
+            apply_once(&backend, &mut engine, WindowAction::CenterHalf, &mut |_| {}).unwrap();
+        }
+        assert_eq!(backend.last_frame().width, 854.0);
+
+        // Throw right to the 1470px laptop display: 1/3 (490) clamps to 650 and must center.
+        apply_once(
+            &backend,
+            &mut engine,
+            WindowAction::DisplayRight,
+            &mut |_| {},
+        )
+        .unwrap();
+        assert_eq!(
+            backend.last_frame(),
+            Rect::new(2560.0 + 410.0, 25.0, 650.0, 931.0)
+        );
     }
 
     #[test]

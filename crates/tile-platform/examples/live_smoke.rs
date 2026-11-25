@@ -60,9 +60,9 @@ fn windows_smoke() {
         WindowAction::Restore,
     ] {
         match engine.plan(action, &current, &screens) {
-            Plan::Move { id, target } => {
+            Plan::Move { id, target, .. } => {
                 let actual = backend.set_window_frame(id, target).expect("move window");
-                engine.commit(action, &current, actual);
+                engine.commit(action, &current, target, actual);
                 let delta = (actual.x - target.x).abs()
                     + (actual.y - target.y).abs()
                     + (actual.width - target.width).abs()
